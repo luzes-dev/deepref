@@ -61,6 +61,7 @@ async fn sign_in(pool: &PgPool, user: &str, email: &str, display_name: Option<&s
         &provider_session,
         &ProviderProfile {
             email: email.to_owned(),
+            email_verified: true,
             display_name: display_name.map(str::to_owned),
         },
         NewBrowserSession {
@@ -164,6 +165,7 @@ fn snapshot(
                 status: *status,
             })
             .collect(),
+        fetch_started_at: chrono::Utc::now(),
     }
 }
 
@@ -332,8 +334,13 @@ async fn reconciliation_repairs_a_missed_addition_and_a_missed_removal() {
         "a membership missing from WorkOS is deactivated, not deleted"
     );
 
-    // The projection repairs itself when the provider lists B again.
-    let report = apply_organization_snapshot(&pool, &both, AuditRequest::default())
+    // The projection repairs itself when a newer fetch lists B again.
+    let readded = snapshot(
+        "org_1",
+        "Example Org",
+        &[("user_A", "admin", active), ("user_B", "member", active)],
+    );
+    let report = apply_organization_snapshot(&pool, &readded, AuditRequest::default())
         .await
         .expect("reconciliation applies");
     assert_eq!(report.status_changes, 1);
@@ -347,7 +354,7 @@ async fn reconciliation_repairs_a_missed_addition_and_a_missed_removal() {
     );
 
     // Idempotent: the same snapshot again changes nothing.
-    let report = apply_organization_snapshot(&pool, &both, AuditRequest::default())
+    let report = apply_organization_snapshot(&pool, &readded, AuditRequest::default())
         .await
         .expect("reconciliation applies");
     assert_eq!(
@@ -455,6 +462,7 @@ async fn reconciliation_fails_closed_on_roles_and_users_it_cannot_resolve() {
     sign_in_user(&pool, "user_A").await;
 
     let mixed = OrganizationSnapshot {
+        fetch_started_at: chrono::Utc::now(),
         organization: DirectoryOrganization {
             external_organization_id: organization("org_1"),
             name: "Example Org".to_owned(),
@@ -947,4 +955,334 @@ async fn the_reconciliation_entry_point_walks_every_organization() {
     };
     let failed = reconcile_organizations(&pool, &unavailable, AuditRequest::default()).await;
     assert!(matches!(failed, Err(WorkspaceError::Directory(_))));
+}
+
+fn at(snapshot: OrganizationSnapshot, minutes_ago: i64) -> OrganizationSnapshot {
+    OrganizationSnapshot {
+        fetch_started_at: chrono::Utc::now() - chrono::Duration::minutes(minutes_ago),
+        ..snapshot
+    }
+}
+
+#[tokio::test]
+async fn a_stale_snapshot_cannot_restore_access_a_newer_one_removed() {
+    let Some(pool) = database().await else { return };
+    sign_in_user(&pool, "user_A").await;
+    let user_b = sign_in_user(&pool, "user_B").await;
+    let both = [
+        ("user_A", "owner", DirectoryMembershipStatus::Active),
+        ("user_B", "member", DirectoryMembershipStatus::Active),
+    ];
+    let only_a = [("user_A", "owner", DirectoryMembershipStatus::Active)];
+
+    let first = apply_organization_snapshot(
+        &pool,
+        &at(snapshot("org_1", "Org", &both), 30),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let workspace = first.workspace_id.as_uuid();
+    // A newer fetch saw B removed.
+    apply_organization_snapshot(
+        &pool,
+        &at(snapshot("org_1", "Org", &only_a), 10),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        membership(&pool, workspace, user_b).await.map(|m| m.1),
+        Some("deactivated".to_owned())
+    );
+    let audited = events(&pool, "membership.status_changed").await;
+
+    // A delayed fetch that began before the removal is applied afterwards.
+    let stale = apply_organization_snapshot(
+        &pool,
+        &at(snapshot("org_1", "Org", &both), 20),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        stale.findings,
+        vec![ReconciliationFinding::StaleSnapshot {
+            workspace_id: first.workspace_id
+        }]
+    );
+    assert_eq!(
+        membership(&pool, workspace, user_b).await.map(|m| m.1),
+        Some("deactivated".to_owned()),
+        "the stale snapshot restored nothing"
+    );
+    assert_eq!(events(&pool, "membership.status_changed").await, audited);
+}
+
+#[tokio::test]
+async fn concurrent_reconciliations_of_one_organization_serialize() {
+    let Some(pool) = database().await else { return };
+    sign_in_user(&pool, "user_A").await;
+    let members = [("user_A", "owner", DirectoryMembershipStatus::Active)];
+    let runs = (0..6).map(|_| {
+        let pool = pool.clone();
+        let snapshot = snapshot("org_1", "Org", &members);
+        tokio::spawn(async move {
+            apply_organization_snapshot(&pool, &snapshot, AuditRequest::default()).await
+        })
+    });
+    let handles: Vec<_> = runs.collect();
+    for handle in handles {
+        handle.await.unwrap().expect("no run fails");
+    }
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM workspaces WHERE workos_organization_id = 'org_1'"
+        )
+        .await,
+        1,
+        "one workspace per organization"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM workspace_memberships WHERE grant_source = 'workos_mirrored'"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_globally_deactivated_owner_does_not_count_as_a_replacement_owner() {
+    let Some(pool) = database().await else { return };
+    let user_a = sign_in_user(&pool, "user_A").await;
+    let user_b = sign_in_user(&pool, "user_B").await;
+    let workspace = deepref_domain::WorkspaceId::new(personal_workspace(&pool, "user_A").await);
+    let a = deepref_domain::UserId::new(user_a);
+    let b = deepref_domain::UserId::new(user_b);
+    add_workspace_member(
+        &pool,
+        a,
+        workspace,
+        b,
+        WorkspaceRole::Owner,
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    deactivate_user(&pool, &external("user_B"), "receipt-1")
+        .await
+        .unwrap();
+
+    let removal = remove_membership(&pool, a, workspace, a, AuditRequest::default()).await;
+    assert!(
+        matches!(removal, Err(WorkspaceError::LastOwner)),
+        "{removal:?}"
+    );
+    let demotion = change_membership_role(
+        &pool,
+        a,
+        workspace,
+        a,
+        WorkspaceRole::Member,
+        AuditRequest::default(),
+    )
+    .await;
+    assert!(
+        matches!(demotion, Err(WorkspaceError::LastOwner)),
+        "{demotion:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_provider_role_deactivates_a_mirrored_grant_and_keeps_local_ones() {
+    let Some(pool) = database().await else { return };
+    let user_a = sign_in_user(&pool, "user_A").await;
+    let user_b = sign_in_user(&pool, "user_B").await;
+    sign_in_user(&pool, "user_C").await;
+    let known = [
+        ("user_A", "owner", DirectoryMembershipStatus::Active),
+        ("user_C", "owner", DirectoryMembershipStatus::Active),
+    ];
+    let report = apply_organization_snapshot(
+        &pool,
+        &at(snapshot("org_1", "Org", &known), 10),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let workspace = report.workspace_id;
+    add_workspace_member(
+        &pool,
+        deepref_domain::UserId::new(user_a),
+        workspace,
+        deepref_domain::UserId::new(user_b),
+        WorkspaceRole::Member,
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+
+    let unknown = [
+        ("user_A", "janitor", DirectoryMembershipStatus::Active),
+        ("user_B", "janitor", DirectoryMembershipStatus::Active),
+        ("user_C", "owner", DirectoryMembershipStatus::Active),
+    ];
+    let report = apply_organization_snapshot(
+        &pool,
+        &at(snapshot("org_1", "Org", &unknown), 1),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        report
+            .findings
+            .contains(&ReconciliationFinding::ProviderRoleUnknown {
+                external_user_id: external("user_A"),
+                role_slug: Some("janitor".to_owned())
+            })
+    );
+    assert_eq!(
+        membership(&pool, workspace.as_uuid(), user_a)
+            .await
+            .map(|m| m.1),
+        Some("deactivated".to_owned()),
+        "the mirrored grant with an unresolved role loses access"
+    );
+    assert_eq!(
+        membership(&pool, workspace.as_uuid(), user_b)
+            .await
+            .map(|m| m.1),
+        Some("active".to_owned()),
+        "a local grant is untouched"
+    );
+}
+
+#[tokio::test]
+async fn a_user_provisioned_the_n_minus_one_way_is_onboarded_by_the_next_sign_in() {
+    let Some(pool) = database().await else { return };
+    // The previous release inserted the user row alone: no membership, no
+    // onboarding mark.
+    let id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users (id, workos_user_id, primary_email, display_name, status)
+         VALUES ($1, 'user_old', 'old@example.org', 'Old Binary', 'active')",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM workspace_memberships").await,
+        0
+    );
+
+    // Not the inserting call, yet onboarded; a retry and a concurrent pair add nothing.
+    let first = sign_in(&pool, "user_old", "old@example.org", Some("Old Binary")).await;
+    assert!(matches!(
+        first,
+        SignIn::Active {
+            provisioned: false,
+            ..
+        }
+    ));
+    personal_workspace(&pool, "user_old").await;
+    let attempts = (0..4).map(|_| {
+        let pool = pool.clone();
+        tokio::spawn(async move { sign_in(&pool, "user_old", "old@example.org", None).await })
+    });
+    let handles: Vec<_> = attempts.collect();
+    for handle in handles {
+        handle.await.unwrap();
+    }
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM workspaces WHERE kind = 'personal'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(events(&pool, "workspace.created").await, 1);
+    let onboarded: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT onboarded_at FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(onboarded.is_some());
+}
+
+#[tokio::test]
+async fn deleting_a_workspace_audits_each_removed_membership_and_ends_its_invitations() {
+    let Some(pool) = database().await else { return };
+    let user_a = sign_in_user(&pool, "user_A").await;
+    let user_b = sign_in_user(&pool, "user_B").await;
+    let a = deepref_domain::UserId::new(user_a);
+    let workspace = deepref_domain::WorkspaceId::new(personal_workspace(&pool, "user_A").await);
+    add_workspace_member(
+        &pool,
+        a,
+        workspace,
+        deepref_domain::UserId::new(user_b),
+        WorkspaceRole::Member,
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let pending = deepref_app::workspaces::invite_to_workspace(
+        &pool,
+        a,
+        workspace,
+        "p@example.org",
+        WorkspaceRole::Member,
+        chrono::Utc::now() + chrono::Duration::days(1),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let revoked = deepref_app::workspaces::invite_to_workspace(
+        &pool,
+        a,
+        workspace,
+        "r@example.org",
+        WorkspaceRole::Member,
+        chrono::Utc::now() + chrono::Duration::days(1),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    deepref_app::workspaces::revoke_invitation(&pool, a, revoked.id, AuditRequest::default())
+        .await
+        .unwrap();
+
+    delete_workspace(&pool, a, workspace, AuditRequest::default())
+        .await
+        .expect("a workspace with invitations and members is deletable");
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM workspace_invitations").await,
+        0
+    );
+    assert_eq!(
+        events(&pool, "membership.removed").await,
+        2,
+        "one per member"
+    );
+    assert_eq!(events(&pool, "workspace.deleted").await, 1);
+    let ended: String = sqlx::query_scalar(
+        "SELECT metadata->>'invitation_id' FROM admin_audit_events
+         WHERE event_type = 'invitation.revoked' AND metadata->>'invitation_id' = $1",
+    )
+    .bind(pending.id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ended,
+        pending.id.to_string(),
+        "the pending invitation is revoked by name"
+    );
 }

@@ -44,6 +44,15 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
 
+        Command::BackfillProjectWorkspaces => {
+            let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
+            with_telemetry(
+                config.runtime.telemetry.clone(),
+                deepref_http_api::backfill_project_workspaces(&config),
+            )
+            .await
+        }
+
         Command::PrintOpenApi => {
             println!(
                 "{}",

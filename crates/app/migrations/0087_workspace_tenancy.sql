@@ -97,7 +97,9 @@ ON CONFLICT (id) DO NOTHING;
 -- workspace yet; the backfill in 0088 assigns them.
 ALTER TABLE projects ADD COLUMN workspace_id uuid;
 
-CREATE INDEX projects_workspace_idx ON projects (workspace_id);
+-- The lookup index on `projects (workspace_id)` is built CONCURRENTLY by its
+-- own no-transaction migration (0093): building it here would hold the lock
+-- this ALTER takes for the whole scan.
 
 -- Rolling safety for stage 3: a binary from the previous release inserts
 -- projects without a workspace_id. Such a row goes to the migration

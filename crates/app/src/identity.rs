@@ -236,13 +236,14 @@ pub async fn sign_in(
     let mut tx = pool.begin().await?;
     let new_id = UserId::new(Uuid::new_v4());
     let inserted = sqlx::query(
-        "INSERT INTO users (id, workos_user_id, primary_email, display_name, status)
-         VALUES ($1, $2, $3, $4, 'active')
+        "INSERT INTO users (id, workos_user_id, primary_email, email_verified, display_name, status)
+         VALUES ($1, $2, $3, $4, $5, 'active')
          ON CONFLICT (workos_user_id) DO NOTHING",
     )
     .bind(new_id.as_uuid())
     .bind(session.external_user_id.as_str())
     .bind(&profile.email)
+    .bind(profile.email_verified)
     .bind(profile.display_name.as_deref())
     .execute(&mut *tx)
     .await?
@@ -261,13 +262,17 @@ pub async fn sign_in(
         // Profile fields follow the provider; `status` is never touched here,
         // so a profile update cannot reactivate a deactivated user.
         sqlx::query(
-            "UPDATE users SET primary_email = $2, display_name = $3, updated_at = now()
+            "UPDATE users
+             SET primary_email = $2, email_verified = $4, display_name = $3, updated_at = now()
              WHERE workos_user_id = $1
-               AND (primary_email IS DISTINCT FROM $2 OR display_name IS DISTINCT FROM $3)",
+               AND (primary_email IS DISTINCT FROM $2
+                    OR display_name IS DISTINCT FROM $3
+                    OR email_verified IS DISTINCT FROM $4)",
         )
         .bind(session.external_user_id.as_str())
         .bind(&profile.email)
         .bind(profile.display_name.as_deref())
+        .bind(profile.email_verified)
         .execute(&mut *tx)
         .await?;
     }
@@ -280,30 +285,28 @@ pub async fn sign_in(
         tx.commit().await?;
         return Ok(SignIn::Deactivated);
     }
-    if inserted {
-        // Onboarding (03a), in this same transaction. A pending invitation to
-        // the provider-verified email joins its workspace and creates no
-        // personal workspace; otherwise the user gets one personal workspace
-        // as owner. A retried callback inserts no user (`inserted` is false),
-        // so it onboards nothing twice; a user that existed before workspaces
-        // is onboarded by the staged migration instead.
-        let joined = crate::workspaces::accept_first_pending_invitation(
+    // Onboarding (03a) is tracked by `users.onboarded_at`, not by whether this
+    // call inserted the row: a user an N-1 binary provisioned has no
+    // memberships and is onboarded by their first sign-in here. The row lock
+    // makes it exactly-once under concurrent callbacks and idempotent on retry.
+    let onboarded_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT onboarded_at FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user.id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await?;
+    if onboarded_at.is_none() {
+        crate::workspaces::onboard_user(
             &mut tx,
             user.id,
+            profile.display_name.as_deref(),
             &profile.email,
             audit,
         )
         .await?;
-        if joined.is_none() {
-            crate::workspaces::create_personal_workspace(
-                &mut tx,
-                user.id,
-                profile.display_name.as_deref(),
-                &profile.email,
-                audit,
-            )
+        sqlx::query("UPDATE users SET onboarded_at = now() WHERE id = $1")
+            .bind(user.id.as_uuid())
+            .execute(&mut *tx)
             .await?;
-        }
     }
     sqlx::query(
         "INSERT INTO user_sessions

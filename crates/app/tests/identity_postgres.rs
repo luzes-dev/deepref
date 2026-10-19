@@ -37,6 +37,7 @@ fn session(user: &str, session_id: &str) -> ProviderSession {
 fn profile(email: &str, name: Option<&str>) -> ProviderProfile {
     ProviderProfile {
         email: email.to_owned(),
+        email_verified: true,
         display_name: name.map(str::to_owned),
     }
 }

@@ -176,7 +176,7 @@ async fn every_project_gets_the_migration_workspace_and_no_row_changes_shape() {
 
     // Idempotent: rerunning the backfill moves nothing and changes nothing.
     for _ in 0..2 {
-        let moved: i32 = sqlx::query_scalar("SELECT backfill_project_workspaces()")
+        let moved: i32 = sqlx::query_scalar("SELECT backfill_project_workspaces_batch(500)")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -325,7 +325,7 @@ async fn the_constraint_refuses_a_project_that_resolves_to_no_workspace() {
         .execute(&pool)
         .await
         .unwrap();
-    let backfilled: i32 = sqlx::query_scalar("SELECT backfill_project_workspaces()")
+    let backfilled: i32 = sqlx::query_scalar("SELECT backfill_project_workspaces_batch(500)")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -336,4 +336,104 @@ async fn the_constraint_refuses_a_project_that_resolves_to_no_workspace() {
             .await
             .unwrap();
     assert_eq!(unassigned, 0);
+}
+
+#[tokio::test]
+async fn the_backfill_commits_each_batch_and_validation_reports_without_changing_anything() {
+    let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
+    else {
+        return;
+    };
+    let pool = pool_for(&url).await;
+    deepref_app::migrate(&pool).await.expect("migrations apply");
+
+    // The lookup index exists, built by its own no-transaction migration.
+    let indexed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_indexes WHERE indexname = 'projects_workspace_idx'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(indexed, 1);
+
+    // Rows the trigger would have assigned, written without it as a crashed
+    // earlier run would have left them.
+    sqlx::query("ALTER TABLE projects DISABLE TRIGGER projects_workspace_default_trigger")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for index in 0..5 {
+        sqlx::query("INSERT INTO projects (id, name) VALUES ($1, $2)")
+            .bind(Uuid::new_v4())
+            .bind(format!("unassigned {index}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // Validation refuses while rows are unassigned and modifies nothing.
+    let refused = deepref_app::validate_project_workspaces(&pool).await;
+    assert!(
+        matches!(
+            refused,
+            Err(deepref_app::WorkspaceError::ProjectWorkspaceValidation {
+                total: 5,
+                unassigned: 5,
+                orphaned: 0
+            })
+        ),
+        "{refused:?}"
+    );
+    let still_unassigned: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM projects WHERE workspace_id IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(still_unassigned, 5, "validation changes nothing");
+
+    // Each batch commits on its own: 5 rows in batches of 2 is 3 batches.
+    let report = deepref_app::backfill_project_workspaces(&pool, 2)
+        .await
+        .expect("backfill completes and validates");
+    assert_eq!(
+        (report.batches, report.moved, report.total_projects),
+        (3, 5, 5)
+    );
+    let rerun = deepref_app::backfill_project_workspaces(&pool, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        (rerun.batches, rerun.moved),
+        (0, 0),
+        "a rerun moves nothing"
+    );
+}
+
+#[tokio::test]
+async fn users_at_migration_time_are_marked_onboarded_and_the_rest_are_left_for_sign_in() {
+    let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
+    else {
+        return;
+    };
+    let pool = pool_for(&url).await;
+    through_previous_release().run(&pool).await.unwrap();
+    write_legacy_rows(&pool).await;
+    deepref_app::migrate(&pool).await.unwrap();
+    let onboarded: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM users WHERE onboarded_at IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        onboarded, 1,
+        "the existing user holds the migration membership"
+    );
+    let unverified: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email_verified")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        unverified, 0,
+        "no address is trusted until the provider says so"
+    );
 }

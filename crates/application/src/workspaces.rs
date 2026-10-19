@@ -102,6 +102,8 @@ pub enum ReconciliationFinding {
         local_role: WorkspaceRole,
         provider_role: WorkspaceRole,
     },
+    /// The snapshot began before state already applied; it was rejected whole.
+    StaleSnapshot { workspace_id: WorkspaceId },
     /// Provider state (not a voluntary DeepRef change) left a workspace with
     /// no active owner. Ownership must be transferred deliberately.
     WorkspaceWithoutOwner { workspace_id: WorkspaceId },

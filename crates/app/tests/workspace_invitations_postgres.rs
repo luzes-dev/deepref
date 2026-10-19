@@ -29,6 +29,10 @@ const AUDIT: AuditRequest<'static> = AuditRequest {
 };
 
 async fn sign_in(pool: &PgPool, user: &str, email: &str) -> SignIn {
+    sign_in_verified(pool, user, email, true).await
+}
+
+async fn sign_in_verified(pool: &PgPool, user: &str, email: &str, verified: bool) -> SignIn {
     const PASSWORD: &str = "a-cookie-password-of-at-least-32-characters";
     let cookie_token = format!(
         "inv-session-{}",
@@ -46,6 +50,7 @@ async fn sign_in(pool: &PgPool, user: &str, email: &str) -> SignIn {
         &provider_session,
         &ProviderProfile {
             email: email.to_owned(),
+            email_verified: verified,
             display_name: Some("Test Person".to_owned()),
         },
         NewBrowserSession {
@@ -630,4 +635,96 @@ async fn the_oldest_matching_invitation_wins_at_first_sign_in() {
         .await,
         1
     );
+}
+
+#[tokio::test]
+async fn an_unverified_email_joins_no_workspace_until_the_provider_verifies_it() {
+    let Some(pool) = database().await else { return };
+    let owner = user(&pool, "owner", "owner@example.org").await;
+    let workspace = personal_workspace(&pool, owner).await;
+    let invitation = invite_to_workspace(
+        &pool,
+        owner,
+        workspace,
+        "claim@example.org",
+        WorkspaceRole::Admin,
+        in_a_day(),
+        AUDIT,
+    )
+    .await
+    .unwrap();
+
+    // First sign-in claims the invited address without verification: no join.
+    sign_in_verified(&pool, "claimant", "claim@example.org", false).await;
+    let claimant: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE workos_user_id = 'claimant'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let claimant = UserId::new(claimant);
+    personal_workspace(&pool, claimant).await;
+    assert_eq!(invitation_status(&pool, invitation.id).await, "pending");
+    let error = accept_invitation(&pool, claimant, invitation.id, AUDIT)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, WorkspaceError::InvitationEmailUnverified),
+        "{error:?}"
+    );
+    assert_eq!(
+        invitation_status(&pool, invitation.id).await,
+        "pending",
+        "nothing is consumed"
+    );
+
+    // Once the provider verifies the address, the same invitation can be accepted.
+    sign_in_verified(&pool, "claimant", "claim@example.org", true).await;
+    accept_invitation(&pool, claimant, invitation.id, AUDIT)
+        .await
+        .unwrap();
+    assert_eq!(invitation_status(&pool, invitation.id).await, "accepted");
+}
+
+#[tokio::test]
+async fn invitation_events_name_their_invitation() {
+    let Some(pool) = database().await else { return };
+    let owner = user(&pool, "owner", "owner@example.org").await;
+    let workspace = personal_workspace(&pool, owner).await;
+    let one = invite_to_workspace(
+        &pool,
+        owner,
+        workspace,
+        "a@example.org",
+        WorkspaceRole::Member,
+        in_a_day(),
+        AUDIT,
+    )
+    .await
+    .unwrap();
+    let two = invite_to_workspace(
+        &pool,
+        owner,
+        workspace,
+        "b@example.org",
+        WorkspaceRole::Member,
+        in_a_day(),
+        AUDIT,
+    )
+    .await
+    .unwrap();
+    revoke_invitation(&pool, owner, two.id, AUDIT)
+        .await
+        .unwrap();
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT metadata->>'invitation_id' FROM admin_audit_events
+         WHERE event_type LIKE 'invitation.%' ORDER BY event_type, metadata->>'invitation_id'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let mut expected = vec![one.id.to_string(), two.id.to_string(), two.id.to_string()];
+    expected.sort();
+    let mut created_revoked = ids.clone();
+    created_revoked.sort();
+    assert_eq!(created_revoked, expected);
 }

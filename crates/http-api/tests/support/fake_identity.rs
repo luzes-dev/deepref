@@ -63,6 +63,7 @@ impl FakeIdentity {
         let session = Self::session(user, &self.next("sess"));
         let profile = ProviderProfile {
             email: email.to_owned(),
+            email_verified: true,
             display_name: name.map(str::to_owned),
         };
         self.inner

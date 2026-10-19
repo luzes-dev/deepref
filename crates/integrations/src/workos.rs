@@ -309,6 +309,7 @@ impl IdentityProvider for WorkOsIdentityProvider {
                 })?;
             let profile = ProviderProfile {
                 email: response.user.email.clone(),
+                email_verified: response.user.email_verified,
                 display_name: response
                     .user
                     .name

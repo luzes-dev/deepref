@@ -77,6 +77,16 @@ pub enum WorkspaceError {
     InvitationExpired,
     #[error("the invitation was issued to a different address")]
     InvitationEmailMismatch,
+    #[error("the provider has not verified the account's email address")]
+    InvitationEmailUnverified,
+    #[error(
+        "project workspace validation failed: {unassigned} unassigned, {orphaned} orphaned of {total}"
+    )]
+    ProjectWorkspaceValidation {
+        total: i64,
+        unassigned: i64,
+        orphaned: i64,
+    },
     #[error(transparent)]
     Directory(#[from] DirectoryError),
 }
@@ -116,6 +126,10 @@ pub struct ProjectAccessRecord {
 pub struct OrganizationSnapshot {
     pub organization: DirectoryOrganization,
     pub memberships: Vec<DirectoryMembership>,
+    /// When the fetch of this snapshot began, taken by the caller before it
+    /// asked the provider. It orders snapshots: one that began before the
+    /// workspace's `workos_reconciled_through` is stale and applies nothing.
+    pub fetch_started_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// What one reconciliation of one organization did. Counts are audit rows
@@ -143,10 +157,10 @@ enum TenancyEvent {
     ProjectAccessGranted(ProjectRole, GrantSource),
     ProjectAccessRoleChanged(ProjectRole),
     ProjectAccessRemoved(ProjectRole, GrantSource),
-    InvitationCreated(WorkspaceRole),
-    InvitationAccepted(WorkspaceRole),
-    InvitationRevoked(WorkspaceRole),
-    InvitationExpired(WorkspaceRole),
+    InvitationCreated(WorkspaceRole, Uuid),
+    InvitationAccepted(WorkspaceRole, Uuid),
+    InvitationRevoked(WorkspaceRole, Uuid),
+    InvitationExpired(WorkspaceRole, Uuid),
 }
 
 impl TenancyEvent {
@@ -162,10 +176,10 @@ impl TenancyEvent {
             Self::ProjectAccessGranted(_, _) => "project_access.granted",
             Self::ProjectAccessRoleChanged(_) => "project_access.role_changed",
             Self::ProjectAccessRemoved(_, _) => "project_access.removed",
-            Self::InvitationCreated(_) => "invitation.created",
-            Self::InvitationAccepted(_) => "invitation.accepted",
-            Self::InvitationRevoked(_) => "invitation.revoked",
-            Self::InvitationExpired(_) => "invitation.expired",
+            Self::InvitationCreated(_, _) => "invitation.created",
+            Self::InvitationAccepted(_, _) => "invitation.accepted",
+            Self::InvitationRevoked(_, _) => "invitation.revoked",
+            Self::InvitationExpired(_, _) => "invitation.expired",
         }
     }
 
@@ -181,10 +195,12 @@ impl TenancyEvent {
                 json!({ "role": role.as_str(), "grant_source": source.as_str() })
             }
             Self::ProjectAccessRoleChanged(role) => json!({ "role": role.as_str() }),
-            Self::InvitationCreated(role)
-            | Self::InvitationAccepted(role)
-            | Self::InvitationRevoked(role)
-            | Self::InvitationExpired(role) => json!({ "role": role.as_str() }),
+            Self::InvitationCreated(role, id)
+            | Self::InvitationAccepted(role, id)
+            | Self::InvitationRevoked(role, id)
+            | Self::InvitationExpired(role, id) => {
+                json!({ "role": role.as_str(), "invitation_id": id.to_string() })
+            }
             Self::WorkspaceRenamed | Self::WorkspaceDeleted => json!({}),
         }
     }
@@ -346,6 +362,36 @@ pub async fn create_personal_workspace(
     Ok(workspace)
 }
 
+/// First-workspace onboarding (03a), run once per user under the user-row lock
+/// `sign_in` holds (`users.onboarded_at IS NULL`). A user who already holds a
+/// membership needs nothing more. Otherwise the oldest usable invitation to
+/// the user's verified address joins its workspace and no personal workspace
+/// is created; with none, the user gets a personal workspace as owner.
+pub(crate) async fn onboard_user(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: UserId,
+    display_name: Option<&str>,
+    email: &str,
+    audit: AuditRequest<'_>,
+) -> Result<(), WorkspaceError> {
+    let has_membership: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM workspace_memberships WHERE user_id = $1)",
+    )
+    .bind(user_id.as_uuid())
+    .fetch_one(&mut **tx)
+    .await?;
+    if has_membership {
+        return Ok(());
+    }
+    if accept_first_pending_invitation(tx, user_id, email, audit)
+        .await?
+        .is_none()
+    {
+        create_personal_workspace(tx, user_id, display_name, email, audit).await?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_membership_row(
     tx: &mut Transaction<'_, Postgres>,
@@ -416,8 +462,10 @@ async fn lock_workspace(
     found.map(|_| ()).ok_or(WorkspaceError::UnknownWorkspace)
 }
 
-/// The last-owner guard (03a). It applies to voluntary membership changes
-/// only: removing, deactivating or demoting the last active `owner` is refused
+/// The last-owner guard (03a). A replacement owner counts only while both the
+/// membership and the account are active: a globally deactivated owner cannot
+/// act, so they do not make removing the last working owner safe. It applies to
+/// voluntary membership changes only: removing, deactivating or demoting the last active `owner` is refused
 /// until ownership is transferred. Global user deactivation (02) never passes
 /// through here and proceeds regardless.
 async fn refuse_last_owner_loss(
@@ -430,7 +478,8 @@ async fn refuse_last_owner_loss(
     }
     let other_owners: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM workspace_memberships
-         WHERE workspace_id = $1 AND user_id <> $2 AND role = 'owner' AND status = 'active'",
+         WHERE workspace_id = $1 AND user_id <> $2 AND role = 'owner' AND status = 'active'
+           AND user_id IN (SELECT id FROM users WHERE status = 'active')",
     )
     .bind(workspace_id.as_uuid())
     .bind(membership.user_id.as_uuid())
@@ -822,6 +871,54 @@ pub async fn delete_workspace(
     if projects > 0 {
         return Err(WorkspaceError::WorkspaceHasProjects);
     }
+    // Pending invitations end as revoked (audited); every invitation row is
+    // then deleted with the workspace, its history living in the audit trail.
+    let pending = sqlx::query(
+        "SELECT id, role FROM workspace_invitations
+         WHERE workspace_id = $1 AND status = 'pending' ORDER BY created_at, id",
+    )
+    .bind(workspace_id.as_uuid())
+    .fetch_all(&mut *tx)
+    .await?;
+    for row in &pending {
+        let id: Uuid = row.try_get("id")?;
+        let role: String = row.try_get("role")?;
+        let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
+        write_tenancy_audit(
+            &mut tx,
+            TenancyEvent::InvitationRevoked(role, id),
+            AuditPrincipal::User(actor),
+            None,
+            Some(workspace_id),
+            None,
+            audit,
+        )
+        .await?;
+    }
+    sqlx::query("DELETE FROM workspace_invitations WHERE workspace_id = $1")
+        .bind(workspace_id.as_uuid())
+        .execute(&mut *tx)
+        .await?;
+    let members = sqlx::query(
+        "SELECT id, workspace_id, user_id, role, status, grant_source, workos_membership_id
+         FROM workspace_memberships WHERE workspace_id = $1 ORDER BY created_at, id",
+    )
+    .bind(workspace_id.as_uuid())
+    .fetch_all(&mut *tx)
+    .await?;
+    for row in &members {
+        let member = membership_record(row)?;
+        write_tenancy_audit(
+            &mut tx,
+            TenancyEvent::MembershipRemoved(member.role, member.grant_source),
+            AuditPrincipal::User(actor),
+            Some(member.user_id),
+            Some(workspace_id),
+            None,
+            audit,
+        )
+        .await?;
+    }
     write_tenancy_audit(
         &mut tx,
         TenancyEvent::WorkspaceDeleted,
@@ -863,6 +960,21 @@ pub async fn apply_organization_snapshot(
     audit: AuditRequest<'_>,
 ) -> Result<ReconciliationReport, WorkspaceError> {
     let mut tx = pool.begin().await?;
+    // One reconciliation per organization at a time, so two overlapping runs
+    // cannot interleave their reads and writes. Released at commit/rollback.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "workos-organization:{}",
+            snapshot.organization.external_organization_id.as_str()
+        ))
+        .execute(&mut *tx)
+        .await?;
+    let watermark: Option<Option<chrono::DateTime<chrono::Utc>>> = sqlx::query_scalar(
+        "SELECT workos_reconciled_through FROM workspaces WHERE workos_organization_id = $1",
+    )
+    .bind(snapshot.organization.external_organization_id.as_str())
+    .fetch_optional(&mut *tx)
+    .await?;
     let workspace = match find_workspace_by_organization(
         &mut tx,
         &snapshot.organization.external_organization_id,
@@ -899,6 +1011,16 @@ pub async fn apply_organization_snapshot(
         status_changes: 0,
         findings: Vec::new(),
     };
+    if let Some(Some(through)) = watermark
+        && snapshot.fetch_started_at < through
+    {
+        // Newer state is already applied. Applying this snapshot could restore
+        // access a later one revoked, so it applies nothing at all.
+        report.findings.push(ReconciliationFinding::StaleSnapshot {
+            workspace_id: workspace.id,
+        });
+        return Ok(report);
+    }
 
     let local_rows = sqlx::query(
         "SELECT id, workspace_id, user_id, role, status, grant_source, workos_membership_id
@@ -933,9 +1055,6 @@ pub async fn apply_organization_snapshot(
                 });
             continue;
         }
-        if remote.status == DirectoryMembershipStatus::Active {
-            provider_users.insert(user_id.as_uuid());
-        }
         let Some(provider_role) = map_directory_role(remote.role_slug.as_deref()) else {
             report
                 .findings
@@ -943,8 +1062,15 @@ pub async fn apply_organization_snapshot(
                     external_user_id: remote.external_user_id.clone(),
                     role_slug: remote.role_slug.clone(),
                 });
+            // Not recorded as a confirmed provider member: a mirrored grant
+            // whose role cannot be resolved is deactivated by the sweep below,
+            // so a role change to something unmapped never keeps old privilege.
+            // A `local` grant is untouched.
             continue;
         };
+        if remote.status == DirectoryMembershipStatus::Active {
+            provider_users.insert(user_id.as_uuid());
+        }
         match local.get(&user_id.as_uuid()) {
             // A DeepRef-only grant: preserved. A role disagreement is
             // surfaced here; an absence from the provider is surfaced in the
@@ -1106,6 +1232,15 @@ pub async fn apply_organization_snapshot(
                 workspace_id: workspace.id,
             });
     }
+    sqlx::query(
+        "UPDATE workspaces SET workos_reconciled_through = $2
+         WHERE id = $1
+           AND (workos_reconciled_through IS NULL OR workos_reconciled_through < $2)",
+    )
+    .bind(workspace.id.as_uuid())
+    .bind(snapshot.fetch_started_at)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(report)
 }
@@ -1116,7 +1251,8 @@ async fn count_active_owners(
 ) -> Result<i64, WorkspaceError> {
     Ok(sqlx::query_scalar(
         "SELECT count(*) FROM workspace_memberships
-         WHERE workspace_id = $1 AND role = 'owner' AND status = 'active'",
+         WHERE workspace_id = $1 AND role = 'owner' AND status = 'active'
+           AND user_id IN (SELECT id FROM users WHERE status = 'active')",
     )
     .bind(workspace_id.as_uuid())
     .fetch_one(&mut **tx)
@@ -1160,12 +1296,16 @@ pub async fn reconcile_organizations(
 ) -> Result<Vec<ReconciliationReport>, WorkspaceError> {
     let mut reports = Vec::new();
     for organization in directory.list_organizations().await? {
+        // Taken before the provider is asked, so the snapshot is never newer
+        // than the instant it claims.
+        let fetch_started_at = chrono::Utc::now();
         let memberships = directory
             .list_memberships(&organization.external_organization_id)
             .await?;
         let snapshot = OrganizationSnapshot {
             organization,
             memberships,
+            fetch_started_at,
         };
         reports.push(apply_organization_snapshot(pool, &snapshot, audit).await?);
     }
@@ -1191,6 +1331,9 @@ pub enum AcceptOutcome {
     Expired,
     Unavailable,
     EmailMismatch,
+    /// The provider has not verified the account's current address; nothing
+    /// is granted or consumed.
+    EmailUnverified,
 }
 
 /// The actor's active role in a workspace, if it may invite: only active
@@ -1218,7 +1361,16 @@ async fn inviting_role(
     Ok(role)
 }
 
-/// Creates a pending invitation (`workspace:members:invite`). Only an active
+/// Creates a pending invitation (`workspace:members:invite`).
+///
+/// Shared addresses: distinct provider identities may share one address (the
+/// address is an attribute, never a key). Existing membership is therefore
+/// decided by user identity at acceptance, which refuses a user who already
+/// belongs. At invite time only an active member whose address equals the
+/// invitee's exactly blocks the invitation; a second identity that shares an
+/// address with a member must be added directly instead of invited.
+///
+/// Only an active
 /// owner or admin may invite, never to a role above their own. A stale pending
 /// invitation to the same address is expired (and audited) first, so a
 /// re-invitation after expiry works while a live one is refused.
@@ -1257,19 +1409,20 @@ pub async fn invite_to_workspace(
     let stale = sqlx::query(
         "UPDATE workspace_invitations SET status = 'expired', updated_at = now()
          WHERE workspace_id = $1 AND email = $2 AND status = 'pending' AND expires_at <= now()
-         RETURNING role",
+         RETURNING id, role",
     )
     .bind(workspace_id.as_uuid())
     .bind(&email)
     .fetch_all(&mut *tx)
     .await?;
     for row in &stale {
+        let stale_id: Uuid = row.try_get("id")?;
         let stale_role: String = row.try_get("role")?;
         let stale_role =
             WorkspaceRole::parse(&stale_role).ok_or(WorkspaceError::Corrupt("role"))?;
         write_tenancy_audit(
             &mut tx,
-            TenancyEvent::InvitationExpired(stale_role),
+            TenancyEvent::InvitationExpired(stale_role, stale_id),
             AuditPrincipal::System,
             None,
             Some(workspace_id),
@@ -1302,7 +1455,7 @@ pub async fn invite_to_workspace(
     }
     write_tenancy_audit(
         &mut tx,
-        TenancyEvent::InvitationCreated(role),
+        TenancyEvent::InvitationCreated(role, id),
         AuditPrincipal::User(actor),
         None,
         Some(workspace_id),
@@ -1349,7 +1502,7 @@ pub async fn revoke_invitation(
     let role = WorkspaceRole::parse(&revoked).ok_or(WorkspaceError::Corrupt("role"))?;
     write_tenancy_audit(
         &mut tx,
-        TenancyEvent::InvitationRevoked(role),
+        TenancyEvent::InvitationRevoked(role, invitation_id),
         AuditPrincipal::User(actor),
         None,
         Some(workspace_id),
@@ -1371,7 +1524,7 @@ pub(crate) async fn accept_in_transaction(
     invitation_id: Uuid,
     audit: AuditRequest<'_>,
 ) -> Result<AcceptOutcome, WorkspaceError> {
-    let user = sqlx::query("SELECT primary_email, status FROM users WHERE id = $1")
+    let user = sqlx::query("SELECT primary_email, email_verified, status FROM users WHERE id = $1")
         .bind(user_id.as_uuid())
         .fetch_optional(&mut **tx)
         .await?;
@@ -1381,6 +1534,7 @@ pub(crate) async fn accept_in_transaction(
         return Err(WorkspaceError::NotPermitted);
     }
     let user_email: String = user.try_get("primary_email")?;
+    let email_verified: bool = user.try_get("email_verified")?;
     let invitation =
         sqlx::query("SELECT workspace_id, email FROM workspace_invitations WHERE id = $1")
             .bind(invitation_id)
@@ -1391,6 +1545,10 @@ pub(crate) async fn accept_in_transaction(
     let invited_email: String = invitation.try_get("email")?;
     if normalize_invitation_email(&user_email).as_deref() != Some(invited_email.as_str()) {
         return Ok(AcceptOutcome::EmailMismatch);
+    }
+    // An address binds authority only while the provider vouches for it.
+    if !email_verified {
+        return Ok(AcceptOutcome::EmailUnverified);
     }
     let accepted = sqlx::query(
         "UPDATE workspace_invitations
@@ -1428,7 +1586,7 @@ pub(crate) async fn accept_in_transaction(
         .await?;
         write_tenancy_audit(
             tx,
-            TenancyEvent::InvitationAccepted(role),
+            TenancyEvent::InvitationAccepted(role, invitation_id),
             AuditPrincipal::User(user_id),
             Some(user_id),
             Some(workspace_id),
@@ -1461,7 +1619,7 @@ pub(crate) async fn accept_in_transaction(
     let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
     write_tenancy_audit(
         tx,
-        TenancyEvent::InvitationExpired(role),
+        TenancyEvent::InvitationExpired(role, invitation_id),
         AuditPrincipal::System,
         None,
         Some(workspace_id),
@@ -1489,6 +1647,7 @@ pub async fn accept_invitation(
         AcceptOutcome::Expired => Err(WorkspaceError::InvitationExpired),
         AcceptOutcome::Unavailable => Err(WorkspaceError::InvitationUnavailable),
         AcceptOutcome::EmailMismatch => Err(WorkspaceError::InvitationEmailMismatch),
+        AcceptOutcome::EmailUnverified => Err(WorkspaceError::InvitationEmailUnverified),
     }
 }
 
@@ -1522,4 +1681,73 @@ pub(crate) async fn accept_first_pending_invitation(
         }
     }
     Ok(None)
+}
+
+/// What one run of the project backfill did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectBackfillReport {
+    pub batches: u32,
+    pub moved: i64,
+    pub total_projects: i64,
+}
+
+/// Counts every project, those without a workspace and those pointing at one
+/// that does not exist, in a single statement (one snapshot), so a concurrent
+/// insert cannot make the counts disagree with each other.
+pub async fn validate_project_workspaces(pool: &PgPool) -> Result<i64, WorkspaceError> {
+    let row = sqlx::query(
+        "SELECT count(*) AS total,
+                count(*) FILTER (WHERE p.workspace_id IS NULL) AS unassigned,
+                count(*) FILTER (
+                  WHERE p.workspace_id IS NOT NULL
+                    AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = p.workspace_id)
+                ) AS orphaned
+         FROM projects p",
+    )
+    .fetch_one(pool)
+    .await?;
+    let total: i64 = row.try_get("total")?;
+    let unassigned: i64 = row.try_get("unassigned")?;
+    let orphaned: i64 = row.try_get("orphaned")?;
+    if unassigned != 0 || orphaned != 0 {
+        return Err(WorkspaceError::ProjectWorkspaceValidation {
+            total,
+            unassigned,
+            orphaned,
+        });
+    }
+    Ok(total)
+}
+
+/// The resumable project backfill (03a stage 4), run by
+/// `deepref-server backfill-project-workspaces` after the migration. Each
+/// batch is its own transaction, so progress survives a crash and row locks
+/// are held for one batch only; a rerun continues where the last left off and
+/// moves nothing once every project has a workspace. It ends with the
+/// single-snapshot validation that gates the later NOT NULL contract migration.
+pub async fn backfill_project_workspaces(
+    pool: &PgPool,
+    batch_size: i32,
+) -> Result<ProjectBackfillReport, WorkspaceError> {
+    let mut batches = 0;
+    let mut moved = 0_i64;
+    loop {
+        let mut tx = pool.begin().await?;
+        let batch: i32 = sqlx::query_scalar("SELECT backfill_project_workspaces_batch($1)")
+            .bind(batch_size)
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        if batch == 0 {
+            break;
+        }
+        batches += 1;
+        moved += i64::from(batch);
+    }
+    let total_projects = validate_project_workspaces(pool).await?;
+    Ok(ProjectBackfillReport {
+        batches,
+        moved,
+        total_projects,
+    })
 }
