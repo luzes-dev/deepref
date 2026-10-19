@@ -245,7 +245,7 @@ impl OpenAlexClient {
         Self::with_base_url(
             OPENALEX_BASE,
             config.contact_email.clone(),
-            config.openalex_api_key.clone(),
+            config.openalex_api_key().map(str::to_owned),
             config.openalex_corpus,
         )
     }

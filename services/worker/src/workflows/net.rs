@@ -186,8 +186,8 @@ pub async fn send_email(
     }
     .map_err(|_| NodeError::permanent("The e-mail server address is not valid."))?
     .port(config.port);
-    if let Some((user, password)) = &config.credentials {
-        builder = builder.credentials(Credentials::new(user.clone(), password.clone()));
+    if let Some((user, password)) = config.credentials() {
+        builder = builder.credentials(Credentials::new(user.to_owned(), password.to_owned()));
     }
     let transport = builder.build();
     let from: Mailbox = config.from.parse().map_err(|_| {

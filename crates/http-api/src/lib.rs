@@ -113,7 +113,7 @@ async fn database_pool(config: &ApiConfig) -> anyhow::Result<PgPool> {
         .acquire_timeout(database.acquire_timeout)
         .idle_timeout(Some(database.idle_timeout))
         .max_lifetime(Some(database.max_lifetime))
-        .connect(&database.url)
+        .connect(database.url())
         .await?)
 }
 

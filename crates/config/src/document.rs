@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use crate::ConfigError;
+use secrecy::SecretString;
+
+use crate::{APP_ENV, ConfigError, Environment};
 
 pub const DEFAULT_MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 100 * 1024 * 1024;
@@ -21,7 +23,7 @@ pub enum DocumentStorageBackend {
         bucket: String,
         region: String,
         access_key_id: String,
-        secret_access_key: String,
+        secret_access_key: SecretString,
     },
 }
 
@@ -36,11 +38,10 @@ impl DocumentConfig {
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| invalid(name, "required document storage setting is missing"))
         };
-        let is_local =
-            get("APP_ENV").is_some_and(|value| value.trim().eq_ignore_ascii_case("local"));
+        let is_development = Environment::from_app_env(get(APP_ENV).as_deref())?.is_development();
         let backend = get("DOCUMENT_STORAGE_BACKEND")
             .map(|value| value.trim().to_ascii_lowercase())
-            .or_else(|| is_local.then(|| "local".to_owned()))
+            .or_else(|| is_development.then(|| "local".to_owned()))
             .ok_or_else(|| {
                 invalid(
                     "DOCUMENT_STORAGE_BACKEND",
@@ -48,7 +49,7 @@ impl DocumentConfig {
                 )
             })?;
         let backend = match backend.as_str() {
-            "local" if is_local => {
+            "local" if is_development => {
                 let root = get("DOCUMENT_STORAGE_ROOT")
                     .unwrap_or_else(|| "/tmp/deepref-documents".to_owned());
                 if root.is_empty() {
@@ -59,7 +60,7 @@ impl DocumentConfig {
             "local" => {
                 return Err(invalid(
                     "DOCUMENT_STORAGE_BACKEND",
-                    "local is allowed only when APP_ENV=local",
+                    "local is allowed only when APP_ENV=development",
                 ));
             }
             "s3" => {
@@ -85,7 +86,7 @@ impl DocumentConfig {
                     bucket,
                     region,
                     access_key_id,
-                    secret_access_key,
+                    secret_access_key: SecretString::from(secret_access_key),
                 }
             }
             _ => return Err(invalid("DOCUMENT_STORAGE_BACKEND", "must be local or s3")),
@@ -120,8 +121,8 @@ mod tests {
             DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "production".into()))
                 .is_err()
         );
-        let local = |name: &str| (name == "APP_ENV").then(|| "local".into());
-        let config = DocumentConfig::from_source(&local).unwrap();
+        let development = |name: &str| (name == "APP_ENV").then(|| "development".into());
+        let config = DocumentConfig::from_source(&development).unwrap();
         assert_eq!(config.max_bytes, DEFAULT_MAX_DOCUMENT_BYTES);
         assert!(matches!(
             config.backend,
@@ -131,7 +132,7 @@ mod tests {
             assert!(
                 DocumentConfig::from_source(&|name| match name {
                     "DOCUMENT_MAX_BYTES" => Some(value.into()),
-                    _ => local(name),
+                    _ => development(name),
                 })
                 .is_err()
             );

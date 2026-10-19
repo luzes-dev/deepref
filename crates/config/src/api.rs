@@ -16,13 +16,13 @@ impl ApiSettings {
         let cors_allow_any = get("API_CORS_ALLOW_ANY").is_some_and(|value| {
             matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
         });
-        if cors_allow_any && !environment.is_local() {
+        if cors_allow_any && !environment.is_development() {
             return Err(ConfigError::Invalid {
                 name: "API_CORS_ALLOW_ANY",
-                reason: "permitted only when APP_ENV=local".into(),
+                reason: "permitted only when APP_ENV=development".into(),
             });
         }
-        let raw_origins = get("API_CORS_ORIGINS").or_else(|| environment.is_local().then(||
+        let raw_origins = get("API_CORS_ORIGINS").or_else(|| environment.is_development().then(||
             "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173".into()
         )).unwrap_or_default();
         let cors_origins: Vec<_> = raw_origins
@@ -31,7 +31,7 @@ impl ApiSettings {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .collect();
-        if !cors_allow_any && cors_origins.is_empty() && !environment.is_local() {
+        if !cors_allow_any && cors_origins.is_empty() && !environment.is_development() {
             return Err(ConfigError::Invalid {
                 name: "API_CORS_ORIGINS",
                 reason: "must contain at least one exact hosted origin".into(),
@@ -50,11 +50,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cors_defaults_are_local_only() {
-        let local =
-            ApiSettings::from_source(&|name| (name == APP_ENV).then(|| "local".into())).unwrap();
-        assert_eq!(local.cors_origins.len(), 6);
-        assert!(!local.cors_allow_any);
+    fn cors_defaults_are_development_only() {
+        let development =
+            ApiSettings::from_source(&|name| (name == APP_ENV).then(|| "development".into()))
+                .unwrap();
+        assert_eq!(development.cors_origins.len(), 6);
+        assert!(!development.cors_allow_any);
+        assert!(ApiSettings::from_source(&|_| None).is_err());
         assert!(
             ApiSettings::from_source(&|name| (name == APP_ENV).then(|| "production".into()))
                 .is_err()

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr};
 
-use crate::{ConfigError, optional};
+use crate::{ConfigError, flag, optional};
 
 pub const API_BIND_ADDR: &str = "API_BIND_ADDR";
 /// Opt-in for listening on anything other than a loopback address.
@@ -51,19 +51,5 @@ impl ListenConfig {
             bind_addr,
             allow_network_bind,
         })
-    }
-}
-
-fn flag(get: &dyn Fn(&str) -> Option<String>, name: &'static str) -> Result<bool, ConfigError> {
-    match optional(get, name)
-        .map(|value| value.to_ascii_lowercase())
-        .as_deref()
-    {
-        None | Some("0" | "false" | "no") => Ok(false),
-        Some("1" | "true" | "yes") => Ok(true),
-        Some(value) => Err(ConfigError::Invalid {
-            name,
-            reason: format!("{value:?} is not one of 1, true, yes, 0, false, no"),
-        }),
     }
 }

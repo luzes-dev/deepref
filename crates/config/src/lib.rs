@@ -6,12 +6,15 @@ mod environment;
 mod error;
 mod integrations;
 mod listen;
+mod origin;
 mod pdf;
+mod polar;
 mod smtp;
 mod source;
 mod telemetry;
 mod worker;
 mod workflow;
+mod workos;
 
 use std::collections::HashMap;
 
@@ -24,20 +27,32 @@ pub use database::DatabaseConfig;
 pub use document::{
     DEFAULT_MAX_DOCUMENT_BYTES, DocumentConfig, DocumentStorageBackend, MAX_DOCUMENT_BYTES,
 };
-pub use environment::{APP_ENV, Environment, load_local_dotenv_files};
+pub use environment::{APP_ENV, Environment, load_development_dotenv_files};
 pub use error::ConfigError;
 pub use integrations::{IntegrationsConfig, OpenAlexCorpus};
 pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, ListenConfig};
+pub use origin::{DEFAULT_DEVELOPMENT_PUBLIC_ORIGIN, PUBLIC_ORIGIN, PublicOrigin};
 pub use pdf::PdfConfig;
+pub use polar::{PolarConfig, PolarServer};
+pub use secrecy::{ExposeSecret, SecretString};
 pub use smtp::{SmtpConfig, SmtpTls};
 pub use source::ConfigSource;
 pub use telemetry::TelemetryConfig;
 pub use worker::WorkerSettings;
 pub use workflow::WorkflowConfig;
+pub use workos::WorkOsConfig;
+
+/// Turns authentication on. Off until the WorkOS handoff ships; in production
+/// it requires a complete [`WorkOsConfig`].
+pub const AUTH_ENABLED: &str = "DEEPREF_AUTH_ENABLED";
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub environment: Environment,
+    pub public_origin: PublicOrigin,
+    pub auth_enabled: bool,
+    pub workos: Option<WorkOsConfig>,
+    pub polar: Option<PolarConfig>,
     pub database: DatabaseConfig,
     pub telemetry: TelemetryConfig,
     pub workflow: WorkflowConfig,
@@ -64,7 +79,12 @@ impl RuntimeConfig {
         get: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
         let environment = Environment::from_app_env(get(APP_ENV).as_deref())?;
+        let auth_enabled = flag(get, AUTH_ENABLED)?;
         Ok(Self {
+            public_origin: PublicOrigin::from_source(environment, get)?,
+            workos: WorkOsConfig::from_source(environment, auth_enabled, get)?,
+            polar: PolarConfig::from_source(environment, get)?,
+            auth_enabled,
             database: DatabaseConfig::from_source(environment, get)?,
             telemetry: TelemetryConfig::from_source(service_name, get)?,
             workflow: WorkflowConfig::from_source(get),
@@ -98,4 +118,44 @@ where
             reason: error.to_string(),
         })
     })
+}
+
+pub(crate) fn flag(
+    get: &dyn Fn(&str) -> Option<String>,
+    name: &'static str,
+) -> Result<bool, ConfigError> {
+    match optional(get, name)
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("0" | "false" | "no") => Ok(false),
+        Some("1" | "true" | "yes") => Ok(true),
+        Some(value) => Err(ConfigError::Invalid {
+            name,
+            reason: format!("{value:?} is not one of 1, true, yes, 0, false, no"),
+        }),
+    }
+}
+
+/// Reads an all-or-nothing group of variables. `None` means none are set; a
+/// subset is an error naming what is missing. Values come back trimmed, in the
+/// order of `names`.
+pub(crate) fn section<const N: usize>(
+    section: &'static str,
+    get: &dyn Fn(&str) -> Option<String>,
+    names: [&'static str; N],
+) -> Result<Option<[String; N]>, ConfigError> {
+    let values = names.map(|name| optional(get, name));
+    if values.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let missing: Vec<_> = names
+        .iter()
+        .zip(&values)
+        .filter_map(|(name, value)| value.is_none().then_some(*name))
+        .collect();
+    if !missing.is_empty() {
+        return Err(ConfigError::PartialSection { section, missing });
+    }
+    Ok(Some(values.map(Option::unwrap_or_default)))
 }
