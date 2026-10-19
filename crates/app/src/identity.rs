@@ -47,6 +47,26 @@ pub struct StoredBrowserSession {
     pub user: UserRecord,
     pub sealed_provider_session: OpaqueSecret,
     pub session_ref: Vec<u8>,
+    /// Compare-and-set token for [`update_active_session`].
+    pub version: i64,
+}
+
+/// What [`update_active_session`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionUpdate {
+    Updated,
+    /// Another request persisted a newer session first. Reload and use that.
+    Conflict,
+    /// The row was revoked or expired, or the user was deactivated.
+    Gone,
+}
+
+/// A session [`record_logout`] revoked.
+#[derive(Debug, Clone)]
+pub struct RevokedSession {
+    pub user_id: UserId,
+    pub session_ref: Vec<u8>,
+    pub sealed_provider_session: OpaqueSecret,
 }
 
 /// Request-scoped fields every audit row can carry.
@@ -263,7 +283,7 @@ pub async fn find_active_session(
     token_hash: &[u8],
 ) -> Result<Option<StoredBrowserSession>, IdentityStoreError> {
     let row = sqlx::query(
-        "SELECT s.id AS session_id, s.sealed_provider_session, s.session_ref,
+        "SELECT s.id AS session_id, s.sealed_provider_session, s.session_ref, s.version,
                 u.id, u.workos_user_id, u.primary_email, u.display_name, u.status
          FROM user_sessions s
          JOIN users u ON u.id = s.user_id
@@ -283,37 +303,59 @@ pub async fn find_active_session(
                 row.try_get::<String, _>("sealed_provider_session")?,
             ),
             session_ref: row.try_get("session_ref")?,
+            version: row.try_get("version")?,
         })
     })
     .transpose()
 }
 
-/// Persists a WorkOS refresh in the existing local session row. Returning
-/// `false` means that the row was revoked or the user was deactivated while
-/// the provider refresh was in flight.
+/// Persists a WorkOS refresh in the existing local session row, but only if the
+/// row is still at `expected_version`. The provider spends a refresh token once,
+/// so a request that lost the race holds a session that is already superseded:
+/// it gets [`SessionUpdate::Conflict`], changes nothing, and must reload the
+/// winner's session.
 pub async fn update_active_session(
     pool: &PgPool,
     session_id: Uuid,
+    expected_version: i64,
     sealed_provider_session: &OpaqueSecret,
     session_ref: &[u8],
-) -> Result<bool, IdentityStoreError> {
+) -> Result<SessionUpdate, IdentityStoreError> {
     let changed = sqlx::query(
         "UPDATE user_sessions s
-         SET sealed_provider_session = $2, session_ref = $3
+         SET sealed_provider_session = $3, session_ref = $4, version = s.version + 1
          FROM users u
          WHERE s.id = $1
+           AND s.version = $2
            AND u.id = s.user_id
            AND u.status = 'active'
            AND s.revoked_at IS NULL
            AND s.expires_at > now()",
     )
     .bind(session_id)
+    .bind(expected_version)
     .bind(sealed_provider_session.expose())
     .bind(session_ref)
     .execute(pool)
     .await?
     .rows_affected();
-    Ok(changed == 1)
+    if changed == 1 {
+        return Ok(SessionUpdate::Updated);
+    }
+    let live: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+           SELECT 1 FROM user_sessions s JOIN users u ON u.id = s.user_id
+           WHERE s.id = $1 AND u.status = 'active'
+             AND s.revoked_at IS NULL AND s.expires_at > now())",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(if live {
+        SessionUpdate::Conflict
+    } else {
+        SessionUpdate::Gone
+    })
 }
 
 /// The per-request session check: reads the user row with no cache in front.
@@ -343,47 +385,58 @@ pub async fn find_user(
         .transpose()
 }
 
+/// Revokes the local session named by the cookie digest and audits
+/// `auth.logout` and `auth.session_revoked`. It needs nothing from the identity
+/// provider, so a provider outage cannot leave a signed-out session usable.
+/// Returns `None` when no unrevoked row matches (already signed out, unknown).
 pub async fn record_logout(
     pool: &PgPool,
-    user_id: UserId,
     token_hash: &[u8],
     audit: AuditRequest<'_>,
-) -> Result<(), IdentityStoreError> {
+) -> Result<Option<RevokedSession>, IdentityStoreError> {
     let mut tx = pool.begin().await?;
-    let session_ref: Option<Vec<u8>> = sqlx::query_scalar(
+    let row = sqlx::query(
         "UPDATE user_sessions
          SET revoked_at = now()
-         WHERE user_id = $1 AND session_token_hash = $2 AND revoked_at IS NULL
-         RETURNING session_ref",
+         WHERE session_token_hash = $1 AND revoked_at IS NULL
+         RETURNING user_id, session_ref, sealed_provider_session",
     )
-    .bind(user_id.as_uuid())
     .bind(token_hash)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some(session_ref) = session_ref {
-        let audit = AuditRequest {
-            request_id: audit.request_id,
-            session_ref: Some(&session_ref),
-        };
-        write_audit(
-            &mut tx,
-            AuditEvent::Logout,
-            AuditPrincipal::User(user_id),
-            Some(user_id),
-            audit,
-        )
-        .await?;
-        write_audit(
-            &mut tx,
-            AuditEvent::SessionRevoked(SessionRevocationReason::UserLogout),
-            AuditPrincipal::User(user_id),
-            Some(user_id),
-            audit,
-        )
-        .await?;
-    }
+    let Some(row) = row else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let revoked = RevokedSession {
+        user_id: UserId::new(row.try_get("user_id")?),
+        session_ref: row.try_get("session_ref")?,
+        sealed_provider_session: OpaqueSecret::new(
+            row.try_get::<String, _>("sealed_provider_session")?,
+        ),
+    };
+    let audit = AuditRequest {
+        request_id: audit.request_id,
+        session_ref: Some(&revoked.session_ref),
+    };
+    write_audit(
+        &mut tx,
+        AuditEvent::Logout,
+        AuditPrincipal::User(revoked.user_id),
+        Some(revoked.user_id),
+        audit,
+    )
+    .await?;
+    write_audit(
+        &mut tx,
+        AuditEvent::SessionRevoked(SessionRevocationReason::UserLogout),
+        AuditPrincipal::User(revoked.user_id),
+        Some(revoked.user_id),
+        audit,
+    )
+    .await?;
     tx.commit().await?;
-    Ok(())
+    Ok(Some(revoked))
 }
 
 /// Ends the DeepRef user in every workspace: compare-and-set from `active` to

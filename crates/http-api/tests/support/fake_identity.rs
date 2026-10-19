@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     sync::{
         Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -37,6 +37,8 @@ pub struct FakeIdentity {
     counter: AtomicUsize,
     pub revoked: Mutex<Vec<String>>,
     pub refresh_calls: AtomicUsize,
+    /// While set, `inspect_session` fails as it does in a provider outage.
+    pub inspect_unavailable: AtomicBool,
     pub fail_exchange: Mutex<Option<IdentityError>>,
     pub extra_sessions: Mutex<Vec<String>>,
 }
@@ -143,6 +145,9 @@ impl IdentityProvider for FakeIdentity {
         sealed: &'a OpaqueSecret,
     ) -> IdentityFuture<'a, SessionStatus> {
         Box::pin(async move {
+            if self.inspect_unavailable.load(Ordering::SeqCst) {
+                return Err(IdentityError::Unavailable);
+            }
             Ok(
                 match self.inner.lock().unwrap().sealed.get(sealed.expose()) {
                     Some((session, Lifetime::Live)) => SessionStatus::Active(session.clone()),

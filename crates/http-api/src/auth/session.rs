@@ -19,11 +19,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use deepref_app::identity::{
-    StoredBrowserSession, UserRecord, find_active_session, update_active_session,
+    SessionUpdate, StoredBrowserSession, UserRecord, find_active_session, update_active_session,
 };
-use deepref_application::identity::{
-    IdentityError, OpaqueSecret, ProviderSession, RefreshOutcome, SessionStatus,
-};
+use deepref_application::identity::{IdentityError, OpaqueSecret, RefreshOutcome, SessionStatus};
 use deepref_domain::Principal;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -40,24 +38,43 @@ use crate::{
 /// accepts each refresh token once, so only the first may call it.
 const REFRESH_REUSE_WINDOW: Duration = Duration::from_secs(30);
 
+/// How many times one request re-reads a session another request rotated
+/// under it before giving up with a retryable error.
+const MAX_PERSIST_ATTEMPTS: usize = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Access {
-    /// No session is read: health probes, the OpenAPI document and the
-    /// sign-in redirects that run before a session exists.
+    /// No session is read: health probes, the OpenAPI document, the sign-in
+    /// redirects that run before a session exists, sign-out (which revokes by
+    /// cookie digest and so works while the provider is down), and the
+    /// machine-to-machine webhook deliveries that authenticate by their own
+    /// token and signature.
     Open,
-    /// A session is read when present and the handler decides what to do
-    /// without one.
-    Optional,
     Required,
 }
 
 fn access_for(path: &str) -> Access {
     match path {
-        "/health" | "/openapi.json" | "/auth/login" | "/auth/callback" => Access::Open,
-        "/auth/logout" => Access::Optional,
-        _ if path.starts_with("/health/") => Access::Open,
+        "/health" | "/openapi.json" | "/auth/login" | "/auth/callback" | "/auth/logout" => {
+            Access::Open
+        }
+        _ if path.starts_with("/health/") || is_machine_hook(path) => Access::Open,
         _ => Access::Required,
     }
+}
+
+/// Machine-authenticated deliveries: a workflow's webhook and its inbound-email
+/// address. Callers are external services with no browser session; each route
+/// checks its private address token (and, for webhooks, the HMAC signature)
+/// itself. This list is an explicit allowlist: exactly `<prefix><one segment>`,
+/// nothing nested and nothing else.
+const MACHINE_HOOK_PREFIXES: [&str; 2] = ["/hooks/workflows/", "/hooks/email/"];
+
+fn is_machine_hook(path: &str) -> bool {
+    MACHINE_HOOK_PREFIXES.iter().any(|prefix| {
+        path.strip_prefix(prefix)
+            .is_some_and(|token| !token.is_empty() && !token.contains('/'))
+    })
 }
 
 /// The authenticated request: who, and the session they used.
@@ -65,9 +82,6 @@ fn access_for(path: &str) -> Access {
 pub struct SessionContext {
     pub principal: Principal,
     pub user: UserRecord,
-    pub(crate) provider_session_id: String,
-    pub(crate) session_ref: Vec<u8>,
-    pub(crate) session_token_hash: Vec<u8>,
 }
 
 /// Extractor for the request's principal. Rejects with 401 when the request
@@ -132,10 +146,9 @@ pub(crate) async fn authenticate_requests(
     if !gate.enabled {
         return next.run(request).await;
     }
-    // Client-supplied actor labels never establish identity when
-    // authentication is on; handlers read the actor this layer writes below.
-    request.headers_mut().remove("x-actor-id");
-    request.headers_mut().remove("x-actor-kind");
+    // `x-actor-*` headers are legacy scientific attribution only (read by
+    // `extract_actor` until 03c). Nothing here reads them, and they are left
+    // untouched: identity is the session's `UserId`, carried as an extension.
     let access = access_for(request.uri().path());
     if access == Access::Open {
         return next.run(request).await;
@@ -148,20 +161,10 @@ pub(crate) async fn authenticate_requests(
         .filter(|value| !value.is_empty());
     match resolve(&auth, &gate.state.pool, cookie_token).await {
         Ok(Resolution::Authenticated(session)) => {
-            if let Some(user_id) = session.principal.user_id()
-                && let Ok(value) = header::HeaderValue::from_str(&user_id.as_uuid().to_string())
-            {
-                request.headers_mut().insert("x-actor-id", value);
-                request
-                    .headers_mut()
-                    .insert("x-actor-kind", header::HeaderValue::from_static("user"));
-            }
             request.extensions_mut().insert(*session);
             next.run(request).await
         }
-        Ok(Resolution::Anonymous) if access == Access::Optional => next.run(request).await,
         Ok(Resolution::Anonymous) => ApiError::Auth(AuthFailure::Unauthenticated).into_response(),
-        Ok(Resolution::Rejected(_)) if access == Access::Optional => next.run(request).await,
         Ok(Resolution::Rejected(reason)) => {
             tracing::warn!(reason, "rejected a request with an unusable session");
             let mut response = ApiError::Auth(AuthFailure::SessionExpired).into_response();
@@ -190,64 +193,73 @@ async fn resolve(
         return Ok(Resolution::Rejected("malformed_session_cookie"));
     }
     let token_hash = auth.session_tokens().token_hash(cookie_token);
-    let Some(stored) = find_active_session(pool, &token_hash).await? else {
-        return Ok(Resolution::Rejected("unknown_expired_or_revoked_session"));
-    };
-    let (session, refreshed) = match auth
-        .provider()
-        .inspect_session(&stored.sealed_provider_session)
-        .await
-    {
-        Ok(SessionStatus::Active(session)) => (session, None),
-        Ok(SessionStatus::Expired(_)) => {
-            match auth
-                .refresh()
-                .refresh(auth.provider(), &stored.sealed_provider_session)
-                .await
-                .map_err(provider_error)?
+    for _ in 0..MAX_PERSIST_ATTEMPTS {
+        let Some(stored) = find_active_session(pool, &token_hash).await? else {
+            return Ok(Resolution::Rejected("unknown_expired_or_revoked_session"));
+        };
+        let (session, refreshed) = match auth
+            .provider()
+            .inspect_session(&stored.sealed_provider_session)
+            .await
+        {
+            Ok(SessionStatus::Active(session)) => (session, None),
+            Ok(SessionStatus::Expired(_)) => {
+                match auth
+                    .refresh()
+                    .refresh(auth.provider(), &stored.sealed_provider_session)
+                    .await
+                    .map_err(provider_error)?
+                {
+                    RefreshOutcome::Refreshed {
+                        sealed_session,
+                        session,
+                    } => (session, Some(sealed_session)),
+                    RefreshOutcome::Rejected => {
+                        // The provider spends a refresh token once. If another
+                        // request or replica already rotated this session, its
+                        // row moved on and that is the session to use.
+                        if find_active_session(pool, &token_hash)
+                            .await?
+                            .is_some_and(|current| current.version != stored.version)
+                        {
+                            continue;
+                        }
+                        return Ok(Resolution::Rejected("refresh_rejected"));
+                    }
+                }
+            }
+            Ok(SessionStatus::Invalid) => return Ok(Resolution::Rejected("invalid_session")),
+            Err(error) => return Err(provider_error(error)),
+        };
+        if session.external_user_id != stored.user.external_user_id {
+            return Ok(Resolution::Rejected("session_user_mismatch"));
+        }
+        let session_ref = auth.session_refs().session_ref(&session.session_id);
+        if !super::constant_time_eq(&session_ref, &stored.session_ref) {
+            return Ok(Resolution::Rejected("session_reference_mismatch"));
+        }
+        if let Some(refreshed) = &refreshed {
+            match update_active_session(pool, stored.id, stored.version, refreshed, &session_ref)
+                .await?
             {
-                RefreshOutcome::Refreshed {
-                    sealed_session,
-                    session,
-                } => (session, Some(sealed_session)),
-                RefreshOutcome::Rejected => return Ok(Resolution::Rejected("refresh_rejected")),
+                SessionUpdate::Updated => {}
+                SessionUpdate::Gone => {
+                    return Ok(Resolution::Rejected("session_revoked_during_refresh"));
+                }
+                // Lost the race: this refresh is superseded. Reload and use
+                // the winner's session instead of overwriting it.
+                SessionUpdate::Conflict => continue,
             }
         }
-        Ok(SessionStatus::Invalid) => return Ok(Resolution::Rejected("invalid_session")),
-        Err(error) => return Err(provider_error(error)),
-    };
-    if session.external_user_id != stored.user.external_user_id {
-        return Ok(Resolution::Rejected("session_user_mismatch"));
+        return Ok(Resolution::Authenticated(Box::new(context(stored))));
     }
-    let session_ref = auth.session_refs().session_ref(&session.session_id);
-    if !super::constant_time_eq(&session_ref, &stored.session_ref) {
-        return Ok(Resolution::Rejected("session_reference_mismatch"));
-    }
-    if let Some(refreshed) = &refreshed
-        && !update_active_session(pool, stored.id, refreshed, &session_ref).await?
-    {
-        return Ok(Resolution::Rejected("session_revoked_during_refresh"));
-    }
-    Ok(Resolution::Authenticated(Box::new(context(
-        stored,
-        session,
-        token_hash,
-        session_ref,
-    ))))
+    Err(ApiError::Auth(AuthFailure::ProviderUnavailable))
 }
 
-fn context(
-    stored: StoredBrowserSession,
-    session: ProviderSession,
-    session_token_hash: Vec<u8>,
-    session_ref: Vec<u8>,
-) -> SessionContext {
+fn context(stored: StoredBrowserSession) -> SessionContext {
     SessionContext {
         principal: Principal::user(stored.user.id),
         user: stored.user,
-        provider_session_id: session.session_id,
-        session_ref,
-        session_token_hash,
     }
 }
 
@@ -319,16 +331,25 @@ mod tests {
             "/openapi.json",
             "/auth/login",
             "/auth/callback",
+            "/auth/logout",
+            "/hooks/workflows/0123abcd",
+            "/hooks/email/0123abcd",
         ] {
             assert_eq!(access_for(open), Access::Open, "{open}");
         }
-        assert_eq!(access_for("/auth/logout"), Access::Optional);
         for protected in [
             "/me",
             "/projects",
             "/settings",
             "/healthz",
             "/health-x",
+            "/hooks",
+            "/hooks/",
+            "/hooks/workflows/",
+            "/hooks/workflows",
+            "/hooks/workflows/token/extra",
+            "/hooks/other/token",
+            "/hooks/emailx/token",
             "/",
         ] {
             assert_eq!(access_for(protected), Access::Required, "{protected}");

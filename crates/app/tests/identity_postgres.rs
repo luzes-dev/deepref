@@ -6,8 +6,9 @@ use std::sync::{
 };
 
 use deepref_app::identity::{
-    AuditRequest, Deactivation, NewBrowserSession, SignIn, apply_provider_user_deleted,
-    deactivate_user, find_user_by_external_id, record_logout, sign_in as create_sign_in,
+    AuditRequest, Deactivation, NewBrowserSession, SessionUpdate, SignIn,
+    apply_provider_user_deleted, deactivate_user, find_active_session, find_user_by_external_id,
+    record_logout, sign_in as create_sign_in, update_active_session,
 };
 use deepref_application::identity::{
     IdentityError, IdentityFuture, IdentityProvider, LoginStart, LoginState, OpaqueSecret,
@@ -298,7 +299,6 @@ async fn audit_rows_hold_a_keyed_hash_and_no_secrets() {
     .unwrap();
     record_logout(
         &pool,
-        user.id,
         &token_hash,
         AuditRequest {
             request_id: Some("0b0e0d0c-0000-4000-8000-000000000002"),
@@ -353,7 +353,14 @@ async fn audit_events_cannot_be_updated_or_deleted() {
     let delete = sqlx::query("DELETE FROM admin_audit_events")
         .execute(&pool)
         .await;
-    for (name, result) in [("update", update), ("delete", delete)] {
+    let truncate = sqlx::query("TRUNCATE admin_audit_events")
+        .execute(&pool)
+        .await;
+    for (name, result) in [
+        ("update", update),
+        ("delete", delete),
+        ("truncate", truncate),
+    ] {
         let error = result.expect_err(name);
         assert!(error.to_string().contains("append-only"), "{name}: {error}");
     }
@@ -512,4 +519,130 @@ async fn user_deleted_delivery_revokes_provider_sessions_once() {
         refs.iter()
             .all(|r| r.len() == 32 && r != b"sess_a" && r != b"sess_b")
     );
+}
+
+async fn only_session(pool: &PgPool) -> (uuid::Uuid, Vec<u8>) {
+    sqlx::query_as("SELECT id, session_token_hash FROM user_sessions")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_stale_refresh_cannot_overwrite_a_newer_sealed_session() {
+    let Some(pool) = database().await else { return };
+    sign_in(
+        &pool,
+        &session("user_A", "sess_1"),
+        &profile("a@example.org", None),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let (id, token_hash) = only_session(&pool).await;
+    let base = find_active_session(&pool, &token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(base.version, 0);
+    let (winner, stale) = (
+        OpaqueSecret::new("sealed rotated by the winner"),
+        OpaqueSecret::new("sealed rotated by a stalled replica"),
+    );
+
+    // Two replicas persist a refresh read from the same base version.
+    let (a, b) = tokio::join!(
+        update_active_session(&pool, id, base.version, &winner, &base.session_ref),
+        update_active_session(&pool, id, base.version, &stale, &base.session_ref),
+    );
+    let outcomes = [a.unwrap(), b.unwrap()];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| **o == SessionUpdate::Updated)
+            .count(),
+        1,
+        "{outcomes:?}"
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| **o == SessionUpdate::Conflict)
+            .count(),
+        1,
+        "{outcomes:?}"
+    );
+    let stored = find_active_session(&pool, &token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.version, 1);
+    let kept = stored.sealed_provider_session.expose().to_owned();
+    assert!(
+        kept == winner.expose() || kept == stale.expose(),
+        "exactly one persist is stored"
+    );
+
+    // A later stall from the same old base loses against whatever is stored.
+    let late = update_active_session(&pool, id, base.version, &stale, &base.session_ref)
+        .await
+        .unwrap();
+    assert_eq!(late, SessionUpdate::Conflict);
+    let after = find_active_session(&pool, &token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.sealed_provider_session.expose(), kept);
+
+    // Persisting from the current version advances it.
+    let next = OpaqueSecret::new("sealed rotated again");
+    assert_eq!(
+        update_active_session(&pool, id, after.version, &next, &after.session_ref)
+            .await
+            .unwrap(),
+        SessionUpdate::Updated
+    );
+
+    // A revoked row is Gone, not a conflict to retry.
+    record_logout(&pool, &token_hash, AuditRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        update_active_session(&pool, id, after.version + 1, &next, &after.session_ref)
+            .await
+            .unwrap(),
+        SessionUpdate::Gone
+    );
+}
+
+#[tokio::test]
+async fn logout_revokes_by_cookie_digest_without_the_provider_and_audits_once() {
+    let Some(pool) = database().await else { return };
+    sign_in(
+        &pool,
+        &session("user_A", "sess_1"),
+        &profile("a@example.org", None),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let (_, token_hash) = only_session(&pool).await;
+    let revoked = record_logout(&pool, &token_hash, AuditRequest::default())
+        .await
+        .unwrap()
+        .expect("the live session is revoked");
+    assert_eq!(
+        revoked.sealed_provider_session.expose(),
+        "sealed test provider session"
+    );
+    assert_eq!(events(&pool, "auth.logout").await, 1);
+    assert_eq!(events(&pool, "auth.session_revoked").await, 1);
+    assert!(
+        record_logout(&pool, &token_hash, AuditRequest::default())
+            .await
+            .unwrap()
+            .is_none(),
+        "a replay changes and records nothing"
+    );
+    assert_eq!(events(&pool, "auth.logout").await, 1);
 }

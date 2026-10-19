@@ -42,6 +42,9 @@ pub fn auth_app(
     ]);
     let auth =
         deepref_http_api::auth::AuthRuntime::new(fake, &runtime.public_origin, COOKIE_PASSWORD);
+    let mut runtime = runtime;
+    runtime.workflow.niche_nodes_enabled = true;
+    let workflow = runtime.workflow.clone();
     let config = deepref_http_api::config::ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
             (name == "APP_ENV").then(|| "development".into())
@@ -53,7 +56,9 @@ pub fn auth_app(
         cors_origins: vec![ORIGIN.parse().unwrap()],
     };
     deepref_http_api::routes::router(
-        deepref_http_api::state::AppState::core(pool).with_auth(auth),
+        deepref_http_api::state::AppState::core(pool)
+            .with_workflow_config(workflow)
+            .with_auth(auth),
         &config,
     )
 }

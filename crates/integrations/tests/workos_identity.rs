@@ -49,6 +49,7 @@ struct MockState {
     exchange_lifetime: i64,
     refresh_status: u16,
     jwks_modulus: String,
+    jwks_status: u16,
     requests: Vec<(String, String, String)>,
 }
 
@@ -126,6 +127,9 @@ async fn serve(state: Arc<Mutex<MockState>>) -> String {
 
 fn route(state: &MockState, method: &str, path: &str, body: &str) -> (u16, String) {
     if path.starts_with("/sso/jwks/") {
+        if state.jwks_status != 200 {
+            return (state.jwks_status, json!({ "message": "down" }).to_string());
+        }
         return (
             200,
             json!({ "keys": [{ "kty": "RSA", "kid": "key_1", "alg": "RS256", "use": "sig",
@@ -195,6 +199,7 @@ async fn harness() -> Harness {
         exchange_lifetime: 300,
         refresh_status: 200,
         jwks_modulus: JWK_MODULUS.to_owned(),
+        jwks_status: 200,
         requests: Vec::new(),
     }));
     let base_url = serve(Arc::clone(&state)).await;
@@ -439,4 +444,67 @@ async fn sessions_can_be_listed_and_revoked() {
         .cloned()
         .unwrap();
     assert!(revoke.2.contains("session_01"));
+}
+
+/// A provider with no cached signing keys, as after a restart.
+fn cold_provider(h: &Harness) -> WorkOsIdentityProvider {
+    WorkOsIdentityProvider::with_base_url(&config(PASSWORD), &h.base_url)
+}
+
+#[tokio::test]
+async fn a_signing_key_outage_is_unavailable_not_an_invalid_session() {
+    let h = harness().await;
+    let (sealed, login) = login(&h).await;
+
+    h.state.lock().unwrap().jwks_status = 503;
+    let restarted = cold_provider(&h);
+    assert!(
+        matches!(
+            restarted.inspect_session(&sealed).await,
+            Err(IdentityError::Unavailable)
+        ),
+        "a JWKS outage must not read as an invalid session"
+    );
+
+    // Once the keys are back the same cookie is valid again: nothing was lost.
+    h.state.lock().unwrap().jwks_status = 200;
+    assert_eq!(
+        restarted.inspect_session(&sealed).await.unwrap(),
+        SessionStatus::Active(login.session)
+    );
+}
+
+#[tokio::test]
+async fn a_bad_signature_is_invalid_even_when_the_keys_are_reachable() {
+    let h = harness().await;
+    let (sealed, _) = login(&h).await;
+    h.state.lock().unwrap().jwks_modulus = "1".repeat(JWK_MODULUS.len());
+    assert_eq!(
+        cold_provider(&h).inspect_session(&sealed).await.unwrap(),
+        SessionStatus::Invalid
+    );
+}
+
+#[tokio::test]
+async fn invalid_grant_ends_the_session_at_http_400_as_well_as_401() {
+    let h = harness().await;
+    h.state.lock().unwrap().exchange_lifetime = 1;
+    let (sealed, _) = login(&h).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+
+    h.state.lock().unwrap().refresh_status = 400;
+    assert!(matches!(
+        h.provider.refresh_session(&sealed).await,
+        Ok(RefreshOutcome::Rejected)
+    ));
+    for transient in [429, 500, 502] {
+        h.state.lock().unwrap().refresh_status = transient;
+        assert!(
+            matches!(
+                h.provider.refresh_session(&sealed).await,
+                Err(IdentityError::Unavailable)
+            ),
+            "{transient}"
+        );
+    }
 }

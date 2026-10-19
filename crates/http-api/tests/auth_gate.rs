@@ -56,13 +56,19 @@ const OPEN: &[&str] = &[
     "/auth/callback",
 ];
 
+/// Authenticated by their own address token and signature, not a browser session.
+const MACHINE_HOOKS: &[&str] = &["/hooks/workflows/{token}", "/hooks/email/{token}"];
+
 #[tokio::test]
 async fn every_route_requires_a_session_unless_it_is_listed_open() {
     let app = app();
     let document = deepref_http_api::routes::openapi_document_json().unwrap();
     let mut checked = 0;
     for (path, item) in document["paths"].as_object().unwrap() {
-        if OPEN.contains(&path.as_str()) || path == "/auth/logout" {
+        if OPEN.contains(&path.as_str())
+            || path == "/auth/logout"
+            || MACHINE_HOOKS.contains(&path.as_str())
+        {
             continue;
         }
         for method in item.as_object().unwrap().keys() {

@@ -734,3 +734,356 @@ async fn with_authentication_off_existing_behaviour_is_unchanged() {
     let login = app.oneshot(get("/auth/login", None)).await.unwrap();
     assert_eq!(login.status(), StatusCode::NOT_FOUND);
 }
+
+async fn seed_study(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid) {
+    let project = uuid::Uuid::new_v4();
+    let study = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'legacy attribution')")
+        .bind(project)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO studies
+         (id,project_id,title,design_context,study_revision,updated_by_actor_kind,updated_by_actor_id)
+         VALUES ($1,$2,'Study','{}'::jsonb,0,'system','test')",
+    )
+    .bind(study)
+    .bind(project)
+    .execute(pool)
+    .await
+    .unwrap();
+    (project, study)
+}
+
+fn scientific_write(
+    method: Method,
+    uri: &str,
+    session: Option<&str>,
+    actor: &[(&str, &str)],
+    body: serde_json::Value,
+) -> Request<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(session) = session {
+        request = request
+            .header(header::COOKIE, format!("{SESSION_COOKIE}={session}"))
+            .header(header::ORIGIN, ORIGIN);
+    }
+    for (name, value) in actor {
+        request = request.header(*name, *value);
+    }
+    request.body(Body::from(body.to_string())).unwrap()
+}
+
+#[tokio::test]
+async fn scientific_writes_keep_the_header_label_as_legacy_attribution() {
+    let Some(h) = harness().await else { return };
+    let session = sign_in(&h, "user_A", "a@example.org").await;
+    let real = user_id(&h.pool, "user_A").await;
+    let (project, study) = seed_study(&h.pool).await;
+    let label = [("x-actor-kind", "user"), ("x-actor-id", "alice")];
+
+    // No session: 401 before actor extraction, whatever label is sent.
+    let denied = h
+        .app
+        .clone()
+        .oneshot(scientific_write(
+            Method::POST,
+            &format!("/projects/{project}/extraction/fields"),
+            None,
+            &label,
+            serde_json::json!({"version": 1, "field_key": "n", "label": "N",
+                "value_type": "number", "required": false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json(denied).await["code"], "UNAUTHENTICATED");
+    assert_eq!(
+        count(&h.pool, "SELECT count(*) FROM extraction_field_definitions").await,
+        0
+    );
+
+    // With a session the write records the header label, exactly as before 02.
+    let created = h
+        .app
+        .clone()
+        .oneshot(scientific_write(
+            Method::POST,
+            &format!("/projects/{project}/extraction/fields"),
+            Some(&session),
+            &label,
+            serde_json::json!({"version": 1, "field_key": "n", "label": "N",
+                "value_type": "number", "required": false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let field = json(created).await["id"].as_str().unwrap().to_owned();
+    let saved = h
+        .app
+        .clone()
+        .oneshot(scientific_write(
+            Method::PUT,
+            &format!("/projects/{project}/studies/{study}/extraction/values/{field}"),
+            Some(&session),
+            &label,
+            serde_json::json!({"value": {"kind": "number", "value": 12.0}}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::OK);
+    let saved = json(saved).await;
+    assert_eq!(saved["approved_by_actor_id"], "alice");
+    assert_ne!(saved["approved_by_actor_id"], real.to_string());
+
+    // No label: the legacy default, not the session UserId.
+    let unlabeled = h
+        .app
+        .clone()
+        .oneshot(scientific_write(
+            Method::PUT,
+            &format!("/projects/{project}/studies/{study}/extraction/values/{field}"),
+            Some(&session),
+            &[],
+            serde_json::json!({"value": {"kind": "number", "value": 13.0}}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json(unlabeled).await["approved_by_actor_id"], "local-user");
+
+    // Client-supplied system and automation kinds stay rejected.
+    for kind in ["system", "automation"] {
+        let rejected = h
+            .app
+            .clone()
+            .oneshot(scientific_write(
+                Method::PUT,
+                &format!("/projects/{project}/studies/{study}/extraction/values/{field}"),
+                Some(&session),
+                &[("x-actor-kind", kind), ("x-actor-id", "alice")],
+                serde_json::json!({"value": {"kind": "number", "value": 14.0}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST, "{kind}");
+    }
+
+    // Identity is the session's UserId no matter what the label says, and the
+    // audit trail never sees the label.
+    let me = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/me")
+                .header(header::COOKIE, format!("{SESSION_COOKIE}={session}"))
+                .header("x-actor-id", "alice")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json(me).await["user"]["id"], real.to_string());
+    let out = h
+        .app
+        .clone()
+        .oneshot(post("/auth/logout", &session, Some(ORIGIN), ""))
+        .await
+        .unwrap();
+    assert_eq!(out.status(), StatusCode::NO_CONTENT);
+    let principal: uuid::Uuid = sqlx::query_scalar(
+        "SELECT principal_user_id FROM admin_audit_events WHERE event_type = 'auth.logout'",
+    )
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(principal, real);
+}
+
+#[tokio::test]
+async fn logout_revokes_and_audits_even_when_the_provider_cannot_inspect_the_session() {
+    let Some(h) = harness().await else { return };
+    let session = sign_in(&h, "user_A", "a@example.org").await;
+    h.fake.inspect_unavailable.store(true, Ordering::SeqCst);
+
+    let out = h
+        .app
+        .clone()
+        .oneshot(post("/auth/logout", &session, Some(ORIGIN), ""))
+        .await
+        .unwrap();
+    assert_eq!(out.status(), StatusCode::NO_CONTENT);
+    assert!(
+        set_cookies(&out)
+            .iter()
+            .any(|c| c.starts_with(&format!("{SESSION_COOKIE}=;")))
+    );
+    let revoked: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT revoked_at FROM user_sessions")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert!(revoked.is_some(), "the local row is revoked");
+    for event in ["auth.logout", "auth.session_revoked"] {
+        assert_eq!(
+            count(
+                &h.pool,
+                match event {
+                    "auth.logout" => "SELECT count(*) FROM admin_audit_events WHERE event_type = 'auth.logout'",
+                    _ => "SELECT count(*) FROM admin_audit_events WHERE event_type = 'auth.session_revoked'",
+                }
+            )
+            .await,
+            1,
+            "{event}"
+        );
+    }
+
+    // The cookie is dead once the provider is back, and a replay audits nothing.
+    h.fake.inspect_unavailable.store(false, Ordering::SeqCst);
+    let me = h
+        .app
+        .clone()
+        .oneshot(get("/me", Some((SESSION_COOKIE, &session))))
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::UNAUTHORIZED);
+    let replay = h
+        .app
+        .clone()
+        .oneshot(post("/auth/logout", &session, Some(ORIGIN), ""))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        count(
+            &h.pool,
+            "SELECT count(*) FROM admin_audit_events WHERE event_type = 'auth.logout'"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_provider_outage_is_503_and_keeps_the_session_cookie() {
+    let Some(h) = harness().await else { return };
+    let session = sign_in(&h, "user_A", "a@example.org").await;
+    h.fake.inspect_unavailable.store(true, Ordering::SeqCst);
+
+    let down = h
+        .app
+        .clone()
+        .oneshot(get("/me", Some((SESSION_COOKIE, &session))))
+        .await
+        .unwrap();
+    assert_eq!(down.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        set_cookies(&down).is_empty(),
+        "a valid cookie is not cleared during an outage: {:?}",
+        set_cookies(&down)
+    );
+    assert_eq!(json(down).await["code"], "AUTH_PROVIDER_UNAVAILABLE");
+
+    h.fake.inspect_unavailable.store(false, Ordering::SeqCst);
+    let back = h
+        .app
+        .clone()
+        .oneshot(get("/me", Some((SESSION_COOKIE, &session))))
+        .await
+        .unwrap();
+    assert_eq!(back.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn machine_hooks_run_their_own_checks_without_a_browser_session() {
+    use deepref_domain::{Actor, ActorKind, ProjectId};
+    let Some(h) = harness().await else { return };
+    let project = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'hooks')")
+        .bind(project)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let project = ProjectId::new(project);
+    let actor = Actor::new(ActorKind::User, "hook-test").unwrap();
+    let graph = serde_json::from_value(serde_json::json!({
+        "nodes": [{"id": "trigger", "type": "trigger.webhook", "config": {}}], "edges": []
+    }))
+    .unwrap();
+    let workflow =
+        deepref_app::create_workflow(&h.pool, project, "Hooked", "", graph, &actor, true)
+            .await
+            .unwrap();
+    let endpoint = deepref_app::get_webhook_config(&h.pool, project, workflow.id)
+        .await
+        .unwrap();
+    deepref_app::publish_workflow(&h.pool, project, workflow.id, None, &actor, false, true)
+        .await
+        .unwrap();
+    deepref_app::set_workflow_enabled(&h.pool, project, workflow.id, true, true)
+        .await
+        .unwrap();
+    let hook = |path: String, signature: Option<String>, body: &'static str| {
+        let mut request = Request::builder().method(Method::POST).uri(path);
+        if let Some(signature) = signature {
+            request = request.header("X-DeepRef-Signature", signature);
+        }
+        request.body(Body::from(body)).unwrap()
+    };
+    let send = |request: Request<Body>| {
+        let app = h.app.clone();
+        async move { app.oneshot(request).await.unwrap().status() }
+    };
+    let good = deepref_application::workflows::sign_payload(&endpoint.secret, b"{}");
+    let wrong = deepref_application::workflows::sign_payload("not-the-secret", b"{}");
+    let unknown = uuid::Uuid::new_v4();
+
+    // No cookie anywhere: the token and signature decide, never the session.
+    let path = format!("/hooks/workflows/{}", endpoint.token);
+    assert_eq!(
+        send(hook(path.clone(), Some(good), "{}")).await,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        send(hook(path.clone(), Some(wrong), "{}")).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(send(hook(path, None, "{}")).await, StatusCode::FORBIDDEN);
+    assert_eq!(
+        send(hook(format!("/hooks/workflows/{unknown}"), None, "{}")).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(hook(format!("/hooks/email/{unknown}"), None, "{}")).await,
+        StatusCode::NOT_FOUND
+    );
+    // A known e-mail address reaches the handler, which rejects the unreadable body.
+    assert_eq!(
+        send(hook(
+            format!("/hooks/email/{}", endpoint.email_token),
+            None,
+            "not a message"
+        ))
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // The exemption is exactly these two single-segment routes.
+    for path in [
+        "/hooks/workflows/".to_owned(),
+        format!("/hooks/workflows/{}/extra", endpoint.token),
+        "/hooks/other/token".to_owned(),
+        "/hooks".to_owned(),
+    ] {
+        assert_eq!(
+            send(hook(path.clone(), None, "{}")).await,
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+    }
+}

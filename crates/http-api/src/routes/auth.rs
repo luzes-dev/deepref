@@ -13,7 +13,9 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use deepref_app::identity::{AuditRequest, NewBrowserSession, SignIn, record_logout, sign_in};
-use deepref_application::identity::{IdentityError, LoginState, ReturnPath};
+use deepref_application::identity::{
+    IdentityError, LoginState, OpaqueSecret, ReturnPath, SessionStatus,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -288,27 +290,27 @@ pub async fn callback(
     ))]
 pub async fn logout(
     State(state): State<AppState>,
-    session: Option<CurrentSession>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let auth = auth_runtime(&state)?;
-    if let Some(CurrentSession(session)) = session {
+    // The local row is revoked from the cookie alone. Whether the provider can
+    // currently validate the session (an outage, a key rotation) must not leave
+    // a signed-out session usable or unaudited.
+    let cookie_token = read_cookie(&headers, auth.cookies().session_name())
+        .filter(|value| Uuid::parse_str(value).is_ok());
+    if let Some(cookie_token) = cookie_token {
         let request_id = correlation_id();
-        record_logout(
+        let revoked = record_logout(
             &state.pool,
-            session.user.id,
-            &session.session_token_hash,
+            &auth.session_tokens().token_hash(cookie_token),
             AuditRequest {
                 request_id: request_id.as_deref(),
-                session_ref: Some(&session.session_ref),
+                session_ref: None,
             },
         )
         .await?;
-        if let Err(error) = auth
-            .provider()
-            .revoke_session(&session.provider_session_id)
-            .await
-        {
-            tracing::warn!(%error, "could not revoke the provider session at sign-out");
+        if let Some(revoked) = revoked {
+            revoke_at_provider(auth, &revoked.sealed_provider_session).await;
         }
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -316,4 +318,19 @@ pub async fn logout(
         response.headers_mut().append(header::SET_COOKIE, cookie);
     }
     Ok(no_store(response))
+}
+
+/// Best effort: the local revocation already ended the session.
+async fn revoke_at_provider(auth: &AuthRuntime, sealed: &OpaqueSecret) {
+    let session_id = match auth.provider().inspect_session(sealed).await {
+        Ok(SessionStatus::Active(session) | SessionStatus::Expired(session)) => session.session_id,
+        Ok(SessionStatus::Invalid) => return,
+        Err(error) => {
+            tracing::warn!(%error, "could not look up the provider session at sign-out");
+            return;
+        }
+    };
+    if let Err(error) = auth.provider().revoke_session(&session_id).await {
+        tracing::warn!(%error, "could not revoke the provider session at sign-out");
+    }
 }

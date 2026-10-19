@@ -27,6 +27,10 @@ CREATE TABLE user_sessions (
   sealed_provider_session text NOT NULL
     CHECK (length(sealed_provider_session) BETWEEN 1 AND 16384),
   session_ref bytea NOT NULL CHECK (length(session_ref) = 32),
+  -- Compare-and-set token for refresh persistence: the provider rotates the
+  -- refresh token on every use, so a stalled replica must never overwrite a
+  -- newer sealed session with the one it read earlier.
+  version bigint NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
   revoked_at timestamptz,
@@ -82,7 +86,8 @@ CREATE INDEX admin_audit_events_target_idx
   WHERE target_user_id IS NOT NULL;
 
 -- Unlike ai_opinion_exposures (0049), which allows DELETE so project deletes
--- can cascade, nothing cascades into this table, so both operations are refused.
+-- can cascade, nothing cascades into this table, so UPDATE, DELETE and
+-- TRUNCATE are all refused.
 CREATE FUNCTION reject_admin_audit_event_changes()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -96,3 +101,7 @@ $$;
 CREATE TRIGGER admin_audit_events_append_only_trigger
 BEFORE UPDATE OR DELETE ON admin_audit_events
 FOR EACH ROW EXECUTE FUNCTION reject_admin_audit_event_changes();
+
+CREATE TRIGGER admin_audit_events_no_truncate_trigger
+BEFORE TRUNCATE ON admin_audit_events
+FOR EACH STATEMENT EXECUTE FUNCTION reject_admin_audit_event_changes();

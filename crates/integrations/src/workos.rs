@@ -18,9 +18,11 @@ use deepref_config::WorkOsConfig;
 use deepref_domain::ExternalUserId;
 use std::{fmt::Write as _, time::Duration};
 use workos::{
-    AuthKitAuthorizationUrlParams, AuthKitPkceCodeExchangeParams, Client, RevokeSession,
-    SessionData, SessionRefreshOptions, SessionState,
-    resources::user_management::{ListSessionsParams, RevokeSessionParams},
+    AuthKitAuthorizationUrlParams, AuthKitPkceCodeExchangeParams, Client, JwksHelper,
+    RevokeSession, SessionData, SessionState,
+    resources::user_management::{
+        AuthenticateWithRefreshTokenParams, ListSessionsParams, RevokeSessionParams,
+    },
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,6 +32,10 @@ const SESSION_LIST_LIMIT: i64 = 100;
 
 pub struct WorkOsIdentityProvider {
     client: Client,
+    /// Uncached view of the signing keys. The SDK reports a JWKS outage and a
+    /// bad signature with the same `invalid_jwt` reason, so this tells them
+    /// apart.
+    jwks_probe: JwksHelper,
     session_key: String,
     login_state_key: String,
 }
@@ -54,18 +60,37 @@ impl WorkOsIdentityProvider {
         if let Some(base_url) = base_url {
             builder = builder.base_url(base_url);
         }
+        let client = builder.build();
         Self {
-            client: builder.build(),
+            jwks_probe: client.jwks().with_ttl(Duration::ZERO),
+            client,
             session_key: key_hex(config.cookie_password(), SESSION_SEAL_PURPOSE),
             login_state_key: key_hex(config.cookie_password(), LOGIN_STATE_SEAL_PURPOSE),
         }
     }
 
-    async fn read_session(&self, sealed: &str) -> SessionState {
+    async fn authenticate(&self, sealed: &str) -> SessionState {
         self.client
             .session(sealed, self.session_key.as_str())
             .authenticate()
             .await
+    }
+
+    /// Reads a sealed session. A failed signature check is `Ok` with an
+    /// unauthenticated state; a signing-key fetch that fails is `Unavailable`,
+    /// so a WorkOS outage never reads as an invalid session.
+    async fn read_session(&self, sealed: &str) -> Result<SessionState, IdentityError> {
+        let state = self.authenticate(sealed).await;
+        if state.reason != "invalid_jwt" {
+            return Ok(state);
+        }
+        if let Err(error) = self.jwks_probe.fetch().await {
+            tracing::warn!(%error, "WorkOS signing keys are unavailable");
+            return Err(IdentityError::Unavailable);
+        }
+        // The keys are reachable now, so the first failure was either
+        // transient or genuine: decide on a second read.
+        Ok(self.authenticate(sealed).await)
     }
 }
 
@@ -161,7 +186,7 @@ impl IdentityProvider for WorkOsIdentityProvider {
             .map_err(|_| IdentityError::Internal("could not seal the session".to_owned()))?;
             // The session ID comes from the signature-checked access token, not
             // from the exchange response body.
-            let state = self.read_session(&sealed).await;
+            let state = self.read_session(&sealed).await?;
             let session = state
                 .authenticated
                 .then(|| provider_session(&state))
@@ -180,7 +205,7 @@ impl IdentityProvider for WorkOsIdentityProvider {
         sealed: &'a OpaqueSecret,
     ) -> IdentityFuture<'a, SessionStatus> {
         Box::pin(async move {
-            let state = self.read_session(sealed.expose()).await;
+            let state = self.read_session(sealed.expose()).await?;
             let Some(session) = provider_session(&state) else {
                 return Ok(SessionStatus::Invalid);
             };
@@ -199,26 +224,64 @@ impl IdentityProvider for WorkOsIdentityProvider {
         sealed: &'a OpaqueSecret,
     ) -> IdentityFuture<'a, RefreshOutcome> {
         Box::pin(async move {
-            let refreshed = self
+            let state = self.read_session(sealed.expose()).await?;
+            if !state.needs_refresh {
+                return Ok(RefreshOutcome::Rejected);
+            }
+            let Ok(cookie) = workos::unseal_session(sealed.expose(), &self.session_key) else {
+                return Ok(RefreshOutcome::Rejected);
+            };
+            if cookie.refresh_token.expose().is_empty() {
+                return Ok(RefreshOutcome::Rejected);
+            }
+            let mut params = AuthenticateWithRefreshTokenParams::new(cookie.refresh_token.expose());
+            // The organization comes from the signature-checked claims.
+            params.organization_id = Some(state.organization_id).filter(|id| !id.is_empty());
+            let response = match self
                 .client
-                .session(sealed.expose(), self.session_key.as_str())
-                .refresh(SessionRefreshOptions::default())
+                .user_management()
+                .authenticate_with_refresh_token(params)
                 .await
-                .map_err(|_| IdentityError::Unavailable)?;
-            if refreshed.authenticated {
-                let state = self.read_session(&refreshed.sealed_session).await;
-                return match provider_session(&state).filter(|_| state.authenticated) {
-                    Some(session) => Ok(RefreshOutcome::Refreshed {
-                        sealed_session: OpaqueSecret::new(refreshed.sealed_session),
+            {
+                Ok(response) => response,
+                // WorkOS answers a spent or revoked refresh token with
+                // `invalid_grant`, documented as HTTP 400 and seen as 401. Only
+                // that answer ends the session; anything else may be transient.
+                Err(error)
+                    if error.code() == Some("invalid_grant")
+                        && matches!(error.status(), Some(400 | 401)) =>
+                {
+                    return Ok(RefreshOutcome::Rejected);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        status = ?error.status(),
+                        code = ?error.code(),
+                        "WorkOS session refresh failed"
+                    );
+                    return Err(IdentityError::Unavailable);
+                }
+            };
+            let sealed_session = workos::seal_session(
+                &SessionData {
+                    access_token: response.access_token,
+                    refresh_token: response.refresh_token,
+                    user: Some(response.user),
+                    impersonator: response.impersonator,
+                },
+                &self.session_key,
+            )
+            .map_err(|_| IdentityError::Internal("could not seal the session".to_owned()))?;
+            let state = self.read_session(&sealed_session).await?;
+            Ok(
+                match provider_session(&state).filter(|_| state.authenticated) {
+                    Some(session) => RefreshOutcome::Refreshed {
+                        sealed_session: OpaqueSecret::new(sealed_session),
                         session,
-                    }),
-                    None => Ok(RefreshOutcome::Rejected),
-                };
-            }
-            match refreshed.reason.as_str() {
-                "refresh_failed" => Err(IdentityError::Unavailable),
-                _ => Ok(RefreshOutcome::Rejected),
-            }
+                    },
+                    None => RefreshOutcome::Rejected,
+                },
+            )
         })
     }
 
