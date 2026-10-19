@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 use std::collections::HashMap;
 
+pub mod authz;
 pub mod fake_identity;
 
 pub fn local_runtime() -> deepref_config::RuntimeConfig {

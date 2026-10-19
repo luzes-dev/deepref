@@ -15303,6 +15303,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace to create the project in. Optional when the caller belongs to\nexactly one workspace that can hold projects; required otherwise. The\ncaller needs `project:create` there. Ignored when updating."
           }
         }
       },
