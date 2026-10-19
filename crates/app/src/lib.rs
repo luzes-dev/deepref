@@ -13,6 +13,7 @@ mod assistant_host;
 mod assistant_plans;
 mod assistant_runs;
 mod audit_export;
+pub mod authorization;
 mod automations;
 mod autonomy;
 mod deduplication;
@@ -163,9 +164,10 @@ pub use jobs::{
 };
 pub use notifications::{
     MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
-    NotificationSeverity, NotificationUnreadSummary, list_notifications, mark_notifications_read,
+    NotificationSeverity, NotificationUnreadSummary, list_notifications,
+    list_notifications_visible_to, mark_notifications_read, mark_notifications_read_visible_to,
     record_notification, record_notification_in_transaction,
-    record_run_notification_once_in_transaction, unread_summary,
+    record_run_notification_once_in_transaction, unread_summary, unread_summary_visible_to,
 };
 pub use persistence::{
     IntegrityViolation, PersistenceError, PersistenceFailure, RetryPolicy, RetryReason, classify,
