@@ -31,6 +31,13 @@ CREATE TABLE user_sessions (
   -- refresh token on every use, so a stalled replica must never overwrite a
   -- newer sealed session with the one it read earlier.
   version bigint NOT NULL DEFAULT 0,
+  -- Short lease taken before a refresh token is spent at the provider, so one
+  -- request at a time, across replicas, refreshes a session. A request that
+  -- cannot take it waits for the holder's commit instead of treating a spent
+  -- token as a dead session. The lease expires on its own if its holder dies.
+  refresh_lease_owner uuid,
+  refresh_lease_until timestamptz,
+  CHECK ((refresh_lease_owner IS NULL) = (refresh_lease_until IS NULL)),
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
   revoked_at timestamptz,

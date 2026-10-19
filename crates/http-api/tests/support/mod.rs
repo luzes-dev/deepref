@@ -36,12 +36,22 @@ pub fn auth_app(
     pool: sqlx::PgPool,
     fake: std::sync::Arc<fake_identity::FakeIdentity>,
 ) -> axum::Router {
+    auth_app_waiting(pool, fake, std::time::Duration::from_secs(5))
+}
+
+/// As [`auth_app`], with a chosen bound on waiting for a competing refresh.
+pub fn auth_app_waiting(
+    pool: sqlx::PgPool,
+    fake: std::sync::Arc<fake_identity::FakeIdentity>,
+    refresh_wait: std::time::Duration,
+) -> axum::Router {
     let runtime = runtime_with(&[
         ("DEEPREF_AUTH_ENABLED", "true"),
         ("DEEPREF_PUBLIC_ORIGIN", ORIGIN),
     ]);
     let auth =
-        deepref_http_api::auth::AuthRuntime::new(fake, &runtime.public_origin, COOKIE_PASSWORD);
+        deepref_http_api::auth::AuthRuntime::new(fake, &runtime.public_origin, COOKIE_PASSWORD)
+            .with_refresh_wait(refresh_wait);
     let mut runtime = runtime;
     runtime.workflow.niche_nodes_enabled = true;
     let workflow = runtime.workflow.clone();

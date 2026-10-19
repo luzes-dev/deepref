@@ -6,9 +6,10 @@ use std::sync::{
 };
 
 use deepref_app::identity::{
-    AuditRequest, Deactivation, NewBrowserSession, SessionUpdate, SignIn,
-    apply_provider_user_deleted, deactivate_user, find_active_session, find_user_by_external_id,
-    record_logout, sign_in as create_sign_in, update_active_session,
+    AuditRequest, Deactivation, NewBrowserSession, RefreshLease, SessionUpdate, SignIn,
+    apply_provider_user_deleted, claim_refresh_lease, deactivate_user, find_active_session,
+    find_user_by_external_id, record_logout, release_refresh_lease, sign_in as create_sign_in,
+    update_active_session,
 };
 use deepref_application::identity::{
     IdentityError, IdentityFuture, IdentityProvider, LoginStart, LoginState, OpaqueSecret,
@@ -550,27 +551,45 @@ async fn a_stale_refresh_cannot_overwrite_a_newer_sealed_session() {
         OpaqueSecret::new("sealed rotated by a stalled replica"),
     );
 
-    // Two replicas persist a refresh read from the same base version.
+    // Two replicas race for the refresh lease from the same base version.
+    let (first, second) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    let ttl = std::time::Duration::from_secs(30);
     let (a, b) = tokio::join!(
-        update_active_session(&pool, id, base.version, &winner, &base.session_ref),
-        update_active_session(&pool, id, base.version, &stale, &base.session_ref),
+        claim_refresh_lease(&pool, id, base.version, first, ttl),
+        claim_refresh_lease(&pool, id, base.version, second, ttl),
     );
-    let outcomes = [a.unwrap(), b.unwrap()];
+    let claims = [a.unwrap(), b.unwrap()];
     assert_eq!(
-        outcomes
+        claims
             .iter()
-            .filter(|o| **o == SessionUpdate::Updated)
+            .filter(|c| **c == RefreshLease::Claimed)
             .count(),
         1,
-        "{outcomes:?}"
+        "{claims:?}"
     );
     assert_eq!(
-        outcomes
-            .iter()
-            .filter(|o| **o == SessionUpdate::Conflict)
-            .count(),
+        claims.iter().filter(|c| **c == RefreshLease::Held).count(),
         1,
-        "{outcomes:?}"
+        "{claims:?}"
+    );
+    let (holder, loser) = if claims[0] == RefreshLease::Claimed {
+        (first, second)
+    } else {
+        (second, first)
+    };
+
+    // Without the lease a persist changes nothing.
+    assert_eq!(
+        update_active_session(&pool, id, base.version, loser, &stale, &base.session_ref)
+            .await
+            .unwrap(),
+        SessionUpdate::Conflict
+    );
+    assert_eq!(
+        update_active_session(&pool, id, base.version, holder, &winner, &base.session_ref)
+            .await
+            .unwrap(),
+        SessionUpdate::Updated
     );
     let stored = find_active_session(&pool, &token_hash)
         .await
@@ -578,13 +597,16 @@ async fn a_stale_refresh_cannot_overwrite_a_newer_sealed_session() {
         .unwrap();
     assert_eq!(stored.version, 1);
     let kept = stored.sealed_provider_session.expose().to_owned();
-    assert!(
-        kept == winner.expose() || kept == stale.expose(),
-        "exactly one persist is stored"
-    );
+    assert_eq!(kept, winner.expose());
 
-    // A later stall from the same old base loses against whatever is stored.
-    let late = update_active_session(&pool, id, base.version, &stale, &base.session_ref)
+    // A later stall from the same old base is superseded, and loses on persist.
+    assert_eq!(
+        claim_refresh_lease(&pool, id, base.version, loser, ttl)
+            .await
+            .unwrap(),
+        RefreshLease::Superseded
+    );
+    let late = update_active_session(&pool, id, base.version, holder, &stale, &base.session_ref)
         .await
         .unwrap();
     assert_eq!(late, SessionUpdate::Conflict);
@@ -594,10 +616,16 @@ async fn a_stale_refresh_cannot_overwrite_a_newer_sealed_session() {
         .unwrap();
     assert_eq!(after.sealed_provider_session.expose(), kept);
 
-    // Persisting from the current version advances it.
+    // Persisting from the current version under a fresh lease advances it.
     let next = OpaqueSecret::new("sealed rotated again");
     assert_eq!(
-        update_active_session(&pool, id, after.version, &next, &after.session_ref)
+        claim_refresh_lease(&pool, id, after.version, loser, ttl)
+            .await
+            .unwrap(),
+        RefreshLease::Claimed
+    );
+    assert_eq!(
+        update_active_session(&pool, id, after.version, loser, &next, &after.session_ref)
             .await
             .unwrap(),
         SessionUpdate::Updated
@@ -608,10 +636,74 @@ async fn a_stale_refresh_cannot_overwrite_a_newer_sealed_session() {
         .await
         .unwrap();
     assert_eq!(
-        update_active_session(&pool, id, after.version + 1, &next, &after.session_ref)
+        update_active_session(
+            &pool,
+            id,
+            after.version + 1,
+            loser,
+            &next,
+            &after.session_ref
+        )
+        .await
+        .unwrap(),
+        SessionUpdate::Gone
+    );
+}
+
+#[tokio::test]
+async fn a_refresh_lease_is_released_or_expires_and_never_outlives_a_revocation() {
+    let Some(pool) = database().await else { return };
+    sign_in(
+        &pool,
+        &session("user_A", "sess_1"),
+        &profile("a@example.org", None),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let (id, token_hash) = only_session(&pool).await;
+    let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    let long = std::time::Duration::from_secs(60);
+    assert_eq!(
+        claim_refresh_lease(&pool, id, 0, a, long).await.unwrap(),
+        RefreshLease::Claimed
+    );
+    assert_eq!(
+        claim_refresh_lease(&pool, id, 0, b, long).await.unwrap(),
+        RefreshLease::Held
+    );
+    // Only the holder can release; a stranger's release changes nothing.
+    release_refresh_lease(&pool, id, b).await.unwrap();
+    assert_eq!(
+        claim_refresh_lease(&pool, id, 0, b, long).await.unwrap(),
+        RefreshLease::Held
+    );
+    release_refresh_lease(&pool, id, a).await.unwrap();
+    assert_eq!(
+        claim_refresh_lease(&pool, id, 0, b, std::time::Duration::from_millis(200))
             .await
             .unwrap(),
-        SessionUpdate::Gone
+        RefreshLease::Claimed
+    );
+    // An expired lease can be taken over, and the stalled holder then loses.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(
+        claim_refresh_lease(&pool, id, 0, a, long).await.unwrap(),
+        RefreshLease::Claimed
+    );
+    let sealed = OpaqueSecret::new("sealed by the stalled holder");
+    assert_eq!(
+        update_active_session(&pool, id, 0, b, &sealed, &[0; 32])
+            .await
+            .unwrap(),
+        SessionUpdate::Conflict
+    );
+    record_logout(&pool, &token_hash, AuditRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        claim_refresh_lease(&pool, id, 0, b, long).await.unwrap(),
+        RefreshLease::Gone
     );
 }
 

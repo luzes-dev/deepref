@@ -22,9 +22,7 @@ tracing.workspace = true
 unicode-normalization.workspace = true
 urlencoding.workspace = true
 workos = "3.4.1"
-
-[dev-dependencies]
-# Signs the access tokens a stand-in WorkOS issues in tests.
+# Checks access-token signatures against keys the adapter fetched itself.
 jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["rust_crypto"] }
 
 [lints]

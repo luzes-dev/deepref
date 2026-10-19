@@ -50,6 +50,9 @@ struct MockState {
     refresh_status: u16,
     jwks_modulus: String,
     jwks_status: u16,
+    /// Statuses for the next signing-key requests, in order, before
+    /// `jwks_status` applies again.
+    jwks_script: Vec<u16>,
     requests: Vec<(String, String, String)>,
 }
 
@@ -112,7 +115,7 @@ async fn serve(state: Arc<Mutex<MockState>>) -> String {
                     state
                         .requests
                         .push((method.clone(), path.clone(), body.clone()));
-                    route(&state, &method, &path, &body)
+                    route(&mut state, &method, &path, &body)
                 };
                 let response = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
@@ -125,10 +128,15 @@ async fn serve(state: Arc<Mutex<MockState>>) -> String {
     format!("http://{address}")
 }
 
-fn route(state: &MockState, method: &str, path: &str, body: &str) -> (u16, String) {
+fn route(state: &mut MockState, method: &str, path: &str, body: &str) -> (u16, String) {
     if path.starts_with("/sso/jwks/") {
-        if state.jwks_status != 200 {
-            return (state.jwks_status, json!({ "message": "down" }).to_string());
+        let status = if state.jwks_script.is_empty() {
+            state.jwks_status
+        } else {
+            state.jwks_script.remove(0)
+        };
+        if status != 200 {
+            return (status, json!({ "message": "down" }).to_string());
         }
         return (
             200,
@@ -200,6 +208,7 @@ async fn harness() -> Harness {
         refresh_status: 200,
         jwks_modulus: JWK_MODULUS.to_owned(),
         jwks_status: 200,
+        jwks_script: Vec::new(),
         requests: Vec::new(),
     }));
     let base_url = serve(Arc::clone(&state)).await;
@@ -482,6 +491,24 @@ async fn a_bad_signature_is_invalid_even_when_the_keys_are_reachable() {
     assert_eq!(
         cold_provider(&h).inspect_session(&sealed).await.unwrap(),
         SessionStatus::Invalid
+    );
+}
+
+#[tokio::test]
+async fn a_key_fetch_that_fails_twice_around_a_good_probe_keeps_the_session() {
+    let h = harness().await;
+    let (sealed, _) = login(&h).await;
+    // The SDK's fetch fails, the adapter's own probe succeeds, and the SDK's
+    // second fetch fails again. The token is genuinely signed, so the session
+    // must stay recoverable rather than read as invalid.
+    h.state.lock().unwrap().jwks_script = vec![503, 200, 503];
+    let restarted = cold_provider(&h);
+    assert!(
+        matches!(
+            restarted.inspect_session(&sealed).await,
+            Err(IdentityError::Unavailable)
+        ),
+        "a flapping key endpoint must not read as an invalid session"
     );
 }
 

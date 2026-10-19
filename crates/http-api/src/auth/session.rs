@@ -19,9 +19,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use deepref_app::identity::{
-    SessionUpdate, StoredBrowserSession, UserRecord, find_active_session, update_active_session,
+    RefreshLease, SessionUpdate, StoredBrowserSession, UserRecord, claim_refresh_lease,
+    find_active_session, release_refresh_lease, update_active_session,
 };
-use deepref_application::identity::{IdentityError, OpaqueSecret, RefreshOutcome, SessionStatus};
+use deepref_application::identity::{
+    IdentityError, OpaqueSecret, ProviderSession, RefreshOutcome, SessionStatus,
+};
 use deepref_domain::Principal;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -37,6 +40,14 @@ use crate::{
 /// now-rotated, cookie. A page load fires many requests at once; the provider
 /// accepts each refresh token once, so only the first may call it.
 const REFRESH_REUSE_WINDOW: Duration = Duration::from_secs(30);
+
+/// How long a refresh lease protects a refresh from other requests. It covers
+/// the provider call and the WorkOS replay grace, and frees a session whose
+/// refresher died.
+const REFRESH_LEASE: Duration = Duration::from_secs(30);
+
+/// How often a request that lost the lease checks for the winner's commit.
+const REFRESH_POLL: Duration = Duration::from_millis(100);
 
 /// How many times one request re-reads a session another request rotated
 /// under it before giving up with a retryable error.
@@ -197,63 +208,140 @@ async fn resolve(
         let Some(stored) = find_active_session(pool, &token_hash).await? else {
             return Ok(Resolution::Rejected("unknown_expired_or_revoked_session"));
         };
-        let (session, refreshed) = match auth
+        match auth
             .provider()
             .inspect_session(&stored.sealed_provider_session)
             .await
         {
-            Ok(SessionStatus::Active(session)) => (session, None),
+            Ok(SessionStatus::Active(session)) => {
+                if let Some(reason) = identity_mismatch(auth, &stored, &session) {
+                    return Ok(Resolution::Rejected(reason));
+                }
+            }
             Ok(SessionStatus::Expired(_)) => {
-                match auth
-                    .refresh()
-                    .refresh(auth.provider(), &stored.sealed_provider_session)
-                    .await
-                    .map_err(provider_error)?
-                {
-                    RefreshOutcome::Refreshed {
-                        sealed_session,
-                        session,
-                    } => (session, Some(sealed_session)),
-                    RefreshOutcome::Rejected => {
-                        // The provider spends a refresh token once. If another
-                        // request or replica already rotated this session, its
-                        // row moved on and that is the session to use.
-                        if find_active_session(pool, &token_hash)
-                            .await?
-                            .is_some_and(|current| current.version != stored.version)
-                        {
-                            continue;
-                        }
-                        return Ok(Resolution::Rejected("refresh_rejected"));
-                    }
+                match refresh_expired(auth, pool, &stored, &token_hash).await? {
+                    Refresh::Persisted => {}
+                    Refresh::Superseded => continue,
+                    Refresh::Terminal(reason) => return Ok(Resolution::Rejected(reason)),
                 }
             }
             Ok(SessionStatus::Invalid) => return Ok(Resolution::Rejected("invalid_session")),
             Err(error) => return Err(provider_error(error)),
-        };
-        if session.external_user_id != stored.user.external_user_id {
-            return Ok(Resolution::Rejected("session_user_mismatch"));
-        }
-        let session_ref = auth.session_refs().session_ref(&session.session_id);
-        if !super::constant_time_eq(&session_ref, &stored.session_ref) {
-            return Ok(Resolution::Rejected("session_reference_mismatch"));
-        }
-        if let Some(refreshed) = &refreshed {
-            match update_active_session(pool, stored.id, stored.version, refreshed, &session_ref)
-                .await?
-            {
-                SessionUpdate::Updated => {}
-                SessionUpdate::Gone => {
-                    return Ok(Resolution::Rejected("session_revoked_during_refresh"));
-                }
-                // Lost the race: this refresh is superseded. Reload and use
-                // the winner's session instead of overwriting it.
-                SessionUpdate::Conflict => continue,
-            }
         }
         return Ok(Resolution::Authenticated(Box::new(context(stored))));
     }
     Err(ApiError::Auth(AuthFailure::ProviderUnavailable))
+}
+
+/// Why a provider session does not belong to the stored row, if it does not.
+fn identity_mismatch(
+    auth: &AuthRuntime,
+    stored: &StoredBrowserSession,
+    session: &ProviderSession,
+) -> Option<&'static str> {
+    if session.external_user_id != stored.user.external_user_id {
+        return Some("session_user_mismatch");
+    }
+    let session_ref = auth.session_refs().session_ref(&session.session_id);
+    (!super::constant_time_eq(&session_ref, &stored.session_ref))
+        .then_some("session_reference_mismatch")
+}
+
+enum Refresh {
+    /// The renewed session is stored.
+    Persisted,
+    /// Another request refreshed first: reload and use its session.
+    Superseded,
+    /// The session is definitively over. Only this clears the cookie.
+    Terminal(&'static str),
+}
+
+/// Refreshes an expired session as the only request doing so, across replicas.
+/// Whoever takes the row's refresh lease spends the token; everyone else waits
+/// for that commit. Contention that does not resolve in time is a retryable
+/// provider error, never a verdict on the session.
+async fn refresh_expired(
+    auth: &AuthRuntime,
+    pool: &PgPool,
+    stored: &StoredBrowserSession,
+    token_hash: &[u8],
+) -> Result<Refresh, ApiError> {
+    let owner = Uuid::new_v4();
+    let deadline = Instant::now() + auth.refresh_wait();
+    loop {
+        match claim_refresh_lease(pool, stored.id, stored.version, owner, REFRESH_LEASE).await? {
+            RefreshLease::Claimed => break,
+            RefreshLease::Superseded => return Ok(Refresh::Superseded),
+            RefreshLease::Gone => return Ok(Refresh::Terminal("session_revoked_during_refresh")),
+            RefreshLease::Held if Instant::now() >= deadline => {
+                tracing::warn!("a competing session refresh did not finish in time");
+                return Err(ApiError::Auth(AuthFailure::ProviderUnavailable));
+            }
+            RefreshLease::Held => tokio::time::sleep(REFRESH_POLL).await,
+        }
+    }
+    let outcome = refresh_and_persist(auth, pool, stored, token_hash, owner).await;
+    if !matches!(outcome, Ok(Refresh::Persisted))
+        && let Err(error) = release_refresh_lease(pool, stored.id, owner).await
+    {
+        tracing::warn!(%error, "could not release a session refresh lease");
+    }
+    outcome
+}
+
+async fn refresh_and_persist(
+    auth: &AuthRuntime,
+    pool: &PgPool,
+    stored: &StoredBrowserSession,
+    token_hash: &[u8],
+    owner: Uuid,
+) -> Result<Refresh, ApiError> {
+    match auth
+        .refresh()
+        .refresh(auth.provider(), &stored.sealed_provider_session)
+        .await
+        .map_err(provider_error)?
+    {
+        RefreshOutcome::Refreshed {
+            sealed_session,
+            session,
+        } => {
+            if let Some(reason) = identity_mismatch(auth, stored, &session) {
+                return Ok(Refresh::Terminal(reason));
+            }
+            let session_ref = auth.session_refs().session_ref(&session.session_id);
+            Ok(
+                match update_active_session(
+                    pool,
+                    stored.id,
+                    stored.version,
+                    owner,
+                    &sealed_session,
+                    &session_ref,
+                )
+                .await?
+                {
+                    SessionUpdate::Updated => Refresh::Persisted,
+                    SessionUpdate::Gone => Refresh::Terminal("session_revoked_during_refresh"),
+                    // Lost the lease or the version: reload the winner's row.
+                    SessionUpdate::Conflict => Refresh::Superseded,
+                },
+            )
+        }
+        // The lease made this request the only one spending the token, so a
+        // rejection with the row unchanged means nobody rotated it: the
+        // session is over. A moved row is someone else's refresh to use.
+        RefreshOutcome::Rejected => Ok(
+            if find_active_session(pool, token_hash)
+                .await?
+                .is_some_and(|current| current.version != stored.version)
+            {
+                Refresh::Superseded
+            } else {
+                Refresh::Terminal("refresh_rejected")
+            },
+        ),
+    }
 }
 
 fn context(stored: StoredBrowserSession) -> SessionContext {

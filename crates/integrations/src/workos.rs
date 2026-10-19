@@ -76,22 +76,86 @@ impl WorkOsIdentityProvider {
             .await
     }
 
-    /// Reads a sealed session. A failed signature check is `Ok` with an
-    /// unauthenticated state; a signing-key fetch that fails is `Unavailable`,
-    /// so a WorkOS outage never reads as an invalid session.
+    /// Reads a sealed session. `Invalid` is decided only against signing keys
+    /// this adapter fetched and checked itself: the SDK reports a failed key
+    /// fetch and a bad signature with the same `invalid_jwt` reason, so that
+    /// reason is never trusted on its own. Any key-fetch failure is
+    /// `Unavailable`, so a WorkOS outage never reads as an invalid session.
     async fn read_session(&self, sealed: &str) -> Result<SessionState, IdentityError> {
         let state = self.authenticate(sealed).await;
         if state.reason != "invalid_jwt" {
             return Ok(state);
         }
-        if let Err(error) = self.jwks_probe.fetch().await {
-            tracing::warn!(%error, "WorkOS signing keys are unavailable");
+        let keys = match self.jwks_probe.fetch().await {
+            Ok(keys) => keys,
+            Err(error) => {
+                tracing::warn!(%error, "WorkOS signing keys are unavailable");
+                return Err(IdentityError::Unavailable);
+            }
+        };
+        let Ok(session) = workos::unseal_session(sealed, &self.session_key) else {
+            return Ok(state);
+        };
+        let token = session.access_token.expose();
+        let signed_by_provider = signature_claims(token, &keys).is_some_and(|claims| {
+            session
+                .user
+                .as_ref()
+                .is_none_or(|user| user.id == claims.sub)
+        });
+        if !signed_by_provider {
+            // Verified against keys we hold: genuinely not a valid session.
+            return Ok(state);
+        }
+        // The token verifies, so the SDK's failure was its own key fetch.
+        // Give it one more read; if it still cannot decide, keep the session.
+        let second = self.authenticate(sealed).await;
+        if second.reason == "invalid_jwt" {
+            tracing::warn!("WorkOS session verification failed on a validly signed token");
             return Err(IdentityError::Unavailable);
         }
-        // The keys are reachable now, so the first failure was either
-        // transient or genuine: decide on a second read.
-        Ok(self.authenticate(sealed).await)
+        Ok(second)
     }
+}
+
+#[derive(serde::Deserialize)]
+struct SignedClaims {
+    sub: String,
+}
+
+/// The claims of `token` if its RS256 signature verifies against `keys`.
+/// Expiry is not judged here: an expired but genuine token must still read as
+/// one that needs a refresh.
+fn signature_claims(token: &str, keys: &workos::JwkSet) -> Option<SignedClaims> {
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+    let header = jsonwebtoken::decode_header(token).ok()?;
+    if header.alg != Algorithm::RS256 {
+        return None;
+    }
+    let kid = header.kid.filter(|kid| !kid.is_empty())?;
+    let mut matching = keys
+        .keys
+        .iter()
+        .filter(|key| key.kid.as_deref() == Some(kid.as_str()));
+    let key = matching.next()?;
+    if matching.next().is_some()
+        || key.kty.as_deref() != Some("RSA")
+        || key.alg.as_deref().is_some_and(|alg| alg != "RS256")
+        || key.use_.as_deref().is_some_and(|usage| usage != "sig")
+    {
+        return None;
+    }
+    let jwk = serde_json::from_value(serde_json::to_value(key).ok()?).ok()?;
+    let decoding_key = DecodingKey::from_jwk(&jwk).ok()?;
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_required_spec_claims(&["exp", "sub"]);
+    validation.validate_exp = false;
+    validation.validate_nbf = true;
+    validation.validate_aud = false;
+    let claims = jsonwebtoken::decode::<SignedClaims>(token, &decoding_key, &validation)
+        .ok()?
+        .claims;
+    (!claims.sub.is_empty()).then_some(claims)
 }
 
 fn key_hex(password: &str, purpose: &str) -> String {

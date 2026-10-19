@@ -309,24 +309,38 @@ pub async fn find_active_session(
     .transpose()
 }
 
-/// Persists a WorkOS refresh in the existing local session row, but only if the
-/// row is still at `expected_version`. The provider spends a refresh token once,
-/// so a request that lost the race holds a session that is already superseded:
-/// it gets [`SessionUpdate::Conflict`], changes nothing, and must reload the
-/// winner's session.
-pub async fn update_active_session(
+/// What [`claim_refresh_lease`] decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshLease {
+    /// The caller now alone may spend this session's refresh token.
+    Claimed,
+    /// Another request holds an unexpired lease; its commit is still pending.
+    Held,
+    /// The row moved past `expected_version`: someone already refreshed it.
+    Superseded,
+    /// The row was revoked or expired, or the user was deactivated.
+    Gone,
+}
+
+/// Takes the refresh lease on a session for `ttl`, but only while the row is
+/// still at `expected_version` and no other unexpired lease exists. The
+/// provider spends a refresh token once, so exactly one request across all
+/// replicas may call it; the rest wait for [`update_active_session`].
+pub async fn claim_refresh_lease(
     pool: &PgPool,
     session_id: Uuid,
     expected_version: i64,
-    sealed_provider_session: &OpaqueSecret,
-    session_ref: &[u8],
-) -> Result<SessionUpdate, IdentityStoreError> {
-    let changed = sqlx::query(
+    owner: Uuid,
+    ttl: std::time::Duration,
+) -> Result<RefreshLease, IdentityStoreError> {
+    let claimed = sqlx::query(
         "UPDATE user_sessions s
-         SET sealed_provider_session = $3, session_ref = $4, version = s.version + 1
+         SET refresh_lease_owner = $3,
+             refresh_lease_until = now() + make_interval(secs => $4)
          FROM users u
          WHERE s.id = $1
            AND s.version = $2
+           AND (s.refresh_lease_until IS NULL OR s.refresh_lease_until <= now())
            AND u.id = s.user_id
            AND u.status = 'active'
            AND s.revoked_at IS NULL
@@ -334,6 +348,78 @@ pub async fn update_active_session(
     )
     .bind(session_id)
     .bind(expected_version)
+    .bind(owner)
+    .bind(ttl.as_secs_f64())
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if claimed == 1 {
+        return Ok(RefreshLease::Claimed);
+    }
+    let current: Option<i64> = sqlx::query_scalar(
+        "SELECT s.version FROM user_sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.id = $1 AND u.status = 'active'
+           AND s.revoked_at IS NULL AND s.expires_at > now()",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match current {
+        None => RefreshLease::Gone,
+        Some(version) if version != expected_version => RefreshLease::Superseded,
+        Some(_) => RefreshLease::Held,
+    })
+}
+
+/// Gives the lease back after a refresh that persisted nothing, so the next
+/// request need not wait for it to expire. A lease another request has since
+/// taken over is left alone.
+pub async fn release_refresh_lease(
+    pool: &PgPool,
+    session_id: Uuid,
+    owner: Uuid,
+) -> Result<(), IdentityStoreError> {
+    sqlx::query(
+        "UPDATE user_sessions
+         SET refresh_lease_owner = NULL, refresh_lease_until = NULL
+         WHERE id = $1 AND refresh_lease_owner = $2",
+    )
+    .bind(session_id)
+    .bind(owner)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Persists a WorkOS refresh in the existing local session row, but only if the
+/// row is still at `expected_version` and `lease_owner` still holds the refresh
+/// lease. A request that lost either race holds a session that is already
+/// superseded: it gets [`SessionUpdate::Conflict`], changes nothing, and must
+/// reload the winner's session. Committing releases the lease.
+pub async fn update_active_session(
+    pool: &PgPool,
+    session_id: Uuid,
+    expected_version: i64,
+    lease_owner: Uuid,
+    sealed_provider_session: &OpaqueSecret,
+    session_ref: &[u8],
+) -> Result<SessionUpdate, IdentityStoreError> {
+    let changed = sqlx::query(
+        "UPDATE user_sessions s
+         SET sealed_provider_session = $4, session_ref = $5, version = s.version + 1,
+             refresh_lease_owner = NULL, refresh_lease_until = NULL
+         FROM users u
+         WHERE s.id = $1
+           AND s.version = $2
+           AND s.refresh_lease_owner = $3
+           AND u.id = s.user_id
+           AND u.status = 'active'
+           AND s.revoked_at IS NULL
+           AND s.expires_at > now()",
+    )
+    .bind(session_id)
+    .bind(expected_version)
+    .bind(lease_owner)
     .bind(sealed_provider_session.expose())
     .bind(session_ref)
     .execute(pool)

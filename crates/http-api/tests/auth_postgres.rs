@@ -9,15 +9,19 @@ use axum::{
     body::Body,
     http::{Method, Request, Response, StatusCode, header},
 };
-use deepref_app::identity::{deactivate_user, find_user_by_external_id};
-use deepref_application::identity::{SessionRefKey, SessionTokenKey};
+use deepref_app::identity::{
+    SessionUpdate, claim_refresh_lease, deactivate_user, find_active_session,
+    find_user_by_external_id, update_active_session,
+};
+use deepref_application::identity::{OpaqueSecret, SessionRefKey, SessionTokenKey};
 use deepref_domain::ExternalUserId;
 use sqlx::PgPool;
 use tower::ServiceExt;
 
 mod support;
 use support::{
-    COOKIE_PASSWORD, LOGIN_COOKIE, ORIGIN, SESSION_COOKIE, auth_app, fake_identity::FakeIdentity,
+    COOKIE_PASSWORD, LOGIN_COOKIE, ORIGIN, SESSION_COOKIE, auth_app, auth_app_waiting,
+    fake_identity::FakeIdentity,
 };
 
 async fn database() -> Option<PgPool> {
@@ -400,6 +404,129 @@ async fn concurrent_requests_on_one_expired_cookie_refresh_once() {
     for task in tasks {
         assert_eq!(task.await.unwrap(), StatusCode::OK);
     }
+    assert_eq!(h.fake.refresh_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A session whose access token has expired, with another replica already
+/// holding the refresh lease: it has spent the refresh token at the provider
+/// and not yet committed. Returns the row and the lease holder's id.
+async fn session_under_a_competing_refresh(
+    h: &Harness,
+    lease: std::time::Duration,
+) -> (
+    String,
+    deepref_app::identity::StoredBrowserSession,
+    uuid::Uuid,
+) {
+    let cookie_token = sign_in(h, "user_A", "a@example.org").await;
+    let expired = h.fake.mint_expired_session("user_A");
+    replace_provider_session(h, &cookie_token, &expired).await;
+    let token_hash = SessionTokenKey::from_secret(COOKIE_PASSWORD).token_hash(&cookie_token);
+    let stored = find_active_session(&h.pool, &token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    let rival = uuid::Uuid::new_v4();
+    let claim = claim_refresh_lease(&h.pool, stored.id, stored.version, rival, lease)
+        .await
+        .unwrap();
+    assert_eq!(claim, deepref_app::identity::RefreshLease::Claimed);
+    (cookie_token, stored, rival)
+}
+
+/// The rival's commit: a freshly rotated sealed session.
+async fn commit_rival_refresh(
+    h: &Harness,
+    stored: &deepref_app::identity::StoredBrowserSession,
+    rival: uuid::Uuid,
+) {
+    let renewed = h.fake.mint_session("user_A");
+    let session_ref = SessionRefKey::from_secret(COOKIE_PASSWORD)
+        .session_ref(&h.fake.provider_session_id(&renewed));
+    let committed = update_active_session(
+        &h.pool,
+        stored.id,
+        stored.version,
+        rival,
+        &OpaqueSecret::new(renewed),
+        &session_ref,
+    )
+    .await
+    .unwrap();
+    assert_eq!(committed, SessionUpdate::Updated);
+}
+
+#[tokio::test]
+async fn a_competing_refresh_in_flight_is_retryable_and_keeps_the_cookie() {
+    let Some(h) = harness().await else { return };
+    let (cookie_token, stored, rival) =
+        session_under_a_competing_refresh(&h, std::time::Duration::from_secs(60)).await;
+    let impatient = auth_app_waiting(
+        h.pool.clone(),
+        Arc::clone(&h.fake),
+        std::time::Duration::from_millis(300),
+    );
+
+    let contended = impatient
+        .clone()
+        .oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+        .await
+        .unwrap();
+    assert_eq!(contended.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        set_cookies(&contended).is_empty(),
+        "a valid session is not cleared while another request refreshes it: {:?}",
+        set_cookies(&contended)
+    );
+    assert_eq!(json(contended).await["code"], "AUTH_PROVIDER_UNAVAILABLE");
+    assert_eq!(
+        h.fake.refresh_calls.load(Ordering::SeqCst),
+        0,
+        "the token is spent once, by the lease holder only"
+    );
+
+    commit_rival_refresh(&h, &stored, rival).await;
+    let after = impatient
+        .oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+        .await
+        .unwrap();
+    assert_eq!(after.status(), StatusCode::OK);
+    assert_eq!(h.fake.refresh_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_request_waiting_on_a_competing_refresh_gets_the_winners_session() {
+    let Some(h) = harness().await else { return };
+    let (cookie_token, stored, rival) =
+        session_under_a_competing_refresh(&h, std::time::Duration::from_secs(60)).await;
+    let app = h.app.clone();
+    let waiting = tokio::spawn(async move {
+        app.oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+            .await
+            .unwrap()
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(!waiting.is_finished(), "the request waits for the holder");
+    commit_rival_refresh(&h, &stored, rival).await;
+    let response = waiting.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(set_cookies(&response).is_empty());
+    assert_eq!(h.fake.refresh_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_expired_refresh_lease_lets_a_later_request_refresh() {
+    let Some(h) = harness().await else { return };
+    // The rival died holding a one-second lease and never committed.
+    let (cookie_token, _, _) =
+        session_under_a_competing_refresh(&h, std::time::Duration::from_secs(1)).await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(h.fake.refresh_calls.load(Ordering::SeqCst), 1);
 }
 

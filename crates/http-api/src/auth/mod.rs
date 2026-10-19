@@ -34,6 +34,8 @@ struct Inner {
     session_refs: SessionRefKey,
     session_tokens: SessionTokenKey,
     refresh: session::RefreshCoalescer,
+    /// How long a request waits for another's in-flight refresh.
+    refresh_wait: std::time::Duration,
 }
 
 impl AuthRuntime {
@@ -51,8 +53,23 @@ impl AuthRuntime {
                 session_refs: SessionRefKey::from_secret(session_ref_secret),
                 session_tokens: SessionTokenKey::from_secret(session_ref_secret),
                 refresh: session::RefreshCoalescer::default(),
+                refresh_wait: std::time::Duration::from_secs(5),
             }),
         }
+    }
+
+    /// Bounds how long a request waits for a competing session refresh before
+    /// answering with a retryable provider error.
+    #[must_use]
+    pub fn with_refresh_wait(mut self, wait: std::time::Duration) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.refresh_wait = wait;
+        }
+        self
+    }
+
+    pub(crate) fn refresh_wait(&self) -> std::time::Duration {
+        self.inner.refresh_wait
     }
 
     pub(crate) fn provider(&self) -> &dyn IdentityProvider {
