@@ -142,10 +142,9 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 COPY --from=builder --chown=65532:65532 /build/target/release/deepref-server /usr/local/bin/deepref-server
 
 WORKDIR /app
-# The binary binds 127.0.0.1 by default and refuses a non-loopback address
-# without DEEPREF_ALLOW_NETWORK_BIND. The container must listen on 0.0.0.0 to be
-# reachable at all. The API has no authentication: run this image only behind an
-# authenticating proxy, and never publish its port directly.
+# The binary binds 127.0.0.1 by default in local development and refuses a
+# non-loopback address without DEEPREF_ALLOW_NETWORK_BIND. Container
+# environments listen on 0.0.0.0 so ingress proxies or gateways can reach it.
 ENV HOME=/tmp \
     APP_ENV=production \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \

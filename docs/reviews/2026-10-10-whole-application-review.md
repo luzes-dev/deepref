@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # DeepRef: whole-application review
 
 **Date:** 2026-10-10. **Commit:** `b0ad219` (main, clean).

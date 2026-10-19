@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Review 2: Security and privacy
 
 Reviewer lens: deployment exposure, cost exhaustion, uploads and PDF parsing, SSRF, assistant tool authority, the workflow engine (webhooks, inbound e-mail, HTTP, Slack, e-mail and secret nodes), XSS, supply chain, and data deletion and retention.
