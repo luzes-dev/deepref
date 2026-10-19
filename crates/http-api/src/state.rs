@@ -5,6 +5,8 @@ use deepref_ai::{AiGateway, RoutedGateway};
 use deepref_documents::DocumentStore;
 use sqlx::PgPool;
 
+use crate::auth::AuthRuntime;
+
 /// What the API can say about the configured AI provider without exposing
 /// any secret.
 #[derive(Debug, Clone, Default)]
@@ -24,6 +26,7 @@ pub struct AppState {
     pub workflow: deepref_config::WorkflowConfig,
     pub smtp: deepref_config::SmtpConfig,
     pub integrations: deepref_config::IntegrationsConfig,
+    pub auth: Option<AuthRuntime>,
 }
 
 impl AppState {
@@ -39,6 +42,7 @@ impl AppState {
             },
             smtp: deepref_config::SmtpConfig::from_source(&|_| None),
             integrations: deepref_config::IntegrationsConfig::default(),
+            auth: None,
         }
     }
 
@@ -54,6 +58,13 @@ impl AppState {
 
     pub fn with_smtp(mut self, smtp: deepref_config::SmtpConfig) -> Self {
         self.smtp = smtp;
+        self
+    }
+
+    /// Installs the identity runtime. It takes effect only when the router is
+    /// built with `DEEPREF_AUTH_ENABLED` on.
+    pub fn with_auth(mut self, auth: AuthRuntime) -> Self {
+        self.auth = Some(auth);
         self
     }
 

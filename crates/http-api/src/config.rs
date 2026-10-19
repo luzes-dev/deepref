@@ -15,6 +15,10 @@ pub struct ApiConfig {
 impl ApiConfig {
     pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         let runtime = RuntimeConfig::from_source("deepref-api", get)?;
+        anyhow::ensure!(
+            !runtime.auth_enabled || runtime.workos.is_some(),
+            "DEEPREF_AUTH_ENABLED requires WORKOS_CLIENT_ID, WORKOS_API_KEY, WORKOS_COOKIE_PASSWORD and WORKOS_WEBHOOK_SECRET"
+        );
         let settings = ApiSettings::from_source(get)?;
         let documents = DocumentConfig::from_source(get)?;
         let cors_origins = settings

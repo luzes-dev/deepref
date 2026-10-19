@@ -12,6 +12,7 @@ pub mod automations;
 pub mod deduplication;
 pub mod documents;
 pub mod extraction;
+pub mod identity;
 pub mod jobs;
 pub mod prisma;
 pub mod protocol;

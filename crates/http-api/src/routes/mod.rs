@@ -4,6 +4,7 @@ mod ai;
 mod ai_first;
 mod articles;
 mod assistant;
+mod auth;
 mod automations;
 mod autonomy;
 mod deduplication;
@@ -49,6 +50,10 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(health::ready))
         .routes(routes!(health::dependencies))
         .routes(routes!(health::deprecated_health))
+        .routes(routes!(auth::get_me))
+        .routes(routes!(auth::login))
+        .routes(routes!(auth::callback))
+        .routes(routes!(auth::logout))
         .routes(routes!(projection::get_projection))
         .routes(routes!(settings::get_settings, settings::update_settings))
         .routes(routes!(projects::list_projects, projects::create_project))
@@ -292,6 +297,17 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
                 }
             })
         })
+        .layer(axum::middleware::from_fn_with_state(
+            crate::auth::SessionGate {
+                enabled: config.runtime.auth_enabled,
+                state: state.clone(),
+            },
+            crate::auth::authenticate_requests,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::origin_guard::OriginGuard::new(&config.runtime.public_origin),
+            crate::origin_guard::reject_cross_origin_session_requests,
+        ))
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             crate::host_guard::AllowedHosts::from_config(config),
@@ -401,6 +417,10 @@ mod tests {
             "/health/live",
             "/health/ready",
             "/health/dependencies",
+            "/me",
+            "/auth/login",
+            "/auth/callback",
+            "/auth/logout",
             "/projects/{project_id}/projection",
             "/settings",
             "/projects",
