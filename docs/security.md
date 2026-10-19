@@ -71,11 +71,12 @@ Administrative actions, identity events, and security exceptions are recorded in
 - **Audit table:** `admin_audit_events` (landing in handoff 02 and expanded in handoff 11 Part B) records security-relevant events, including:
   - Authentication lifecycle: `auth.login`, `auth.logout`, `auth.session_revoked`
   - User identity lifecycle: `user.provisioned`, `user.deactivated`
-  - Workspace and project membership: `workspace.created`, `workspace.member_invited`, `workspace.role_changed`, `project.member_added`
-  - Billing lifecycle: events for the billing provider (undecided; see BUSINESS_DECISIONS.md) (`billing.subscription_changed`, `billing.credit_changed`)
-  - Machine credentials: `api_key.created`, `api_key.revoked`
-  - Access denials: bounded `authorization.denied` events
-- **Tamper resistance:** A database trigger (`BEFORE UPDATE OR DELETE`) blocks updates and deletions on `admin_audit_events`.
+  - Workspace tenancy (landing in 03a): `workspace.*`, `membership.*` and `invitation.*` events
+  - Access denials (landing in 03b): bounded `authorization.denied` events
+  - Billing and machine-credential events are added with the billing provider (undecided; see BUSINESS_DECISIONS.md) and with API keys (11 Part A, planned)
+
+  The authoritative list is the `event_type` CHECK on `admin_audit_events` in the migrations.
+- **Tamper resistance:** A database trigger blocks updates, deletions and truncation on `admin_audit_events`.
 - **Transactional consistency:** Audit entries are committed within the same database transaction as the state change they describe.
 - **Volume bounding:** Authorization denial events and authentication failures are rate-limited or deduplicated to protect audit storage from denial-of-service or credential-stuffing floods.
 - **Data retention:** Security and access audit logs are retained for 6 months (in compliance with Brazilian Marco Civil da Internet); billing and accounting records are retained for 5 years; point-in-time recovery (PITR) backups are kept for 35 days in São Paulo (see `docs/saas-program/BUSINESS_DECISIONS.md`).
