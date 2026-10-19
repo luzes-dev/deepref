@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event_id FROM outbox_events\n           WHERE event_id = $1 AND delivery_state = 'pending'\n             AND lease_owner = $2 AND claim_generation = $3\n             AND lease_expires_at > clock_timestamp()\n           FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "event_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1ad2b6626033801af3a6d02014be72806d77d3307d211bbb3cf2f4f70013bcac"
+}

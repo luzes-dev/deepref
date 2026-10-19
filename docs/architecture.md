@@ -7,6 +7,33 @@ DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a 
 PostgreSQL owns projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, domain events, durable jobs, graph status, and metric snapshots. The v2 evidence workspace is layered alongside the citation-ingestion model: records, reports, studies, screening events/state, review events, documents, audit rows, and leased jobs are all PostgreSQL tables.
 
 Authoritative state changes and their follow-up jobs are committed in one transaction. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, owns a lease with expiry renewal, retries failures with persisted attempts, marks terminal failures dead, and reclaims expired work. Stable dedupe keys prevent duplicate logical jobs. Ingestion preserves cached/fetched facts, discovered children, citations, events, and completion in the same transaction boundary; reconciliation repairs already-committed rows without silently dropping work.
+
+The generic transactional outbox (`outbox_events` with `outbox_receipts`) and
+the provider integration inbox (`integration_inbox_events`, migration `0083`)
+carry asynchronous publication and inbound WorkOS/Polar webhooks without a
+broker. Outbox rows are inserted in the same transaction as the authoritative
+change they describe and stay broker-independent: an in-process dispatcher in
+the worker claims bounded batches with lease expiry renewal and delivers to the
+typed handlers registered per message type and version, and a row is
+`delivered` only when every expected consumer's receipt — written in the
+consumer's own transaction, with its effect — has committed. Claiming or
+leasing never delivers; per-consumer retries back off and quarantine after
+their attempt budget, and quarantined rows are replayed explicitly with the
+same stable event identity. The inbox verifies provider signatures before any
+insert, deduplicates on `(provider, provider_event_id)`, acknowledges only
+after the insert commits, and moves events through
+`received -> processing -> processed | failed -> quarantined` with the same
+retry and replay discipline. The domain-specific `ai_autonomy_outbox` is
+deliberately kept separate from this generic outbox and is not consolidated
+into it; a later migration would need its own explicit decision and
+delivery/idempotency plan.
+
+Provider handlers treat duplicate and out-of-order webhook events as normal:
+they reload authoritative provider state or compare provider versions where
+available. Provider-specific reconciliation hooks run from the worker's
+existing periodic reconciler; WorkOS and Polar adapters register their hooks
+when those integrations land.
+
 Automation, compiled-review and workflow consumers read lifecycle status and
 timestamps from `durable_runs`, `durable_steps` and `durable_attempts`.
 Recipe, workflow graph and review provenance remain in their typed domain

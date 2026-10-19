@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use deepref_domain::ProjectId;
 use deepref_domain::graph::{
     GraphAppraisalOverlay, GraphEdge, GraphFieldSelection, GraphMetricsOverlay, GraphNode,
     GraphProvenanceOverlay, GraphScreeningOverlay, GraphStudyOverlay, ProjectGraph,
@@ -126,25 +125,41 @@ pub async fn enqueue_metrics_recompute(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
 ) -> Result<Uuid, sqlx::Error> {
+    enqueue_metrics_recompute_with_context(transaction, project_id, project_id, None).await
+}
+
+/// Requests a project metrics recompute in the caller's transaction, carrying
+/// the source event's correlation and causation IDs through the outbox.
+pub async fn enqueue_metrics_recompute_with_context(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    correlation_id: Uuid,
+    causation_id: Option<Uuid>,
+) -> Result<Uuid, sqlx::Error> {
     let revision: i64 = sqlx::query_scalar("UPDATE projects SET metric_requested_revision=metric_requested_revision+1 WHERE id=$1 RETURNING metric_requested_revision")
         .bind(project_id)
         .fetch_one(&mut **transaction)
         .await?;
-    let job_id = Uuid::new_v4();
-    let payload = serde_json::json!({"project_id": project_id, "revision": revision});
-    crate::jobs::enqueue_job(
-        transaction,
-        &crate::jobs::job(
-            job_id,
-            ProjectId::new(project_id),
-            deepref_domain::JobKind::RecomputeMetrics,
-            payload,
-            format!("recompute_metrics:{project_id}:{revision}"),
-        ),
-    )
-    .await
-    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
-    Ok(job_id)
+    let event = deepref_domain::events::EventEnvelope::v1(
+        deepref_domain::events::SUBJECT_METRICS_RECOMPUTE_REQUESTED,
+        "deepref.app",
+        deepref_domain::events::EntityType::Project,
+        format!("project:{project_id}"),
+        revision,
+        correlation_id,
+        causation_id,
+        deepref_domain::events::MetricsRecomputeRequested {
+            project_id,
+            ingestion_id: None,
+        },
+    );
+    let event_id = event.event_id;
+    let outbox_event = deepref_application::outbox::NewOutboxEvent::for_message(event_id, &event)
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    crate::outbox::insert_outbox_event(transaction, &outbox_event)
+        .await
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    Ok(event_id)
 }
 
 pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {

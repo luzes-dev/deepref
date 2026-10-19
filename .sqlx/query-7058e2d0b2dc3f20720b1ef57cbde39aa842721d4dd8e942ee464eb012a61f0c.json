@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM integration_inbox_events\n           WHERE id = $1 AND processing_state = 'processing'\n             AND lease_owner = $2 AND claim_generation = $3\n             AND lease_expires_at > clock_timestamp()\n           FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7058e2d0b2dc3f20720b1ef57cbde39aa842721d4dd8e942ee464eb012a61f0c"
+}

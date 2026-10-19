@@ -17,8 +17,10 @@ pub mod config;
 pub mod delivery;
 pub mod enrichment;
 pub mod heartbeat;
+pub mod inbox_processor;
 pub mod limiter;
 pub mod metadata;
+pub mod outbox_dispatch;
 pub mod pmid_import;
 pub mod processor;
 pub mod reconciler;
@@ -172,10 +174,44 @@ pub async fn run_with_shutdown(
         config.runtime.integrations.contact_email.clone(),
         reconciler_signal.clone(),
     ));
-    let reconciler_task = tokio::spawn(reconciler::run(
+    let provider_reconcilers =
+        Arc::new(deepref_application::inbox::ProviderReconcilerRegistry::new());
+    let reconciler_task = tokio::spawn(reconciler::run_with_provider_reconcilers(
         pool.clone(),
         config.reconciler_interval,
-        reconciler_signal,
+        reconciler_signal.clone(),
+        provider_reconcilers,
+    ));
+    // The in-process outbox dispatcher (04a) is the outbox recipient until the
+    // trigger-gated JetStream relay (04b) replaces it on the same rows. Its
+    // registry carries the pilot contract; real message types register here as
+    // later handoffs adopt the outbox. The inbox processor shell claims nothing
+    // until provider adapters register handlers in 02/08.
+    let outbox_task = tokio::spawn(outbox_dispatch::run(
+        pool.clone(),
+        Arc::new(deepref_app::outbox::pilot_outbox_registry(&pool)?),
+        owner.clone(),
+        outbox_dispatch::OutboxDispatchConfig {
+            batch: 16,
+            concurrency: config.concurrency,
+            claim_lease: config.claim_lease,
+            poll_interval: Duration::from_millis(250),
+            drain_deadline: config.runtime.telemetry.shutdown_deadline,
+        },
+        shutdown::on_signal(reconciler_signal.clone()),
+    ));
+    let inbox_task = tokio::spawn(inbox_processor::run(
+        pool.clone(),
+        Arc::new(deepref_application::inbox::InboxRegistry::new()),
+        owner.clone(),
+        inbox_processor::InboxProcessorConfig {
+            batch: 16,
+            concurrency: config.concurrency,
+            claim_lease: config.claim_lease,
+            poll_interval: Duration::from_millis(250),
+            drain_deadline: config.runtime.telemetry.shutdown_deadline,
+        },
+        shutdown::on_signal(reconciler_signal.clone()),
     ));
     // The heartbeat outlives the drain: the worker is alive until its last
     // in-flight job has been settled.
@@ -216,10 +252,22 @@ pub async fn run_with_shutdown(
     reconciler_shutdown.send_replace(true);
     let reconciler_drained =
         tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, reconciler_task).await;
+    let outbox_drained =
+        tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, outbox_task).await;
+    let inbox_drained =
+        tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, inbox_task).await;
     loop_result?;
     match reconciler_drained {
         Ok(result) => result?,
         Err(_) => anyhow::bail!("worker reconciler drain deadline exceeded"),
+    }
+    match outbox_drained {
+        Ok(joined) => joined??,
+        Err(_) => anyhow::bail!("outbox dispatcher drain deadline exceeded"),
+    }
+    match inbox_drained {
+        Ok(joined) => joined??,
+        Err(_) => anyhow::bail!("inbox processor drain deadline exceeded"),
     }
     Ok(())
 }
