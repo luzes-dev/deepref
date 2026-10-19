@@ -15,6 +15,7 @@ pub enum JobKind {
     RecomputePrisma,
     RetrieveDocument,
     ParseDocument,
+    BackfillWorkflowFiles,
 }
 
 impl JobKind {
@@ -29,6 +30,7 @@ impl JobKind {
             Self::RecomputePrisma => "recompute_prisma",
             Self::RetrieveDocument => "retrieve_document",
             Self::ParseDocument => "parse_document",
+            Self::BackfillWorkflowFiles => "backfill_workflow_files",
         }
     }
 }
@@ -71,6 +73,7 @@ impl std::str::FromStr for JobKind {
             "recompute_prisma" => Ok(Self::RecomputePrisma),
             "retrieve_document" => Ok(Self::RetrieveDocument),
             "parse_document" => Ok(Self::ParseDocument),
+            "backfill_workflow_files" => Ok(Self::BackfillWorkflowFiles),
             _ => Err(InvalidJobKind(value.to_owned())),
         }
     }
@@ -139,6 +142,7 @@ mod tests {
             JobKind::RecomputePrisma,
             JobKind::RetrieveDocument,
             JobKind::ParseDocument,
+            JobKind::BackfillWorkflowFiles,
         ] {
             assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());

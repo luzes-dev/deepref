@@ -8,7 +8,11 @@ pub struct ReconcileReport {
     pub expired_doi_leases: u64,
     pub repaired_work: u64,
     pub expired_jobs: u64,
+    pub workflow_file_backfills: u64,
 }
+
+/// Projects whose pending workflow files are scheduled per reconciliation pass.
+const WORKFLOW_FILE_BACKFILL_PROJECTS: i64 = 100;
 
 pub async fn run(pool: PgPool, interval: Duration, mut shutdown: watch::Receiver<bool>) {
     let mut ticker = tokio::time::interval(interval);
@@ -34,10 +38,14 @@ pub async fn reconcile_once(pool: &PgPool) -> anyhow::Result<ReconcileReport> {
     let recovery = deepref_app::recover_expired_worker_state(pool).await?;
     let repaired_work = repair_missing_work(pool).await?;
     crate::assistant::reconcile_orphan_runs(pool).await?;
+    let workflow_file_backfills =
+        deepref_app::schedule_workflow_file_backfills(pool, WORKFLOW_FILE_BACKFILL_PROJECTS).await?
+            as u64;
     Ok(ReconcileReport {
         expired_doi_leases: recovery.expired_doi_leases,
         repaired_work,
         expired_jobs: recovery.expired_jobs,
+        workflow_file_backfills,
     })
 }
 

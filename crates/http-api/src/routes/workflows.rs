@@ -603,6 +603,7 @@ fn map_error(error: WorkflowError) -> ApiError {
         WorkflowError::Serialization(error) => ApiError::Json(error),
         WorkflowError::InvalidStoredValue(message) => ApiError::DataIntegrity(message),
         WorkflowError::Database(error) => ApiError::Database(error),
+        WorkflowError::ObjectStorage(error) => ApiError::Internal(error.into()),
     }
 }
 
@@ -1502,7 +1503,11 @@ pub(crate) async fn download_workflow_file(
     State(state): State<AppState>,
     Path((project, file)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
-    let file = deepref_app::get_workflow_file(&state.pool, project_id(project)?, file)
+    let store = state
+        .document_store
+        .as_ref()
+        .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
+    let file = deepref_app::get_workflow_file(&state.pool, store, project_id(project)?, file)
         .await
         .map_err(map_error)?;
     let safe_name: String = file

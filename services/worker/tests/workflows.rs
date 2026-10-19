@@ -71,6 +71,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             })
             .expect("local runtime configuration"),
             &deepref_worker::metadata::MetadataClients::default(),
+            &deepref_documents::DocumentStore::memory(),
         )
         .await
         .expect("step")
@@ -784,10 +785,11 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
     })
     .expect("local runtime configuration");
     let metadata = deepref_worker::metadata::MetadataClients::default();
+    let docs = deepref_documents::DocumentStore::memory();
 
     let (left, right) = tokio::join!(
-        workflows::handle_step(&pool, &job, &lease, None, &runtime, &metadata),
-        workflows::handle_step(&pool, &job, &lease, None, &runtime, &metadata),
+        workflows::handle_step(&pool, &job, &lease, None, &runtime, &metadata, &docs),
+        workflows::handle_step(&pool, &job, &lease, None, &runtime, &metadata, &docs),
     );
     assert_eq!(left.expect("left"), DeliveryAction::Ack);
     assert_eq!(right.expect("right"), DeliveryAction::Ack);
@@ -874,8 +876,9 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
     })
     .expect("local runtime configuration");
     let metadata = deepref_worker::metadata::MetadataClients::default();
+    let docs = deepref_documents::DocumentStore::memory();
     assert_eq!(
-        workflows::handle_step(&pool, &second, &live, None, &runtime, &metadata)
+        workflows::handle_step(&pool, &second, &live, None, &runtime, &metadata, &docs)
             .await
             .expect("live attempt"),
         DeliveryAction::Ack
@@ -1098,7 +1101,8 @@ async fn parked_queued_graph_fails_before_network_and_never_queues_successors() 
             &job.lease("parked-worker"),
             None,
             &runtime,
-            &metadata
+            &metadata,
+            &deepref_documents::DocumentStore::memory(),
         )
         .await
         .expect("guarded delivery"),
