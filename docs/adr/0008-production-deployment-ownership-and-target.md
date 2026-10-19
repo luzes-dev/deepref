@@ -40,10 +40,14 @@ S3-compatible bucket.
 
 #### Region
 
-Decision pending: Program sponsor and compliance lead decide; depends on the LGPD policy and Polar payout entity from the 00 business gate.
-
-Data placement must satisfy the governing LGPD data residency and privacy
-policies.
+Decided (2026-10-19, product owner): a São Paulo region for PostgreSQL, its
+backups and the object-storage bucket. Examples are AWS `sa-east-1`, GCP
+`southamerica-east1` and Azure Brazil South; the hosting platform is still
+pending under Target. Providers that process data outside Brazil (WorkOS, the
+billing provider, AI providers) rely on the ANPD standard contractual clauses.
+Retention periods, the 35-day backup window and LGPD roles are recorded in
+[`docs/saas-program/BUSINESS_DECISIONS.md`](../saas-program/BUSINESS_DECISIONS.md),
+which reaches this branch through the program-revision base.
 
 #### Secrets
 
