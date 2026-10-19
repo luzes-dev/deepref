@@ -11,6 +11,8 @@ numbered migration; never edit an existing one.
 - File name: `NNNN_snake_case_description.sql`, four-digit version prefix.
 - One logical change per migration. Header comments describe the change
   itself, not the review or change series it was authored under.
+- Header comments declare `-- phase: expand` or `-- phase: contract`; a contract
+  migration also names `-- requires-release-out-of-service: <release>`.
 - A migration that has shipped anywhere may only be rewritten after every
   database that applied it is dropped and recreated — including the
   `deepref_test_template` database used by

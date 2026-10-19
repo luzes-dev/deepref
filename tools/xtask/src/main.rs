@@ -1,6 +1,7 @@
 mod boundaries;
 mod doctor;
 mod generate;
+mod migrations;
 mod new_crate;
 mod sqlx;
 mod workspace;
@@ -25,12 +26,16 @@ fn main() -> Result<()> {
         [command, flag, layer, name] if command == "new-crate" && flag == "--layer" => {
             new_crate::run(layer, name)
         }
+        [command, subcommand, rest @ ..] if command == "migrations" && subcommand == "check" => {
+            migrations::run(migrations::parse_check_args(rest)?)
+        }
         _ => bail!(
             "unknown command; usage:\n  \
              cargo xtask boundaries\n  \
              cargo xtask doctor\n  \
              cargo xtask generate\n  \
              cargo xtask generate --check\n  \
+             cargo xtask migrations check [--base <git-ref>] [--report-only]\n  \
              cargo xtask sqlx prepare\n  \
              cargo xtask sqlx check\n  \
              cargo xtask new-crate --layer <layer> <name>"
