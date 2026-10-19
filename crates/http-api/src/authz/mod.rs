@@ -1,0 +1,445 @@
+//! The central Policy Enforcement Point (handoff 03b).
+//!
+//! One middleware, layered on the router after the session layer, decides
+//! every request from the static table in [`policy`]. Handlers never check
+//! roles. A route with no row is denied and logged: the table is the coverage
+//! matrix, and adding a route without a row fails closed here and fails the
+//! `authz-matrix` check in CI.
+//!
+//! A project that does not exist, a project in another workspace and a
+//! principal without the permission are one outcome, rendered exactly like the
+//! `404` a nonexistent project already produced.
+
+pub mod matrix;
+pub mod policy;
+
+use axum::{
+    extract::{RawPathParams, Request, State},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use deepref_app::authorization::{Denial, DeniedFor, DeniedResource};
+use deepref_application::authorization::AuthzError;
+use deepref_domain::{
+    ProjectId,
+    authorization::{Permission, Resource},
+};
+use uuid::Uuid;
+
+use crate::{
+    auth::SessionContext,
+    error::{ApiError, AuthFailure},
+    state::AppState,
+};
+use policy::{ResourceFrom, Rule};
+
+/// What the PEP does with the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthzMode {
+    /// Every non-open request is decided by the policy.
+    Enforced,
+    /// Authentication is off in a development environment: there is no
+    /// principal to authorize, so requests pass. Local development only.
+    DevelopmentBypass,
+    /// Authentication is off outside development. Authorization cannot be
+    /// bypassed in production, so every non-open request is refused.
+    Refused,
+}
+
+impl AuthzMode {
+    pub const fn for_runtime(auth_enabled: bool, development: bool) -> Self {
+        if auth_enabled {
+            Self::Enforced
+        } else if development {
+            Self::DevelopmentBypass
+        } else {
+            Self::Refused
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Pep {
+    pub(crate) mode: AuthzMode,
+    pub(crate) state: AppState,
+    /// Every (method, path) the router registers. A request whose method the
+    /// route does not register is answered `405` by the router and runs no
+    /// handler; every registered operation must have a row.
+    pub(crate) registered: std::sync::Arc<std::collections::BTreeSet<matrix::RouteKey>>,
+}
+
+/// The denial every "no" becomes: byte-identical to the `404` for a project
+/// that does not exist.
+pub(crate) fn denied_response() -> Response {
+    ApiError::NotFound("resource not found".to_owned()).into_response()
+}
+
+/// What a denial needs from the request, copied out so no borrow of the
+/// request body crosses an await.
+struct Caller {
+    user: Option<deepref_domain::UserId>,
+    request_id: Option<String>,
+}
+
+pub(crate) async fn enforce(
+    State(pep): State<Pep>,
+    params: RawPathParams,
+    request: Request,
+    next: Next,
+) -> Response {
+    let matched = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|path| path.as_str().to_owned());
+    let Some(matched) = matched else {
+        // No route matched: the router's own 404 answers. No handler runs.
+        return next.run(request).await;
+    };
+    let method = request.method().as_str().to_owned();
+    let session = request.extensions().get::<SessionContext>().cloned();
+    let caller = Caller {
+        user: session
+            .as_ref()
+            .and_then(|session| session.principal.user_id()),
+        request_id: request
+            .extensions()
+            .get::<Uuid>()
+            .map(std::string::ToString::to_string),
+    };
+    let Some(row) = policy::lookup(&method, &matched) else {
+        if !pep.registered.contains(&(method.clone(), matched.clone())) {
+            return next.run(request).await;
+        }
+        tracing::error!(
+            %method, route = %matched,
+            "route has no authorization policy row; denying (add it to authz/policy.rs)"
+        );
+        return deny(
+            &pep.state,
+            &caller,
+            DeniedFor::RouteUnlisted,
+            DeniedResource::None,
+        )
+        .await;
+    };
+    if row.rule == Rule::Open {
+        return next.run(request).await;
+    }
+    match pep.mode {
+        AuthzMode::DevelopmentBypass => return next.run(request).await,
+        AuthzMode::Refused => {
+            return ApiError::Configuration(
+                "authentication must be enabled outside development".to_owned(),
+            )
+            .into_response();
+        }
+        AuthzMode::Enforced => {}
+    }
+    let Some(session) = session else {
+        return ApiError::Auth(AuthFailure::Unauthenticated).into_response();
+    };
+    match row.rule {
+        Rule::Open | Rule::Authenticated | Rule::Handler(_) => next.run(request).await,
+        Rule::PlatformOperator => {
+            deny(
+                &pep.state,
+                &caller,
+                DeniedFor::PlatformOperator,
+                DeniedResource::None,
+            )
+            .await
+        }
+        Rule::Require(permission, ResourceFrom::PathParam(name)) => {
+            let id = params
+                .iter()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| Uuid::parse_str(value).ok());
+            let Some(id) = id else {
+                return deny(
+                    &pep.state,
+                    &caller,
+                    DeniedFor::Permission(permission),
+                    DeniedResource::Project(None),
+                )
+                .await;
+            };
+            let project = ProjectId::new(id);
+            match pep
+                .state
+                .authorizer
+                .require(&session.principal, permission, Resource::Project(project))
+                .await
+            {
+                Ok(()) => next.run(request).await,
+                Err(AuthzError::Denied(_)) => {
+                    deny(
+                        &pep.state,
+                        &caller,
+                        DeniedFor::Permission(permission),
+                        DeniedResource::Project(Some(project)),
+                    )
+                    .await
+                }
+                Err(AuthzError::Store(error)) => store_failure(&error),
+            }
+        }
+    }
+}
+
+fn store_failure(error: &str) -> Response {
+    tracing::error!(%error, "authorization data could not be read");
+    ApiError::Internal(anyhow::anyhow!("authorization is unavailable")).into_response()
+}
+
+/// Audits the denial (bounded) and answers it.
+async fn deny(
+    state: &AppState,
+    caller: &Caller,
+    denied_for: DeniedFor,
+    resource: DeniedResource,
+) -> Response {
+    if let Some(user) = caller.user {
+        record_denial(
+            state,
+            user,
+            caller.request_id.as_deref(),
+            denied_for,
+            resource,
+        )
+        .await;
+    }
+    denied_response()
+}
+
+pub(crate) async fn record_denial(
+    state: &AppState,
+    user: deepref_domain::UserId,
+    request_id: Option<&str>,
+    denied_for: DeniedFor,
+    resource: DeniedResource,
+) {
+    let denial = Denial {
+        user,
+        denied_for,
+        resource,
+        request_id,
+    };
+    if let Err(error) = state.denials.record(denial).await {
+        tracing::warn!(%error, "authorization denial could not be audited");
+    }
+}
+
+/// Handler-side check for a resource only the body names (`Rule::Handler`).
+/// A denial is audited and returned as the same `404`.
+pub(crate) async fn require_for_handler(
+    state: &AppState,
+    session: Option<&SessionContext>,
+    permission: Permission,
+    resource: Resource,
+) -> Result<(), ApiError> {
+    let Some(session) = session else {
+        // Authentication is off (development bypass): nothing to authorize.
+        return Ok(());
+    };
+    match state
+        .authorizer
+        .require(&session.principal, permission, resource)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(AuthzError::Denied(_)) => {
+            if let Some(user) = session.principal.user_id() {
+                let resource = match resource {
+                    Resource::Workspace(id) => DeniedResource::Workspace(Some(id)),
+                    Resource::Project(id) => DeniedResource::Project(Some(id)),
+                };
+                record_denial(
+                    state,
+                    user,
+                    None,
+                    DeniedFor::Permission(permission),
+                    resource,
+                )
+                .await;
+            }
+            Err(ApiError::NotFound("resource not found".to_owned()))
+        }
+        Err(AuthzError::Store(error)) => {
+            tracing::error!(%error, "authorization data could not be read");
+            Err(ApiError::Internal(anyhow::anyhow!(
+                "authorization is unavailable"
+            )))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode},
+        middleware::from_fn_with_state,
+        routing::get,
+    };
+    use deepref_app::identity::UserRecord;
+    use deepref_domain::{ExternalUserId, UserId, UserStatus};
+    use tower::ServiceExt;
+
+    use super::*;
+
+    fn registered(path: &str) -> std::sync::Arc<std::collections::BTreeSet<matrix::RouteKey>> {
+        std::sync::Arc::new(
+            [
+                ("GET".to_owned(), path.to_owned()),
+                ("PATCH".to_owned(), path.to_owned()),
+            ]
+            .into(),
+        )
+    }
+
+    fn lazy_state() -> AppState {
+        AppState::new(
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
+                .unwrap(),
+        )
+    }
+
+    fn session() -> SessionContext {
+        let id = UserId::new(Uuid::new_v4());
+        SessionContext {
+            principal: deepref_domain::Principal::user(id),
+            user: UserRecord {
+                id,
+                external_user_id: ExternalUserId::parse("user_x").unwrap(),
+                email: "x@example.com".to_owned(),
+                display_name: None,
+                status: UserStatus::Active,
+            },
+        }
+    }
+
+    /// A router with `path` served by a handler that answers 200, the PEP in
+    /// `mode`, and (optionally) a session already resolved, as the session
+    /// layer would have.
+    fn app(path: &'static str, mode: AuthzMode, with_session: bool) -> Router {
+        Router::new()
+            .route(path, get(|| async { "reached" }))
+            .layer(from_fn_with_state(
+                Pep {
+                    mode,
+                    state: lazy_state(),
+                    registered: registered(path),
+                },
+                enforce,
+            ))
+            .layer(axum::middleware::from_fn(
+                move |mut request: Request<Body>, next: axum::middleware::Next| async move {
+                    if with_session {
+                        request.extensions_mut().insert(session());
+                    }
+                    next.run(request).await
+                },
+            ))
+    }
+
+    async fn status(app: Router, path: &str) -> StatusCode {
+        app.oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn a_route_with_no_policy_row_is_denied_not_served() {
+        let app = app("/not/in/the/table", AuthzMode::Enforced, true);
+        assert_eq!(
+            status(app, "/not/in/the/table").await,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_route_is_denied_even_without_a_session_check() {
+        let app = app("/not/in/the/table", AuthzMode::DevelopmentBypass, false);
+        assert_eq!(
+            status(app, "/not/in/the/table").await,
+            StatusCode::NOT_FOUND,
+            "the development bypass skips decisions, not the table: a route with no row is a bug"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_rows_are_served_without_a_session() {
+        let app = app("/health/live", AuthzMode::Enforced, false);
+        assert_eq!(status(app, "/health/live").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_authenticated_row_needs_a_session() {
+        let without = app("/me", AuthzMode::Enforced, false);
+        assert_eq!(status(without, "/me").await, StatusCode::UNAUTHORIZED);
+        let with = app("/me", AuthzMode::Enforced, true);
+        assert_eq!(status(with, "/me").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn outside_development_nothing_but_open_rows_is_served_without_authentication() {
+        let refused = app("/me", AuthzMode::Refused, false);
+        assert_eq!(
+            status(refused, "/me").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let open = app("/health/live", AuthzMode::Refused, false);
+        assert_eq!(status(open, "/health/live").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_development_bypass_serves_listed_routes() {
+        let bypass = app("/me", AuthzMode::DevelopmentBypass, false);
+        assert_eq!(status(bypass, "/me").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_platform_operator_row_denies_every_user() {
+        let app = Router::new()
+            .route("/settings", axum::routing::patch(|| async { "reached" }))
+            .layer(from_fn_with_state(
+                Pep {
+                    mode: AuthzMode::Enforced,
+                    state: lazy_state(),
+                    registered: registered("/settings"),
+                },
+                enforce,
+            ))
+            .layer(axum::middleware::from_fn(
+                |mut request: Request<Body>, next: axum::middleware::Next| async move {
+                    request.extensions_mut().insert(session());
+                    next.run(request).await
+                },
+            ));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn mode_follows_authentication_and_environment() {
+        assert_eq!(AuthzMode::for_runtime(true, false), AuthzMode::Enforced);
+        assert_eq!(AuthzMode::for_runtime(true, true), AuthzMode::Enforced);
+        assert_eq!(
+            AuthzMode::for_runtime(false, true),
+            AuthzMode::DevelopmentBypass
+        );
+        assert_eq!(AuthzMode::for_runtime(false, false), AuthzMode::Refused);
+    }
+}

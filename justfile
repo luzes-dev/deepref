@@ -93,6 +93,7 @@ infra-down:
 [group('Quality & Formatting')]
 verify:
     cargo xtask boundaries
+    cargo xtask authz-matrix
     sentrux check .
     sentrux gate .
     cargo fmt --all -- --check

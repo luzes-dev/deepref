@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod authz;
 pub mod config;
 pub mod error;
 mod host_guard;

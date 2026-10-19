@@ -298,6 +298,17 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             })
         })
         .layer(axum::middleware::from_fn_with_state(
+            crate::authz::Pep {
+                mode: crate::authz::AuthzMode::for_runtime(
+                    config.runtime.auth_enabled,
+                    config.runtime.environment.is_development(),
+                ),
+                state: state.clone(),
+                registered: Arc::new(crate::authz::matrix::router_routes()),
+            },
+            crate::authz::enforce,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
             crate::auth::SessionGate {
                 enabled: config.runtime.auth_enabled,
                 state: state.clone(),

@@ -15,6 +15,8 @@ use deepref_config::PublicOrigin;
 pub(crate) use cookies::{
     CookiePolicy, LOGIN_COOKIE_MAX_AGE_SECS, SESSION_COOKIE_MAX_AGE_SECS, read_cookie,
 };
+#[cfg(test)]
+pub(crate) use session::is_session_exempt;
 pub use session::{AuthenticatedPrincipal, CurrentSession, SessionContext};
 pub(crate) use session::{SessionGate, authenticate_requests};
 

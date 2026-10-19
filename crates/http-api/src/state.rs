@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use deepref_ai::{AiGateway, RoutedGateway};
+use deepref_app::authorization::{DenialAuditor, PostgresAuthorizationStore};
+use deepref_application::authorization::{Authorizer, PolicyDecisionPoint};
 use deepref_documents::DocumentStore;
 use sqlx::PgPool;
 
@@ -27,11 +29,26 @@ pub struct AppState {
     pub smtp: deepref_config::SmtpConfig,
     pub integrations: deepref_config::IntegrationsConfig,
     pub auth: Option<AuthRuntime>,
+    /// The central policy decision point every enforcement point asks.
+    pub authorizer: Arc<dyn Authorizer>,
+    /// Bounded audit of authorization denials.
+    pub denials: Arc<DenialAuditor>,
+    /// How often an open stream re-checks that its principal may still view
+    /// the project. A revoked member's stream ends within this interval.
+    pub stream_recheck: std::time::Duration,
 }
+
+/// Default for [`AppState::stream_recheck`].
+pub const DEFAULT_STREAM_RECHECK: std::time::Duration = std::time::Duration::from_secs(20);
 
 impl AppState {
     pub fn new(pool: PgPool) -> Self {
         Self {
+            authorizer: Arc::new(PolicyDecisionPoint::new(PostgresAuthorizationStore::new(
+                pool.clone(),
+            ))),
+            denials: Arc::new(DenialAuditor::new(pool.clone())),
+            stream_recheck: DEFAULT_STREAM_RECHECK,
             pool,
             started_at: Instant::now(),
             document_store: None,
@@ -44,6 +61,18 @@ impl AppState {
             integrations: deepref_config::IntegrationsConfig::default(),
             auth: None,
         }
+    }
+
+    /// Replaces the policy decision point. Tests use it to count decisions.
+    pub fn with_authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
+        self.authorizer = authorizer;
+        self
+    }
+
+    /// Sets how often open streams re-check their principal.
+    pub fn with_stream_recheck(mut self, interval: std::time::Duration) -> Self {
+        self.stream_recheck = interval;
+        self
     }
 
     pub fn with_workflow_config(mut self, workflow: deepref_config::WorkflowConfig) -> Self {
