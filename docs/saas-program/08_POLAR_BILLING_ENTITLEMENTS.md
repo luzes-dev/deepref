@@ -4,17 +4,15 @@
 
 Integrate Polar as DeepRef's Merchant of Record and commercial system while keeping runtime authorization and entitlements local.
 
-Read `00_PROGRAM.md`. Complete handoffs 01, 02 and 03. Handoff 04 should be available for durable provider synchronization.
+Read `00_PROGRAM.md`. Complete handoffs 01 and 02, all of handoff 03 (03a, 03b and 03c as one release gate), and handoff 04a in `04_NATS_OUTBOX_FOUNDATION.md`.
 
-## Blocking production gate
+## Commercial readiness gate
 
-As of the architecture decision, Polar's published payout-country support did not include Brazil.
+Resolve Polar payout eligibility for the actual seller/legal entity in Brazil before this handoff starts substantial work. Small Polar Sandbox spikes may proceed while the gate is unresolved.
 
-Before enabling live production billing, verify current Polar payout eligibility for the actual legal seller/entity.
+Treat this as a business decision, not an engineering workaround. Record the decision before proceeding with substantial billing work.
 
-Development against Polar Sandbox may proceed before that business gate is resolved.
-
-Do not create a foreign legal entity as part of this engineering task.
+Do not create a foreign legal entity as part of this work.
 
 ## Responsibility split
 
@@ -60,6 +58,8 @@ Never bill a project or individual user as the primary product tenant.
 Do not add a JavaScript billing sidecar.
 
 Use a small Rust integration adapter through Polar's current versioned REST API.
+
+Keep the adapter behind a DeepRef-owned billing provider port. Do not make Polar's API or data types the domain/application contract; no alternative provider is mandated.
 
 Prefer existing `reqwest`, `serde`, `thiserror` and secret-handling infrastructure.
 
@@ -145,7 +145,7 @@ The caller chooses a DeepRef workspace. Server-side state determines the Polar c
 
 ## Polar webhooks
 
-Use the shared integration inbox.
+Use the PostgreSQL integration inbox from 04a in `04_NATS_OUTBOX_FOUNDATION.md`. Webhook receipt and processing must not depend on NATS.
 
 Flow:
 
@@ -163,6 +163,33 @@ Subscribe only to event families DeepRef consumes.
 Do not assume webhook ordering.
 
 Reconcile state from provider objects/customer state when ordering ambiguity requires it.
+
+## Privacy and data responsibilities
+
+Apply Brazil's LGPD to DeepRef's billing data. Polar handles Merchant-of-Record functions such as checkout, invoices and tax; DeepRef remains responsible for Workspace identity, local billing projections, entitlement/usage data, export and deletion. Record and confirm the parties' LGPD legal roles, processing purposes and notices; Merchant-of-Record duties do not remove DeepRef's responsibilities for its own processing.
+
+Minimize personal data sent to Polar:
+
+```text
+WorkspaceId as external customer identity where supported
+billing email only when a Polar flow requires it
+no workspace member roster or scientific data
+```
+
+Treat webhook payloads and billing email as personal data. Keep provider data inside the integration boundary, restrict access to billing projections, and do not copy payloads or personal data into logs unnecessarily.
+
+Include the local billing projection in workspace data export. On workspace deletion, remove or anonymize workspace-linked billing data unless legal retention requires a record to remain. Keep any legally required billing record restricted and detached from the deleted workspace's active product data; delete it when its retention period ends. Define how DeepRef requests provider-side closure or deletion where applicable.
+
+Resolve and record these policy decisions before substantial billing work:
+
+```text
+LGPD roles, processing purposes and notice
+Polar customer fields and when billing email is required
+billing projection and integration-inbox retention periods
+workspace export fields and deletion/anonymization behavior
+legal-retention fields, access, duration and expiry/deletion process
+provider-side closure/deletion responsibility
+```
 
 ## Polar Customer State
 
@@ -183,6 +210,8 @@ Polar may own customer-facing commercial credit balances.
 Do not yet use Polar's live credit lookup as the hard concurrency boundary.
 
 The AI hard-limit implementation belongs to handoff 09.
+
+Use the immutable per-usage identity defined in `09_AI_USAGE_RESERVATION_METERING.md` for each usage fact exported to Polar. Verify Polar ingestion, correction and billing-period semantics there before enabling retries or aggregation.
 
 ## Benefits
 
@@ -224,17 +253,21 @@ Use Polar Sandbox.
 
 Cover:
 
+- provider port behavior with a fake implementation; entitlements constructible without Polar;
 - customer provisioning idempotency;
+- outbound customer data minimization, including billing email only when required;
 - workspace-to-customer isolation;
 - checkout authorization;
 - portal authorization;
-- duplicate webhook;
+- duplicate webhook through the 04a PostgreSQL integration inbox;
 - bad signature;
 - subscription activation/cancellation projection;
 - benefit to entitlement mapping;
+- workspace export includes billing projections;
+- workspace deletion applies recorded retention policy and preserves legally retained billing records;
 - Polar outage while existing entitlements are read;
 - reconciliation repairing a missed webhook.
 
 ## Completion criterion
 
-A workspace can subscribe and manage billing through Polar Sandbox, DeepRef derives local runtime entitlements from synchronized commercial state, and no normal authorization or feature check requires a Polar network call.
+The commercial readiness gate, including payout eligibility and LGPD policy decisions, is resolved before substantial billing work. A workspace can subscribe and manage billing through Polar Sandbox; the Polar adapter stays behind a DeepRef-owned port, webhooks use the 04a PostgreSQL integration inbox, personal data sent to Polar is minimized, and workspace export/deletion follows the recorded retention policy. DeepRef derives local runtime entitlements from synchronized commercial state, and no normal authorization or feature check requires a Polar network call.

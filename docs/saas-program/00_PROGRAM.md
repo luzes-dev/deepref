@@ -8,6 +8,8 @@ The goal is to evolve DeepRef into a private multi-user SaaS without turning the
 
 ## Target architecture
 
+This is the full target. NATS JetStream and Valkey appear here because they are the selected technologies; they enter the system only when their triggers fire. The launch milestone runs on PostgreSQL and object storage alone.
+
 ```text
                          Load balancer
                               |
@@ -57,13 +59,13 @@ Treat these as requirements unless a later explicit product decision replaces th
 - Keep one modular Rust application and repository.
 - Do not split domain contexts into independently deployed microservices.
 - PostgreSQL remains authoritative for scientific, transactional, tenancy, authorization, billing-projection, usage-ledger and durable-run state.
-- NATS JetStream is durable asynchronous transport, not authoritative state.
-- Valkey holds only disposable or reconstructable state.
+- NATS JetStream is the selected durable asynchronous transport, not authoritative state. Adopt it when `T-NATS` fires (see "Adoption triggers"). Until then PostgreSQL carries the work and the outbox/inbox contracts stay broker-independent.
+- Valkey is the selected store for disposable or reconstructable state. Adopt it when `T-VALKEY` fires. It never holds authoritative state.
 - S3-compatible object storage holds large blobs and artifacts.
-- Use transactional outbox for database-to-message publication.
+- Use a transactional outbox for database-to-message publication, and a PostgreSQL integration inbox for inbound provider events. Both are broker-independent.
 - Assume at-least-once delivery. Make consumers idempotent and retain database fencing for consequential work.
 - Keep `durable_runs`, `durable_steps` and `durable_attempts` authoritative in PostgreSQL.
-- Use selective CQRS. Commands keep normalized authoritative state. Add read models only for expensive, frequent, cross-context queries that tolerate bounded staleness.
+- Use selective CQRS. Commands keep normalized authoritative state. Add read models only for expensive, frequent, cross-context queries that tolerate bounded staleness, once `T-CQRS` fires.
 - WorkOS authenticates. DeepRef authorizes.
 - Polar owns commercial state. DeepRef keeps local operational entitlement projections.
 - Workspace is the tenant and billing boundary.
@@ -73,6 +75,7 @@ Treat these as requirements unless a later explicit product decision replaces th
 - Polar usage is downstream of the DeepRef usage ledger.
 - Do not pursue exactly-once messaging. Use idempotency, fencing and replay-safe state transitions.
 - Do not add Kafka, Redpanda, RabbitMQ, Elasticsearch/OpenSearch, ClickHouse, Cassandra, Temporal or a graph database without a measured requirement.
+- Do not adopt NATS, Valkey or asynchronous read models before their written trigger fires.
 
 ## Existing architecture to preserve
 
@@ -92,40 +95,64 @@ Refactor these foundations. Do not replace them with a second orchestration syst
 
 ## Program dependency graph
 
+Launch path (first paying workspace):
+
 ```text
 01 runtime/config foundation
  |\
- | +------> 04 NATS/outbox foundation ----> 05 worker transport migration
- |                                         |\
- v                                         | +--> 06 Valkey
-02 WorkOS identity                         | +--> 10 selective CQRS
+ | +--> 04a PostgreSQL outbox + integration inbox --> 05a execution/transport split
+ | |                                                   (pools, batch claim, typed job scope)
+ | +--> 07 object storage (parallel with 02, 03)
+ v
+02 WorkOS identity
  |
  v
-03 tenancy + authorization ----------------+------> 08 Polar billing
- |                                                |
- |                                                v
- +-------------------------------------------> 09 AI usage/metering
+03a workspace tables + project backfill
  |
- +-------------------------------------------> 11 API keys/audit/docs
+ v
+03b central authorization (PDP/PEP, coverage matrix)
+ |
+ v
+03c principal -> actor + scientific identity continuity       (03a+b+c ship as one release gate)
+ |
+ +---- business gate: Polar payout eligibility + LGPD policy ----+
+ |                                                               v
+ |                                                         08 Polar billing
+ |                                                               |
+ +-------------------------------------> 09 AI usage ------------+
+ |                                       (needs 05a; Polar export needs 08)
+ +--> 11 Part B audit (starts in 02/03) and Part C docs
+ |
+ +--> 12 operations acceptance (starts with 01, closes last)
+```
 
-07 object storage productionization may run after 01 and in parallel with 02-06.
+Trigger-gated after launch:
+
+```text
+04a --> 04b NATS adapter + relay      [T-NATS]
+05a + 04b --> 05b JetStream WorkTransport cutover   [T-NATS]
+03 --> 06 Valkey shared admission controls          [T-VALKEY]
+03 (+ 04a for async projections) --> 10 selective CQRS read models   [T-CQRS]
+03 --> 11 Part A API keys               (unless a product requirement pulls it into launch)
 ```
 
 Suggested implementation order:
 
 1. `01_RUNTIME_CONFIG_FOUNDATION.md`
-2. `02_WORKOS_IDENTITY.md`
-3. `03_TENANCY_AUTHORIZATION.md`
-4. `04_NATS_OUTBOX_FOUNDATION.md`
-5. `05_WORKER_TRANSPORT_MIGRATION.md`
-6. `06_VALKEY_EPHEMERAL_INFRA.md`
-7. `07_OBJECT_STORAGE_PRODUCTION.md`
-8. `08_POLAR_BILLING_ENTITLEMENTS.md`
-9. `09_AI_USAGE_RESERVATION_METERING.md`
-10. `10_SELECTIVE_CQRS_READ_MODELS.md`
-11. `11_API_KEYS_AUDIT_DOCS.md`
+2. `02_WORKOS_IDENTITY.md`, with `04_NATS_OUTBOX_FOUNDATION.md` part 04a and `07_OBJECT_STORAGE_PRODUCTION.md` alongside
+3. `03_TENANCY_AUTHORIZATION.md`: 03a, then 03b, then 03c
+4. `05_WORKER_TRANSPORT_MIGRATION.md` phase 05a
+5. Business gate: Polar payout eligibility for the actual legal entity and the LGPD privacy/retention/export/deletion policy
+6. `08_POLAR_BILLING_ENTITLEMENTS.md`
+7. `09_AI_USAGE_RESERVATION_METERING.md`
+8. `11_API_KEYS_AUDIT_DOCS.md` Parts B and C
+9. `12_OPERATIONS_ACCEPTANCE.md`
+10. Launch milestone
+11. After launch, as triggers fire: 04b, 05b, 06, 10, 11 Part A
 
-Steps 02 and 04 can proceed in parallel after 01. Step 07 can also proceed independently after 01.
+Step 02 and step 04a proceed in parallel after 01; WorkOS webhook consumers wait for the 04a inbox. Step 07 proceeds independently after 01 and runs alongside 02 and 03. Step 12 starts with 01 (deployment ownership, CI services) and closes after everything else in the launch set. 11 Part B audit begins in 02 and 03 and 11 owns the remaining coverage and query/retention.
+
+The commercial readiness gate is a business decision, not a code task. Resolve it before 08 starts, not just before live billing: it can change the merchant of record, the plan structure and the data-handling design 08 builds on.
 
 ## Cross-cutting rules
 
@@ -151,7 +178,7 @@ as a correctness boundary.
 
 ### Messaging
 
-JetStream messages should usually carry stable identifiers and routing metadata, not a second copy of authoritative aggregate state.
+Outbox events and JetStream messages (once 04b ships) should usually carry stable identifiers and routing metadata, not a second copy of authoritative aggregate state.
 
 Example:
 
@@ -218,10 +245,67 @@ unless that dependency is already part of the repository's explicit persistence 
 
 Each handoff must add tests for its own failure modes. Do not defer all distributed-systems testing to the end.
 
+### Tenant isolation
+
+Tenant isolation is proven, not asserted. 03b owns a route/resource coverage matrix covering reads, writes, streams, downloads and machine principals. Every row has a foreign-workspace test. A new route or resource without a matrix row fails CI. Every later handoff that adds a tenant-owned resource or route adds its rows.
+
+### Scientific identity continuity
+
+Canonicalizing identities must not make a previously exposed or previously deciding reviewer appear fresh. 03c owns this invariant against the textual actor IDs compared in `crates/app/migrations/0055_ai_first_blind_controls.sql`. It is launch-blocking: no workspace is released to paying users until 03c's continuity tests pass. Historical provenance stays unchanged.
+
+### Usage accounting
+
+AI usage accounting must never warn and continue. A failed ledger write, a failed reservation or a failed settlement either blocks the operation or leaves a recoverable record that reconciliation settles. 09 owns this rule. It replaces the log-and-ignore behavior in `crates/ai/src/usage.rs` and `crates/ai/src/runtime/hooks.rs`.
+
 ### Documentation
 
 Normative docs must describe the architecture after each cutover. Historical review documents remain historical and should be marked non-normative rather than rewritten.
 
+## Adoption triggers
+
+NATS, Valkey and asynchronous read models are selected but not scheduled. Each is adopted when its trigger fires. Handoffs reference triggers by name. Fill in `TBD` values before the launch milestone; a trigger with no threshold cannot fire.
+
+| Trigger    | Metric                                                                                          | Threshold | Measurement window | Owner |
+| ---------- | ----------------------------------------------------------------------------------------------- | --------- | ------------------ | ----- |
+| `T-NATS`   | Enqueue-to-claim p95 latency                                                                    | TBD       | TBD                | TBD   |
+| `T-NATS`   | Database CPU attributable to claim queries                                                      | TBD       | TBD                | TBD   |
+| `T-NATS`   | Worker replica count                                                                            | TBD       | TBD                | TBD   |
+| `T-NATS`   | Demonstrated event fan-out or replay need: an independent consumer that needs retained delivery | TBD       | TBD                | TBD   |
+| `T-VALKEY` | A limiter that must be shared across API replicas                                               | TBD       | TBD                | TBD   |
+| `T-VALKEY` | Measured cross-replica limit drift with per-process limiters                                    | TBD       | TBD                | TBD   |
+| `T-CQRS`   | Profiled query cost and frequency of a cross-context read                                       | TBD       | TBD                | TBD   |
+
+Any one `T-NATS` row firing is enough to start 04b and 05b. The same holds for `T-VALKEY` and 06. `T-CQRS` is per read model: each candidate query needs its own profile before 10 builds a projection for it.
+
+## Launch milestone
+
+Launch is the first paying workspace. It does not require the full target architecture.
+
+Required handoffs:
+
+```text
+01  runtime/config foundation
+02  WorkOS identity
+03  tenancy + authorization (03a, 03b, 03c as one release gate)
+04a PostgreSQL outbox + integration inbox
+05a PostgreSQL-first execution/transport separation
+07  object storage productionization
+08  Polar billing + entitlements
+09  AI usage reservation + metering
+11  Part B (audit) and Part C (docs)
+12  operations acceptance
+```
+
+Launch also requires the commercial readiness gate (Polar payout eligibility for the actual legal entity; LGPD privacy, retention, export and deletion policy) to be resolved before 08 starts.
+
+Not required for launch, adopted when a trigger fires or a product requirement pulls them in: 04b, 05b, 06, 10 and 11 Part A (API keys).
+
+## Review history
+
+`REVIEW_AGREEMENT.md` records the review that produced this revision of the handoffs and the repository facts behind it.
+
 ## Program completion criterion
+
+This is the full target architecture, reached after launch as triggers fire.
 
 The program is complete when DeepRef can scale API and worker processes horizontally, isolate workload classes, lose NATS or Valkey without losing authoritative scientific or financial state, authenticate and authorize real users and workspaces, bill through Polar, enforce hard AI limits locally, and serve expensive dashboards from bounded-staleness projections where appropriate, all while remaining one coherent modular application.

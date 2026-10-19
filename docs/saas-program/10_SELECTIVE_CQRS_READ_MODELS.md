@@ -6,7 +6,7 @@ Separate expensive read concerns from command-side transactional models where pr
 
 Do not implement full CQRS or event sourcing.
 
-Read `00_PROGRAM.md`. Complete handoff 04. Handoff 05 should be available before production projection workloads are moved to JetStream.
+Read `00_PROGRAM.md`. This handoff is trigger-gated by `T-CQRS`: work starts only after a specific read has a measured profile, and after 03 for every projection. Complete handoff 04 (04a for asynchronous projections) before relying on transport. Handoff 05 should be available before production projection workloads are moved to JetStream.
 
 ## Definition
 
@@ -41,6 +41,22 @@ Choose the first projections based on measured query complexity/frequency or obv
 
 Do not create a read model for `GET report by id`.
 
+## Prefer same-transaction projections first
+
+Update a read model inside the command's transaction when that is cheap. `docs/architecture.md` ("Data and event planes") records the precedent: the v2 screening command writes its event, state projection and project lifecycle status in one transaction, and PRISMA is a live deterministic projection of canonical relational state; graph metrics are recomputed after imports and later ingestions.
+
+Same-transaction projections need no worker, no lag budget and no freshness plumbing, so they stay the default. They are still derived state and must remain rebuildable from authoritative tables.
+
+An asynchronous projection needs a demonstrated benefit:
+
+```text
+measured fan-out
+an independent consumer that needs retained delivery
+recomputation too expensive to run on the write path
+```
+
+Absent one of those, keep the projection synchronous.
+
 ## Application separation
 
 Clarify application-level command/query seams.
@@ -60,14 +76,28 @@ When authoritative changes should update an asynchronous projection:
 
 ```text
 transaction writes authoritative state
-transaction writes outbox event
-JetStream delivers projection event
+transaction writes outbox event (04a)
+04a outbox dispatcher delivers the projection event
 projection worker updates read model
 ```
+
+Until `T-NATS` fires, the 04a outbox dispatcher is the transport. Afterwards the same rows are relayed by 04b and delivered through JetStream (05b `WorkTransport`). The projection contract does not change across that cutover.
 
 Projection handlers are idempotent.
 
 Where a projection can be calculated cheaply from authoritative tables after an event, the message may carry only IDs.
+
+## Asynchronous projection gate
+
+An asynchronous projection ships only when all three hold:
+
+```text
+tenant isolation      every write and read scoped to a workspace; foreign-workspace rows unreachable
+rebuildability        a rebuild path exists and is exercised by a test
+explicit freshness    the read exposes fresh/lagging/rebuilding/failed state to the API/UI
+```
+
+Do not ship a projection that lacks any of the three, however clear the measured benefit.
 
 ## Read-model storage
 
@@ -138,7 +168,7 @@ Security-sensitive authorization and immediate write-after-read decisions stay o
 
 ## Projection workload isolation
 
-Use a dedicated JetStream subject/consumer pool for projection work.
+Run projection work in a dedicated `projection` workload pool (05a). Once the transport is JetStream (04b/05b), give that pool its own subject and consumer.
 
 A dashboard rebuild must not starve:
 
@@ -154,13 +184,15 @@ Cover:
 
 - idempotent projection event;
 - duplicate/out-of-order event where relevant;
+- same-transaction projection committed and rolled back with its command;
+- asynchronous projection gate: tenant scope, rebuild path and freshness state present before it ships;
 - projection lag;
 - rebuild from authoritative state;
 - read model corruption followed by rebuild;
 - write then strict read path;
 - projection worker outage;
 - projection catches up after restart;
-- tenant isolation.
+- tenant isolation for every projection read and write.
 
 ## Out of scope
 
@@ -179,4 +211,4 @@ unless profiling demonstrates a separate requirement.
 
 ## Completion criterion
 
-DeepRef has a small number of justified, rebuildable read models for expensive aggregate queries, command correctness remains in normalized PostgreSQL state, and projection lag or failure cannot corrupt scientific truth.
+DeepRef has a small number of justified, rebuildable read models for expensive aggregate queries, cheap aggregates are maintained inside the command transaction instead of asynchronously, every asynchronous projection is tenant-scoped, rebuildable and freshness-aware, command correctness remains in normalized PostgreSQL state, and projection lag or failure cannot corrupt scientific truth.

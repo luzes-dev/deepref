@@ -55,7 +55,7 @@ pub enum Environment {
 }
 ```
 
-`APP_ENV` must be explicit.
+`APP_ENV` must be explicit. A missing `APP_ENV` is a startup error, not a fallback. It must never default to `Development`; if any default is retained it stays fail-closed (`Production`), preserving the direction of `Environment::from_app_env` in `crates/config/src/environment.rs`, where an unset variable resolves to production today.
 
 Accepted aliases may include:
 
@@ -132,6 +132,8 @@ ValkeyConfig
 ObjectStorageConfig
 ```
 
+NATS and Valkey configuration is optional and inert until `T-NATS` and `T-VALKEY` fire (see 00). Nothing reads it, and its absence is not a startup error.
+
 Configuration should be injectable in tests.
 
 Avoid global environment reads outside `deepref-config`.
@@ -175,7 +177,7 @@ Do not implement:
 
 Cover at minimum:
 
-- missing `APP_ENV`;
+- missing `APP_ENV` never yields `Development` and still fails closed;
 - development config;
 - production config;
 - production refusing development-only unsafe settings;
@@ -187,4 +189,4 @@ Run architecture/configuration test suites and the repository's normal verificat
 
 ## Completion criterion
 
-The task is complete when the executable runtime has only `development` and `production`, configuration can describe every later infrastructure dependency without coupling domain code to providers, production fails closed on unsafe configuration, and no live executable path depends on the removed `Local` or `Staging` environment variants.
+The task is complete when the executable runtime has only `development` and `production`, configuration can describe every later infrastructure dependency without coupling domain code to providers, production fails closed on unsafe configuration, a missing `APP_ENV` never resolves to development, and no live executable path depends on the removed `Local` or `Staging` environment variants.

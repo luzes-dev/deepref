@@ -4,7 +4,11 @@
 
 Finish the SaaS foundation by adding machine identity, account/security audit, and removing obsolete self-hosted/single-user documentation and code assumptions.
 
-Read `00_PROGRAM.md`. Complete handoffs 02 and 03. Billing-specific audit coverage assumes handoff 08.
+Read `00_PROGRAM.md`. Complete handoffs 01, 02, and 03. Billing-specific audit coverage assumes handoff 08.
+
+Parts B and C are launch-required. Administrative audit schema creation and baseline audit events begin in 02 (`auth.*` events) and 03 (`workspace.*`, `project.*` membership/role/permission events, and bounded denial events). Part B here extends audit coverage (billing and API key events), defines retention, provides query access for incident response, and bounds denial-event volume. Part C removes obsolete self-hosted and single-user documentation and code assumptions across the repository.
+
+Part A (API keys and service principals) is trigger-gated after launch unless an explicit product requirement pulls it into the launch milestone.
 
 ## Part A: API keys and service principals
 
@@ -73,12 +77,16 @@ Do not create a second authorization implementation for API keys.
 
 Create an append-only administrative/security audit stream separate from scientific provenance.
 
+Administrative audit table creation and foundational event emission begin in 02 (`auth.*` events) and 03 (`workspace.*`, `project.*` membership/role/permission events, and initial `authorization.denied` events). Part B extends coverage across the system, establishes retention, bounds denial volume, and provides incident-response query access.
+
 Candidate events:
 
 ```text
 auth.login
 auth.logout
 auth.session_revoked
+user.provisioned
+user.deactivated
 
 workspace.created
 workspace.member_invited
@@ -123,7 +131,25 @@ payment-card data
 raw provider credentials
 ```
 
-Audit events should be queryable for incident response without becoming part of scientific exports unless explicitly required.
+### Denial-event volume bounding
+
+Bound `authorization.denied` and authentication rejection events via rate limiting, sampling, or windowed deduplication. Repeated denial storms or credential attacks must not saturate audit storage or degrade database availability.
+
+### Retention and query access
+
+Define an explicit retention policy for administrative audit rows (e.g. 90-day hot query window in PostgreSQL, with automated archival or purge of expired records).
+
+Provide indexed query capabilities for incident response filtered by:
+
+```text
+workspace
+principal
+target
+event type
+timestamp range
+```
+
+Audit events must remain separate from scientific research exports unless explicitly requested for compliance.
 
 ## User deletion
 
@@ -265,9 +291,13 @@ Cover:
 - service principal cannot impersonate human;
 - API key secret never appears in logs;
 - security audit records key lifecycle without secret;
+- denial-event volume bounding under flood/attack conditions;
+- administrative audit query filtering by workspace, principal, and time range;
+- audit retention pruning and archival;
+- administrative audit excluded from scientific research exports;
 - user deactivation preserves history;
 - repository search/contract tests for obsolete deployment language where practical.
 
 ## Completion criterion
 
-DeepRef has a first-class machine identity model using the same authorization system as humans, administrative actions are auditable without exposing secrets, and normative code/docs consistently describe the new private SaaS and distributed-infrastructure architecture.
+Administrative actions across identity, workspace membership, billing and credentials are comprehensively audited with bounded denial volume and incident-response query access; normative code/docs consistently describe the new private SaaS architecture; and machine identity is supported through central authorization when enabled.

@@ -4,9 +4,25 @@
 
 Ensure large documents and artifacts use S3-compatible object storage in production instead of turning PostgreSQL into blob storage.
 
-Read `00_PROGRAM.md` and complete handoff 01 first.
+Read `00_PROGRAM.md` and complete handoff 01 first. This handoff runs alongside 02 and 03; its production cutover requires the 03 tenancy gate (authorization before object access).
 
 The repository already has an object-store abstraction. Extend and standardize it rather than introducing a second storage layer.
+
+## Blob inventory and database migration
+
+Audit existing PostgreSQL schemas for binary and oversized text payloads:
+
+- `workflow_files.content bytea` up to 16 MiB in `crates/app/migrations/0028_workflow_engine.sql` must move to object storage.
+- Grep `crates/app/migrations/` for other `bytea` or large text columns that store raw file bodies.
+
+Migration sequence for `workflow_files`:
+
+```text
+1. Expand: add object storage reference columns (storage key, sha256 hash, byte size) to workflow_files while keeping content nullable.
+2. Dual-write: write new files to object storage and populate metadata columns; fall back to reading content bytea if storage key is null.
+3. Backfill: run an idempotent background task reading content bytea, writing to object storage, verifying sha256 hash against written bytes, and setting storage key.
+4. Contract: drop content bytea in a subsequent release once all rows reference verified objects (see 12_OPERATIONS_ACCEPTANCE.md).
+```
 
 ## Scope
 
@@ -109,12 +125,17 @@ Do not migrate small relational JSON fields or normalized scientific data merely
 
 Do not introduce a separate document microservice.
 
+Assistant SSE (`crates/http-api/src/routes/assistant/run_events.rs`) replays persisted events from PostgreSQL and already spans API replicas, so no pub/sub is needed for event streams.
+
 ## Tests
 
 Cover:
 
 - tenant isolation;
 - unauthorized signed-URL request;
+- workflow_files staged backfill to object storage with sha256 hash verification;
+- expand/contract dual-write and fallback read when storage key is null;
+- backfill task idempotency and resume after interruption;
 - failed upload;
 - DB commit failure after upload;
 - deletion retry;
@@ -124,4 +145,4 @@ Cover:
 
 ## Completion criterion
 
-Production PostgreSQL stores document/artifact metadata and provenance rather than large binary payloads, while object access remains tenant-authorized, integrity-checked and recoverable after partial failures.
+Production PostgreSQL stores document/artifact metadata and provenance rather than large binary payloads, `workflow_files.content` has migrated safely to object storage via verified backfill and expand/contract, while object access remains tenant-authorized, integrity-checked and recoverable after partial failures.
