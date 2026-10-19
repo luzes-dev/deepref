@@ -945,7 +945,7 @@ async fn begin_node_attempt(
                     .await
                     .expect("next node claim")
                     .expect("node scheduled");
-            assert_eq!(claimed.project_id, run.snapshot.project_id);
+            assert_eq!(claimed.project_id(), Some(run.snapshot.project_id));
             *lease = claimed.lease(lease.owner.clone());
             begin_review_attempt(pool, run, review, node, predecessors, lease)
                 .await

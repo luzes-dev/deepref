@@ -98,7 +98,7 @@ async fn claimed_job(
     .ok_or_else(|| anyhow::anyhow!("expected automation job to be claimable"))?;
     Ok(deepref_application::jobs::ClaimedJob {
         id: row.get("id"),
-        project_id: ProjectId::new(row.get("project_id")),
+        scope: deepref_application::jobs::JobScope::Project(ProjectId::new(row.get("project_id"))),
         kind: row.get::<String, _>("kind").parse()?,
         payload: row.get("payload"),
         attempts: row.get("attempts"),

@@ -715,11 +715,13 @@ async fn schedule_review_node(
     .execute(&mut **tx)
     .await?;
     sqlx::query(
-        "INSERT INTO jobs(id,project_id,kind,payload,max_attempts,dedupe_key)
-        VALUES($1,$2,'durable_run_step',$3,5,$4) ON CONFLICT(dedupe_key) DO NOTHING",
+        "INSERT INTO jobs(id,project_id,kind,workload_class,payload,max_attempts,dedupe_key)
+        VALUES($1,$2,$3,$4,$5,5,$6) ON CONFLICT(dedupe_key) DO NOTHING",
     )
     .bind(Uuid::new_v4())
     .bind(project_id.as_uuid())
+    .bind(crate::durable_runs::DURABLE_RUN_STEP_JOB_KIND)
+    .bind(crate::durable_runs::DURABLE_RUN_STEP_WORKLOAD_CLASS)
     .bind(serde_json::json!({"run_id":run_id.as_uuid(),"step_id":step_id,"handler_kind":"review"}))
     .bind(format!("durable_review_step:{step_id}"))
     .execute(&mut **tx)

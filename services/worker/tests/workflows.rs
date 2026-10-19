@@ -54,7 +54,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             return;
         };
         assert_eq!(
-            job.project_id.as_uuid(),
+            job.project_id().expect("project-scoped test job").as_uuid(),
             project,
             "unexpected job from another project"
         );
@@ -480,7 +480,13 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
         .await
         .expect("claim")
         .expect("the test step is queued");
-    assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
+    assert_eq!(
+        claim
+            .project_id()
+            .expect("project-scoped test job")
+            .as_uuid(),
+        project.as_uuid()
+    );
     let node_run_id =
         Uuid::parse_str(claim.payload["step_id"].as_str().expect("payload")).expect("uuid");
     assert!(matches!(
@@ -547,7 +553,13 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
         .await
         .expect("claim")
         .expect("the notification step is queued");
-    assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
+    assert_eq!(
+        claim
+            .project_id()
+            .expect("project-scoped test job")
+            .as_uuid(),
+        project.as_uuid()
+    );
     let node_run_id =
         Uuid::parse_str(claim.payload["step_id"].as_str().expect("payload")).expect("uuid");
     match begin_node_execution(pool, node_run_id, &claim.lease("wait-test"))

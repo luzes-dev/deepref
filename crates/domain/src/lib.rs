@@ -15,7 +15,7 @@ mod reference;
 mod work;
 
 pub use ingestion::{IngestionItemStatus, IngestionStatus};
-pub use jobs::{InvalidJobKind, JobKind};
+pub use jobs::{InvalidJobKind, InvalidWorkloadClass, JobKind, WorkloadClass};
 pub use provider::{InvalidProviderKind, ProviderKind};
 pub use reference::Reference;
 pub use work::{FetchStatus, Work, WorkWithReferences};
@@ -70,6 +70,10 @@ macro_rules! typed_id {
 }
 
 typed_id!(ProjectId);
+// Workspace (tenant) identity. The typed ID exists ahead of the workspace
+// tables of handoff 03a so scoped durable work can name its tenant without a
+// placeholder project; 03a attaches the tables and the foreign keys.
+typed_id!(WorkspaceId);
 typed_id!(ProtocolVersionId);
 typed_id!(ExclusionReasonId);
 

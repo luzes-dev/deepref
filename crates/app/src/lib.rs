@@ -156,8 +156,9 @@ pub use graph::{
     MAX_GRAPH_NODES, enqueue_metrics_recompute, load_project_graph, recompute_project_metrics,
 };
 pub use jobs::{
-    PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
-    recover_expired_jobs, renew_job,
+    PostgresClaimTransport, PostgresDurableExecutionStore, claim_job, claim_jobs, complete_job,
+    enqueue_job, enqueue_job_pool, fail_job, job, recover_expired_jobs, release_job, renew_job,
+    scoped_job,
 };
 pub use notifications::{
     MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,

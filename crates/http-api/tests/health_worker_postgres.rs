@@ -76,8 +76,8 @@ async fn dependencies_report_live_workers_from_heartbeats() {
         .await
         .expect("project");
     sqlx::query(
-        "INSERT INTO jobs (id,project_id,kind,payload,dedupe_key)
-         VALUES ($1,$2,'health_fixture','{}',$3)",
+        "INSERT INTO jobs (id,project_id,kind,workload_class,payload,dedupe_key)
+         VALUES ($1,$2,'health_fixture','workflow','{}',$3)",
     )
     .bind(Uuid::new_v4())
     .bind(project_id)

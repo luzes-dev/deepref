@@ -5,6 +5,11 @@ use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
 pub const DURABLE_RUN_STEP_JOB_KIND: &str = deepref_domain::JobKind::DurableRunStep.as_str();
+/// Workload pool of the durable step kind, derived exactly like `enqueue_job`
+/// derives it: raw step enqueues never choose a class themselves.
+pub const DURABLE_RUN_STEP_WORKLOAD_CLASS: &str = deepref_domain::JobKind::DurableRunStep
+    .workload_class()
+    .as_str();
 
 /// Lock run before step everywhere, including cancellation and domain planning.
 async fn lock_step(

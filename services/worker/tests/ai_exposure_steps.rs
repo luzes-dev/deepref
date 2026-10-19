@@ -68,7 +68,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             return;
         };
         assert_eq!(
-            job.project_id.as_uuid(),
+            job.project_id().expect("project-scoped test job").as_uuid(),
             project,
             "unexpected job from another project"
         );

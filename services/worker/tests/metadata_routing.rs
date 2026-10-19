@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::Result;
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobScope};
 use deepref_config::OpenAlexCorpus;
 use deepref_domain::events::{
     EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
@@ -239,7 +239,7 @@ async fn seed_work_fetch_to_depth(
         .bind(event.event_id)
         .execute(pool)
         .await?;
-    sqlx::query("INSERT INTO jobs(id,project_id,kind,state,attempts,lease_owner,leased_until) VALUES($1,$2,'work_fetch_requested','running',1,$3,now()+interval '10 minutes')")
+    sqlx::query("INSERT INTO jobs(id,project_id,kind,workload_class,state,attempts,lease_owner,leased_until) VALUES($1,$2,'work_fetch_requested','integration','running',1,$3,now()+interval '10 minutes')")
         .bind(event.event_id)
         .bind(project_id)
         .bind(OWNER)
@@ -247,7 +247,7 @@ async fn seed_work_fetch_to_depth(
         .await?;
     let job = ClaimedJob {
         id: event.event_id,
-        project_id: ProjectId::new(project_id),
+        scope: JobScope::Project(ProjectId::new(project_id)),
         kind: JobKind::WorkFetchRequested,
         payload: serde_json::to_value(&event)?,
         attempts: 1,

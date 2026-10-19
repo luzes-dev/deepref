@@ -794,7 +794,7 @@ mod tests {
         );
         sqlx::query("INSERT INTO acquisition_items(acquisition_id,project_id,report_id,canonical_doi,depth,work_event_id) VALUES($1,$2,$3,'10.5555/fence',0,$4)")
             .bind(acquisition_id).bind(project_id).bind(report_id).bind(event.event_id).execute(&pool).await?;
-        sqlx::query("INSERT INTO jobs(id,project_id,kind,state,attempts,lease_owner,leased_until) VALUES($1,$2,'work_fetch_requested','running',2,'current-owner',now()+interval '1 minute')")
+        sqlx::query("INSERT INTO jobs(id,project_id,kind,workload_class,state,attempts,lease_owner,leased_until) VALUES($1,$2,'work_fetch_requested','integration','running',2,'current-owner',now()+interval '1 minute')")
             .bind(event.event_id).bind(project_id).execute(&pool).await?;
         let mut lease = deepref_application::jobs::JobLease {
             id: event.event_id,
@@ -936,7 +936,7 @@ mod tests {
         sqlx::query("INSERT INTO acquisition_items(acquisition_id,project_id,report_id,canonical_doi,depth,work_event_id) VALUES($1,$2,$3,$4,0,$5)")
             .bind(acquisition_id).bind(project_id).bind(report_id).bind(doi).bind(event.event_id)
             .execute(pool).await?;
-        sqlx::query("INSERT INTO jobs(id,project_id,kind,state,attempts,lease_owner,leased_until) VALUES($1,$2,'work_fetch_requested','running',1,'worker-fixture',now()+interval '10 minutes')")
+        sqlx::query("INSERT INTO jobs(id,project_id,kind,workload_class,state,attempts,lease_owner,leased_until) VALUES($1,$2,'work_fetch_requested','integration','running',1,'worker-fixture',now()+interval '10 minutes')")
             .bind(event.event_id).bind(project_id).execute(pool).await?;
         let lease = JobLease {
             id: event.event_id,

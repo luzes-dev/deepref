@@ -17,7 +17,7 @@ use deepref_ai::{
     AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters,
     ModelProfile, ResolvedModel, runtime::StaticModelFactory, sha256_bytes,
 };
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobScope};
 use deepref_config::RuntimeConfig;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
@@ -614,7 +614,7 @@ where
             .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
         let job = ClaimedJob {
             id: row.get("id"),
-            project_id: row.get::<Uuid, _>("project_id").into(),
+            scope: JobScope::Project(row.get::<Uuid, _>("project_id").into()),
             kind: row
                 .get::<String, _>("kind")
                 .parse()

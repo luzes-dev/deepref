@@ -169,7 +169,7 @@ INSERT INTO workflow_step_details (id, run_id, node_id, iteration, node_type)
   SELECT id, '@wfr@', 'node-1', '', 'trigger' FROM step;
 INSERT INTO workflow_files (id, project_id, run_id, node_id, name, content_type, content)
   VALUES (gen_random_uuid(), '@proj@', '@wfr@', 'node-1', 'fixture.txt', 'text/plain', '\x6869'::bytea);
-INSERT INTO jobs (id, project_id, kind, state) VALUES ('@job@', '@proj@', 'durable_run_step', 'queued');
+INSERT INTO jobs (id, project_id, kind, workload_class, state) VALUES ('@job@', '@proj@', 'durable_run_step', 'workflow', 'queued');
 INSERT INTO automation_definitions (id, project_id, name, trigger_kind, recipe_id, recipe_version, status, actor_kind, actor_id)
   VALUES ('@def@', '@proj@', 'Fixture automation', 'manual', 'review_screening', 1, 'active', 'user', 'fixture');
 INSERT INTO automation_definition_steps (project_id, definition_id, ordinal, step_key, step_kind)

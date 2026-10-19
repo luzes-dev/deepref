@@ -222,12 +222,14 @@ async fn enqueue_recipe_step(
     step_id: Uuid,
 ) -> Result<Uuid, sqlx::Error> {
     sqlx::query_scalar(
-        "INSERT INTO jobs(id,project_id,kind,payload,state,priority,max_attempts,dedupe_key)
-        VALUES($1,$2,'durable_run_step',$3,'queued',0,5,$4)
+        "INSERT INTO jobs(id,project_id,kind,workload_class,payload,state,priority,max_attempts,dedupe_key)
+        VALUES($1,$2,$3,$4,$5,'queued',0,5,$6)
         ON CONFLICT(dedupe_key) DO UPDATE SET id=jobs.id RETURNING id",
     )
     .bind(Uuid::new_v4())
     .bind(project_id)
+    .bind(crate::durable_runs::DURABLE_RUN_STEP_JOB_KIND)
+    .bind(crate::durable_runs::DURABLE_RUN_STEP_WORKLOAD_CLASS)
     .bind(serde_json::json!({"run_id":run_id,"step_id":step_id,"handler_kind":"automation"}))
     .bind(format!("durable-step:{step_id}"))
     .fetch_one(&mut **transaction)
