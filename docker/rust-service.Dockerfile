@@ -147,6 +147,7 @@ WORKDIR /app
 # reachable at all. The API has no authentication: run this image only behind an
 # authenticating proxy, and never publish its port directly.
 ENV HOME=/tmp \
+    APP_ENV=production \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     RUST_LOG=info \
     API_BIND_ADDR=0.0.0.0:8080 \
@@ -174,6 +175,7 @@ COPY --from=builder --chown=65532:65532 /build/target/release/deepref-server /us
 
 WORKDIR /app
 ENV HOME=/tmp \
+    APP_ENV=production \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     RUST_LOG=info
 USER 65532:65532
