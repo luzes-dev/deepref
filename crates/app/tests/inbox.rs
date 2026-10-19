@@ -143,7 +143,7 @@ fn inbox_context(event: &deepref_app::inbox::ClaimedInboxEvent) -> InboxContext 
         inbox_id: event.id,
         provider: event.provider.clone(),
         provider_event_id: event.provider_event_id.clone(),
-        event_type: event.event_type.clone().unwrap_or_default(),
+        event_type: event.event_type.clone(),
         claim_fence: event.claim_fence.clone(),
     }
 }
@@ -683,5 +683,28 @@ async fn payload_purge_keeps_dedup_identity_and_unprocessed_payloads() -> Result
         ReceiveOutcome::Duplicate
     );
     assert_eq!(rows_with_provider(&pool).await, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn receipt_rejects_missing_or_empty_event_types() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let verifier = HmacSha256Verifier::new(SECRET);
+    let delivery = SignedDelivery::new(
+        "evt_without_type",
+        "user.created",
+        br#"{"id":"evt_without_type"}"#,
+    );
+    for kind in [None, Some(""), Some(" "), Some(" user.created")] {
+        let mut event = delivery.event();
+        event.event_type = kind;
+        assert!(matches!(
+            receive_webhook_event(&pool, &verifier, &event).await,
+            Err(InboxReceiveError::MissingEventType)
+        ));
+    }
+    assert_eq!(rows_with_provider(&pool).await, 0);
     Ok(())
 }

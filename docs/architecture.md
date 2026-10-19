@@ -117,6 +117,24 @@ commit-before-ack behavior. Production registries are empty; metrics recompute
 continues to enqueue jobs directly. Dispatcher effects are synthetic test
 fixtures until the production pilot in 04b.
 
+Heartbeat ownership checks are polled before ready handler work where possible.
+Database effects must commit with the generation-fenced receipt or inbox
+completion; an inbox preflight check takes no row lock, and completion is the
+final write before commit so long effect transactions do not block renewal.
+Cancellation cannot retract an external request or COMMIT already submitted.
+External effects need downstream idempotency keys (outbox event ID + consumer,
+or inbox provider + provider event ID), and downstream fencing where supported.
+
+Inbox receipt rejects missing, empty, or whitespace-padded `event_type` with a
+typed error. Provider adapters must supply the verified event's explicit type;
+04a does not accept a provider contract that omits it.
+
+Each due outbox consumer reserves one attempt per claim generation. Failure
+bookkeeping and abandoned-claim recovery settle that reservation without
+charging it again; consumers in backoff reserve nothing. Unsupported frozen
+consumers are parked for five minutes with a diagnostic, and claims exclude
+incompatible sets even beyond the bounded parking batch.
+
 Inbox receipt accepts bodies up to 256 KiB. Processed payloads expire after
 30 days; the explicit `purge_processed_inbox_payloads` app operation replaces
 expired payloads with NULL while retaining `(provider, provider_event_id)` and

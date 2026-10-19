@@ -479,7 +479,14 @@ async fn stale_generation_cannot_commit_effect_or_receipt_after_reclaim() -> Res
     let receipts = list_outbox_receipts(&pool, event.event_id).await?;
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].state, ReceiptState::Retrying);
-    assert_eq!(receipts[0].attempts, 1);
+    assert_eq!(
+        receipts[0].attempts, 2,
+        "the new claim reserved its own attempt"
+    );
+    assert_eq!(
+        receipts[0].attempt_generation,
+        new_claim[0].claim_fence.generation()
+    );
     assert!(receipts[0].delivered_at.is_none());
     let (state, delivered_at, ..) = event_row(&pool, event.event_id).await;
     assert_eq!(state, "pending");
@@ -1036,5 +1043,160 @@ async fn an_empty_or_older_outbox_registry_leaves_new_contracts_pending() -> Res
             .fetch_one(&pool)
             .await?;
     assert_eq!(row, ("pending".to_owned(), 0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn reclaim_settles_each_generation_once_and_skips_consumers_in_backoff() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let event = fanout_event(Uuid::new_v4(), "budget two").with_max_attempts(2);
+    insert(&pool, &event).await;
+    let registry = claim_registry();
+    let first = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &registry,
+        "first",
+        Duration::from_secs(60),
+        1,
+    )
+    .await?;
+    let fence = &first[0].claim_fence;
+    for _ in 0..2 {
+        assert_eq!(
+            record_outbox_consumer_failure(
+                &pool,
+                event.event_id,
+                "alpha",
+                fence,
+                "recorded alpha failure",
+                OutboxRetry::After(Duration::from_secs(60)),
+                2
+            )
+            .await?,
+            ReceiptState::Retrying
+        );
+    }
+    record_outbox_consumer_failure(
+        &pool,
+        event.event_id,
+        "beta",
+        fence,
+        "beta backing off",
+        OutboxRetry::After(Duration::from_secs(3600)),
+        2,
+    )
+    .await?;
+    let before = list_outbox_receipts(&pool, event.event_id).await?;
+    assert_eq!((before[0].attempts, before[1].attempts), (1, 1));
+    sqlx::query("UPDATE outbox_events SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE event_id=$1")
+        .bind(event.event_id).execute(&pool).await?;
+    assert!(
+        deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &registry,
+            "recovery",
+            Duration::from_secs(60),
+            1
+        )
+        .await?
+        .is_empty()
+    );
+    let recovered = list_outbox_receipts(&pool, event.event_id).await?;
+    assert_eq!(
+        recovered, before,
+        "recorded failures are not charged or delayed again during reclaim"
+    );
+    assert_eq!(event_row(&pool, event.event_id).await.0, "pending");
+
+    // Only alpha is due in the next generation. Beta never reserves attempt two.
+    sqlx::query("UPDATE outbox_events SET next_attempt_at=clock_timestamp() WHERE event_id=$1")
+        .bind(event.event_id)
+        .execute(&pool)
+        .await?;
+    sqlx::query("UPDATE outbox_receipts SET next_attempt_at=clock_timestamp() WHERE event_id=$1 AND consumer='alpha'")
+        .bind(event.event_id).execute(&pool).await?;
+    let second = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &registry,
+        "second",
+        Duration::from_secs(60),
+        1,
+    )
+    .await?;
+    assert_eq!(second.len(), 1);
+    let reserved = list_outbox_receipts(&pool, event.event_id).await?;
+    assert_eq!((reserved[0].attempts, reserved[1].attempts), (2, 1));
+    assert_eq!(reserved[1], before[1]);
+    sqlx::query("UPDATE outbox_events SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE event_id=$1")
+        .bind(event.event_id).execute(&pool).await?;
+    for _ in 0..2 {
+        assert!(
+            deepref_app::outbox::claim_outbox_batch(
+                &pool,
+                &registry,
+                "recovery",
+                Duration::from_secs(60),
+                1
+            )
+            .await?
+            .is_empty()
+        );
+    }
+    let recovered = list_outbox_receipts(&pool, event.event_id).await?;
+    assert_eq!((recovered[0].attempts, recovered[1].attempts), (2, 1));
+    assert_eq!(recovered[0].state, ReceiptState::Quarantined);
+    assert_eq!(
+        recovered[1], before[1],
+        "backoff was never charged or changed"
+    );
+    assert_eq!(event_row(&pool, event.event_id).await.0, "quarantined");
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_frozen_consumers_are_parked_without_starving_later_work() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let mut incompatible = Vec::new();
+    for _ in 0..3 {
+        let event = NewOutboxEvent::untyped(
+            Uuid::new_v4(),
+            Ping::TYPE,
+            1,
+            json!({"note":"incompatible"}),
+            &["future-consumer"],
+        )
+        .with_max_attempts(1);
+        insert(&pool, &event).await;
+        incompatible.push(event.event_id);
+    }
+    sqlx::query("UPDATE outbox_events SET created_at=clock_timestamp()-interval '1 day' WHERE event_id=ANY($1)")
+        .bind(&incompatible).execute(&pool).await?;
+    let supported = ping_event(Uuid::new_v4(), "later supported work");
+    insert(&pool, &supported).await;
+    let registry = claim_registry();
+    let claimed = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &registry,
+        "supported",
+        Duration::from_secs(60),
+        1,
+    )
+    .await?;
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(
+        claimed[0].event_id, supported.event_id,
+        "incompatible rows beyond the parking batch cannot starve work"
+    );
+    let parked:(i64,i64)=sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE next_attempt_at>clock_timestamp() AND last_error LIKE 'unsupported frozen outbox consumers:%') FROM outbox_events WHERE event_id=ANY($1) AND delivery_state='pending' AND attempts=0")
+        .bind(&incompatible).fetch_one(&pool).await?;
+    assert_eq!(parked, (3, 1));
+    let mut tx = pool.begin().await?;
+    record_outbox_receipt(&mut tx, &delivery_context(&claimed[0], "alpha")).await?;
+    tx.commit().await?;
+    assert_eq!(event_row(&pool, supported.event_id).await.0, "delivered");
     Ok(())
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "WITH candidate AS (\n             SELECT event_id\n             FROM outbox_events\n             WHERE delivery_state = 'pending' AND lease_owner IS NULL\n               AND next_attempt_at <= clock_timestamp()\n               AND (message_type, message_version) IN (\n                 SELECT * FROM unnest($4::text[], $5::integer[]))\n             ORDER BY created_at, event_id\n             FOR UPDATE SKIP LOCKED\n             LIMIT $3\n           )\n           UPDATE outbox_events e\n           SET lease_owner = $1,\n               lease_expires_at = clock_timestamp() + ($2::double precision * interval '1 millisecond'),\n               attempts = e.attempts + 1,\n               claim_generation = e.claim_generation + 1\n           FROM candidate\n           WHERE e.event_id = candidate.event_id\n           RETURNING e.event_id, e.message_type, e.message_version, e.payload,\n                     e.expected_consumers, e.attempts, e.max_attempts, e.claim_generation",
+  "query": "WITH candidate AS (\n             SELECT e.event_id FROM outbox_events e\n             JOIN jsonb_to_recordset($4::jsonb)\n               AS contract(message_type text, message_version integer, consumers text[])\n               USING (message_type, message_version)\n             WHERE e.delivery_state='pending' AND e.lease_owner IS NULL\n               AND e.next_attempt_at <= clock_timestamp()\n               AND e.expected_consumers <@ contract.consumers\n             ORDER BY e.created_at,e.event_id FOR UPDATE OF e SKIP LOCKED LIMIT $3\n           )\n           UPDATE outbox_events e\n           SET lease_owner=$1,\n               lease_expires_at=clock_timestamp()+($2::double precision*interval '1 millisecond'),\n               attempts=e.attempts+1,claim_generation=e.claim_generation+1\n           FROM candidate WHERE e.event_id=candidate.event_id\n           RETURNING e.event_id,e.message_type,e.message_version,e.payload,\n                     e.expected_consumers,e.attempts,e.max_attempts,e.claim_generation",
   "describe": {
     "columns": [
       {
@@ -97,8 +97,7 @@
         "Text",
         "Float8",
         "Int8",
-        "TextArray",
-        "Int4Array"
+        "Jsonb"
       ]
     },
     "nullable": [
@@ -112,5 +111,5 @@
       false
     ]
   },
-  "hash": "3776a15f7f8314238461b284b00349bf214a275b1ab3adeafabdb9e0937d16ed"
+  "hash": "4a6160f553cc95fb827ae335717ccc1179cd4877a58d580259af2882424c4cb0"
 }

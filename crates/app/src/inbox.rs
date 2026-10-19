@@ -50,6 +50,8 @@ pub enum ReceiveOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InboxReceiveError {
+    #[error("webhook event_type must be present, non-empty, and have no surrounding whitespace")]
+    MissingEventType,
     #[error("webhook body is {size} bytes; inbox limit is {limit} bytes")]
     PayloadTooLarge { size: usize, limit: usize },
     #[error("webhook rejected before insert: {0}")]
@@ -76,6 +78,10 @@ pub async fn receive_webhook_event(
         });
     }
     verifier.verify(event.body, event.signature)?;
+    let event_type = event
+        .event_type
+        .filter(|kind| !kind.is_empty() && kind.trim() == *kind)
+        .ok_or(InboxReceiveError::MissingEventType)?;
     let payload: Value = serde_json::from_slice(event.body)?;
     let mut tx: Transaction<'_, Postgres> = pool.begin().await?;
     let inserted = sqlx::query!(
@@ -86,7 +92,7 @@ pub async fn receive_webhook_event(
            RETURNING id"#,
         event.provider,
         event.provider_event_id,
-        event.event_type,
+        event_type,
         payload,
     )
     .fetch_optional(&mut *tx)
@@ -107,7 +113,7 @@ pub struct ClaimedInboxEvent {
     pub id: i64,
     pub provider: String,
     pub provider_event_id: String,
-    pub event_type: Option<String>,
+    pub event_type: String,
     pub payload: Value,
     pub attempts: i32,
     pub max_attempts: i32,
@@ -259,9 +265,10 @@ pub async fn renew_inbox_lease(
         == 1)
 }
 
-/// Lock and validate an active inbox claim inside the provider effect's
-/// transaction. Call this before applying authoritative state so a stale
-/// handler rolls back instead of applying an effect after its lease expired.
+/// Check ownership before starting an effect, without locking the renewable
+/// inbox row. This is a preflight check: handlers MUST finish their transaction
+/// with [`complete_inbox_event_in_transaction`] before committing effects.
+/// That final conditional write fences the generation and locks through commit.
 pub async fn fence_inbox_event_effect(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &InboxContext,
@@ -270,8 +277,7 @@ pub async fn fence_inbox_event_effect(
         r#"SELECT id FROM integration_inbox_events
            WHERE id = $1 AND processing_state = 'processing'
              AND lease_owner = $2 AND claim_generation = $3
-             AND lease_expires_at > clock_timestamp()
-           FOR UPDATE"#,
+             AND lease_expires_at > clock_timestamp()"#,
         context.inbox_id,
         context.claim_fence.owner(),
         context.claim_fence.generation(),
@@ -282,9 +288,10 @@ pub async fn fence_inbox_event_effect(
     Ok(())
 }
 
-/// Mark the event processed in the same transaction as a provider's effect.
-/// The row lock remains held until the caller commits, fencing a concurrent
-/// reclaimer from taking over between the effect and this transition.
+/// Mark the event processed as the final write in the provider effect's
+/// transaction, then commit immediately. The conditional UPDATE checks the
+/// current generation and expiry and holds its row lock only through commit;
+/// the effect transaction can remain open without blocking lease renewal.
 pub async fn complete_inbox_event_in_transaction(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context: &InboxContext,
@@ -488,7 +495,7 @@ pub async fn process_inbox_event(
     lease: std::time::Duration,
     event: &ClaimedInboxEvent,
 ) -> anyhow::Result<()> {
-    let event_type = event.event_type.clone().unwrap_or_default();
+    let event_type = event.event_type.clone();
     let Some(handler) = registry.handler(&event.provider, &event_type) else {
         release_inbox_lease(pool, event.id, &event.claim_fence).await?;
         return Ok(());

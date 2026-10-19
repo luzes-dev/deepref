@@ -104,6 +104,8 @@ pub struct OutboxReceiptRecord {
     pub consumer: String,
     pub state: ReceiptState,
     pub attempts: i32,
+    pub attempt_generation: i64,
+    pub settled_generation: i64,
     pub next_attempt_at: DateTime<Utc>,
     pub last_error: Option<String>,
     pub delivered_at: Option<DateTime<Utc>>,
@@ -155,10 +157,9 @@ pub async fn insert_outbox_event(
     Ok(rows.rows_affected() == 1)
 }
 
-/// Recover abandoned supported claims before selecting due work. A claim
-/// spends an event attempt when it starts; recovery charges each missing
-/// consumer's attempt exactly once, fences the abandoned generation, and
-/// applies backoff or quarantine before another claim is possible.
+/// Recover abandoned claims, then reserve one attempt for each due consumer
+/// atomically with claiming its event. A generation settles each reservation at
+/// most once; consumers still backing off receive no reservation or charge.
 pub async fn claim_outbox_batch(
     pool: &PgPool,
     registry: &OutboxRegistry,
@@ -170,47 +171,68 @@ pub async fn claim_outbox_batch(
         !lease.is_zero() && limit > 0,
         "claim lease and limit must be positive"
     );
-    let mut kinds = Vec::new();
-    let mut versions = Vec::new();
+    let mut contracts = Vec::new();
     for (kind, version) in registry.contracts() {
-        kinds.push(kind.to_owned());
-        versions.push(i32::try_from(version).context("registered message version fits")?);
+        let consumers: Vec<_> = registry
+            .expected_consumers(kind, version)
+            .into_iter()
+            .flatten()
+            .collect();
+        contracts.push(serde_json::json!({
+            "message_type": kind,
+            "message_version": i32::try_from(version).context("registered message version fits")?,
+            "consumers": consumers,
+        }));
     }
-    if kinds.is_empty() {
+    if contracts.is_empty() {
         return Ok(Vec::new());
     }
+    let contracts = Value::Array(contracts);
     let mut tx = pool.begin().await?;
-    recover_abandoned_outbox_claims(&mut tx, &kinds, &versions, limit).await?;
+    park_unsupported_consumers(&mut tx, &contracts, limit).await?;
+    recover_abandoned_outbox_claims(&mut tx, &contracts, limit).await?;
     let lease_ms = lease.as_millis() as f64;
     let rows = sqlx::query!(
         r#"WITH candidate AS (
-             SELECT event_id
-             FROM outbox_events
-             WHERE delivery_state = 'pending' AND lease_owner IS NULL
-               AND next_attempt_at <= clock_timestamp()
-               AND (message_type, message_version) IN (
-                 SELECT * FROM unnest($4::text[], $5::integer[]))
-             ORDER BY created_at, event_id
-             FOR UPDATE SKIP LOCKED
-             LIMIT $3
+             SELECT e.event_id FROM outbox_events e
+             JOIN jsonb_to_recordset($4::jsonb)
+               AS contract(message_type text, message_version integer, consumers text[])
+               USING (message_type, message_version)
+             WHERE e.delivery_state='pending' AND e.lease_owner IS NULL
+               AND e.next_attempt_at <= clock_timestamp()
+               AND e.expected_consumers <@ contract.consumers
+             ORDER BY e.created_at,e.event_id FOR UPDATE OF e SKIP LOCKED LIMIT $3
            )
            UPDATE outbox_events e
-           SET lease_owner = $1,
-               lease_expires_at = clock_timestamp() + ($2::double precision * interval '1 millisecond'),
-               attempts = e.attempts + 1,
-               claim_generation = e.claim_generation + 1
-           FROM candidate
-           WHERE e.event_id = candidate.event_id
-           RETURNING e.event_id, e.message_type, e.message_version, e.payload,
-                     e.expected_consumers, e.attempts, e.max_attempts, e.claim_generation"#,
+           SET lease_owner=$1,
+               lease_expires_at=clock_timestamp()+($2::double precision*interval '1 millisecond'),
+               attempts=e.attempts+1,claim_generation=e.claim_generation+1
+           FROM candidate WHERE e.event_id=candidate.event_id
+           RETURNING e.event_id,e.message_type,e.message_version,e.payload,
+                     e.expected_consumers,e.attempts,e.max_attempts,e.claim_generation"#,
         owner,
         lease_ms,
         limit,
-        &kinds,
-        &versions,
+        contracts,
     )
     .fetch_all(&mut *tx)
     .await?;
+    for row in &rows {
+        sqlx::query!(
+            r#"INSERT INTO outbox_receipts AS receipts
+                 (event_id,consumer,state,attempts,attempt_generation)
+               SELECT $1,consumer,'retrying',1,$3 FROM unnest($2::text[]) AS expected(consumer)
+               ON CONFLICT (event_id,consumer) DO UPDATE
+               SET attempts=receipts.attempts+1,attempt_generation=EXCLUDED.attempt_generation
+               WHERE receipts.state='retrying' AND receipts.next_attempt_at <= clock_timestamp()
+                 AND receipts.attempt_generation < EXCLUDED.attempt_generation"#,
+            row.event_id,
+            &row.expected_consumers,
+            row.claim_generation,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     rows.into_iter()
         .map(|row| {
@@ -230,84 +252,116 @@ pub async fn claim_outbox_batch(
         .collect()
 }
 
+/// Park a bounded batch for five minutes with a diagnostic. The claim query
+/// also excludes every incompatible row, including ones beyond this batch, so
+/// an arbitrarily old incompatible backlog cannot starve supported work.
+async fn park_unsupported_consumers(
+    tx: &mut Transaction<'_, Postgres>,
+    contracts: &Value,
+    limit: i64,
+) -> anyhow::Result<()> {
+    sqlx::query!(
+        r#"WITH candidate AS (
+             SELECT e.event_id,
+               'unsupported frozen outbox consumers: ' || array_to_string(ARRAY(
+                 SELECT consumer FROM unnest(e.expected_consumers) AS expected(consumer)
+                 WHERE NOT consumer=ANY(contract.consumers)), ', ') AS reason
+             FROM outbox_events e
+             JOIN jsonb_to_recordset($1::jsonb)
+               AS contract(message_type text,message_version integer,consumers text[])
+               USING (message_type,message_version)
+             WHERE e.delivery_state='pending' AND e.next_attempt_at <= clock_timestamp()
+               AND (e.lease_owner IS NULL OR e.lease_expires_at <= clock_timestamp())
+               AND NOT e.expected_consumers <@ contract.consumers
+             ORDER BY e.created_at,e.event_id FOR UPDATE OF e SKIP LOCKED LIMIT $2
+           )
+           UPDATE outbox_events e SET last_error=candidate.reason,
+             next_attempt_at=clock_timestamp()+interval '5 minutes',
+             lease_owner=NULL,lease_expires_at=NULL,claim_generation=claim_generation+1
+           FROM candidate WHERE e.event_id=candidate.event_id"#,
+        contracts,
+        limit,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn recover_abandoned_outbox_claims(
     tx: &mut Transaction<'_, Postgres>,
-    kinds: &[String],
-    versions: &[i32],
+    contracts: &Value,
     limit: i64,
 ) -> anyhow::Result<()> {
     let expired = sqlx::query!(
-        r#"SELECT event_id, expected_consumers, attempts, max_attempts, claim_generation,
-                  lease_owner AS "lease_owner!"
-           FROM outbox_events
-           WHERE delivery_state = 'pending' AND lease_expires_at <= clock_timestamp()
-             AND (message_type, message_version) IN (
-               SELECT * FROM unnest($1::text[], $2::integer[]))
-           ORDER BY lease_expires_at, event_id
-           FOR UPDATE SKIP LOCKED LIMIT $3"#,
-        kinds,
-        versions,
+        r#"SELECT e.event_id,e.max_attempts,e.claim_generation,e.lease_owner AS "lease_owner!"
+           FROM outbox_events e
+           JOIN jsonb_to_recordset($1::jsonb)
+             AS contract(message_type text,message_version integer,consumers text[])
+             USING (message_type,message_version)
+           WHERE e.delivery_state='pending' AND e.lease_expires_at <= clock_timestamp()
+             AND e.expected_consumers <@ contract.consumers
+           ORDER BY e.lease_expires_at,e.event_id FOR UPDATE OF e SKIP LOCKED LIMIT $2"#,
+        contracts,
         limit,
     )
     .fetch_all(&mut **tx)
     .await?;
     for event in expired {
-        let mut exhausted = event.attempts >= event.max_attempts;
         let reason = format!(
             "abandoned outbox claim after lease expiry (generation {})",
             event.claim_generation
         );
-        for consumer in event.expected_consumers {
-            let receipt = sqlx::query!(
-                "SELECT state, attempts FROM outbox_receipts WHERE event_id=$1 AND consumer=$2",
-                event.event_id,
-                consumer,
-            )
-            .fetch_optional(&mut **tx)
-            .await?;
-            if let Some(receipt) = &receipt {
-                if receipt.state == "delivered" {
-                    continue;
-                }
-                if receipt.state == "quarantined" {
-                    exhausted = true;
-                    continue;
-                }
-            }
-            let attempts = receipt.map_or(1, |receipt| receipt.attempts.saturating_add(1));
-            let terminal = exhausted || attempts >= event.max_attempts;
-            exhausted |= terminal;
-            let state = if terminal { "quarantined" } else { "retrying" };
-            let delay_ms = retry_backoff(attempts).as_millis() as f64;
+        let unfinished = sqlx::query!(
+            r#"SELECT consumer,attempts FROM outbox_receipts
+               WHERE event_id=$1 AND attempt_generation=$2 AND settled_generation<>$2
+                 AND state='retrying'"#,
+            event.event_id,
+            event.claim_generation,
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        for receipt in unfinished {
+            let state = if receipt.attempts >= event.max_attempts {
+                "quarantined"
+            } else {
+                "retrying"
+            };
+            let delay_ms = retry_backoff(receipt.attempts).as_millis() as f64;
             sqlx::query!(
-                r#"INSERT INTO outbox_receipts (event_id,consumer,state,attempts,next_attempt_at,last_error)
-                   VALUES ($1,$2,$3,$4,clock_timestamp()+($5::double precision*interval '1 millisecond'),$6)
-                   ON CONFLICT (event_id,consumer) DO UPDATE
-                   SET state=EXCLUDED.state, attempts=EXCLUDED.attempts,
-                       next_attempt_at=EXCLUDED.next_attempt_at,last_error=EXCLUDED.last_error
-                   WHERE outbox_receipts.state <> 'delivered'"#,
-                event.event_id, consumer, state, attempts, delay_ms, reason,
+                r#"UPDATE outbox_receipts SET state=$4,settled_generation=$3,
+                     next_attempt_at=clock_timestamp()+($5::double precision*interval '1 millisecond'),last_error=$6
+                   WHERE event_id=$1 AND consumer=$2 AND attempt_generation=$3
+                     AND settled_generation<>$3 AND state='retrying'"#,
+                event.event_id,receipt.consumer,event.claim_generation,state,delay_ms,reason,
             ).execute(&mut **tx).await?;
         }
+        let exhausted = sqlx::query_scalar!(
+            r#"SELECT EXISTS(SELECT 1 FROM outbox_receipts r JOIN outbox_events e USING(event_id)
+                 WHERE r.event_id=$1 AND r.consumer=ANY(e.expected_consumers)
+                   AND r.state='quarantined') AS "exhausted!""#,
+            event.event_id,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
         let state = if exhausted { "quarantined" } else { "pending" };
         let reason = if exhausted {
             format!("{reason}; attempt budget exhausted")
         } else {
             reason
         };
-        let delay_ms = retry_backoff(event.attempts).as_millis() as f64;
         sqlx::query!(
-            r#"UPDATE outbox_events SET delivery_state=$4,last_error=$5,
-                 next_attempt_at=clock_timestamp()+($6::double precision*interval '1 millisecond'),
+            r#"UPDATE outbox_events e SET delivery_state=$4,last_error=$5,
+                 next_attempt_at=COALESCE((SELECT min(r.next_attempt_at) FROM outbox_receipts r
+                   WHERE r.event_id=e.event_id AND r.consumer=ANY(e.expected_consumers)
+                     AND r.state='retrying'),clock_timestamp()),
                  lease_owner=NULL,lease_expires_at=NULL,claim_generation=claim_generation+1
-               WHERE event_id=$1 AND lease_owner=$2 AND claim_generation=$3
-                 AND delivery_state='pending' AND lease_expires_at <= clock_timestamp()"#,
+               WHERE e.event_id=$1 AND e.lease_owner=$2 AND e.claim_generation=$3
+                 AND e.delivery_state='pending' AND e.lease_expires_at <= clock_timestamp()"#,
             event.event_id,
             event.lease_owner,
             event.claim_generation,
             state,
             reason,
-            delay_ms,
         )
         .execute(&mut **tx)
         .await?;
@@ -406,7 +460,8 @@ pub async fn record_outbox_receipt(
         r#"INSERT INTO outbox_receipts (event_id, consumer, state, delivered_at)
            VALUES ($1, $2, 'delivered', now())
            ON CONFLICT (event_id, consumer) DO UPDATE
-           SET state = 'delivered', delivered_at = now(), last_error = NULL, next_attempt_at = now()
+           SET state = 'delivered', delivered_at = now(), last_error = NULL, next_attempt_at = now(),
+               settled_generation=outbox_receipts.attempt_generation
            WHERE outbox_receipts.state <> 'delivered'
            RETURNING event_id"#,
         context.event_id,
@@ -502,22 +557,13 @@ pub async fn record_outbox_consumer_failure(
     let mut tx = pool.begin().await?;
     fence_outbox_claim(&mut tx, event_id, fence).await?;
     let row = sqlx::query!(
-        r#"INSERT INTO outbox_receipts AS receipts
-             (event_id, consumer, state, attempts, next_attempt_at, last_error)
-           VALUES ($1, $2,
-             CASE WHEN $3::boolean OR 1 >= $4::integer THEN 'quarantined' ELSE 'retrying' END,
-             1,
-             now() + ($5::double precision * interval '1 millisecond'),
-             $6)
-           ON CONFLICT (event_id, consumer) DO UPDATE
-           SET state = CASE
-                 WHEN $3::boolean OR receipts.attempts + 1 >= $4::integer THEN 'quarantined'
-                 ELSE 'retrying' END,
-               attempts = receipts.attempts + 1,
-               next_attempt_at =
-                 now() + ($5::double precision * interval '1 millisecond'),
-               last_error = EXCLUDED.last_error
-           WHERE receipts.state <> 'delivered'
+        r#"UPDATE outbox_receipts
+           SET state=CASE WHEN $3::boolean OR attempts >= $4 THEN 'quarantined' ELSE 'retrying' END,
+             settled_generation=$7,
+             next_attempt_at=clock_timestamp()+($5::double precision*interval '1 millisecond'),
+             last_error=$6
+           WHERE event_id=$1 AND consumer=$2 AND state='retrying'
+             AND attempt_generation=$7 AND settled_generation<>$7
            RETURNING state"#,
         event_id,
         consumer,
@@ -525,15 +571,31 @@ pub async fn record_outbox_consumer_failure(
         max_attempts,
         delay_ms,
         error,
+        fence.generation(),
     )
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(row) = row else {
-        // The consumer already committed its receipt: redelivery is a no-op.
-        tx.commit().await?;
-        return Ok(ReceiptState::Delivered);
+    let row = match row {
+        Some(row) => row.state,
+        None => {
+            // Repeated failure bookkeeping for this generation is a no-op.
+            // A consumer skipped in backoff has no reservation and may not be charged.
+            let existing = sqlx::query!(
+                r#"SELECT state FROM outbox_receipts WHERE event_id=$1 AND consumer=$2
+                   AND (state='delivered' OR (attempt_generation=$3 AND settled_generation=$3))"#,
+                event_id,
+                consumer,
+                fence.generation(),
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            let existing =
+                existing.context("no unsettled outbox consumer attempt in this generation")?;
+            tx.commit().await?;
+            return ReceiptState::parse(&existing.state);
+        }
     };
-    let state = ReceiptState::parse(&row.state)?;
+    let state = ReceiptState::parse(&row)?;
     if state == ReceiptState::Quarantined {
         sqlx::query!(
             r#"UPDATE outbox_events
@@ -684,7 +746,8 @@ pub async fn replay_outbox_event(pool: &PgPool, event_id: Uuid) -> anyhow::Resul
     if reopened {
         sqlx::query!(
             r#"UPDATE outbox_receipts
-               SET state = 'retrying', attempts = 0, next_attempt_at = now(), last_error = NULL
+               SET state = 'retrying', attempts = 0, next_attempt_at = now(), last_error = NULL,
+                   attempt_generation=0,settled_generation=0
                WHERE event_id = $1 AND state = 'quarantined'"#,
             event_id,
         )
@@ -702,7 +765,7 @@ pub async fn list_outbox_receipts(
     event_id: Uuid,
 ) -> anyhow::Result<Vec<OutboxReceiptRecord>> {
     let rows = sqlx::query!(
-        r#"SELECT event_id, consumer, state, attempts, next_attempt_at, last_error, delivered_at
+        r#"SELECT event_id, consumer, state, attempts, attempt_generation, settled_generation, next_attempt_at, last_error, delivered_at
            FROM outbox_receipts WHERE event_id = $1 ORDER BY consumer"#,
         event_id,
     )
@@ -715,6 +778,8 @@ pub async fn list_outbox_receipts(
                 consumer: row.consumer,
                 state: ReceiptState::parse(&row.state)?,
                 attempts: row.attempts,
+                attempt_generation: row.attempt_generation,
+                settled_generation: row.settled_generation,
                 next_attempt_at: row.next_attempt_at,
                 last_error: row.last_error,
                 delivered_at: row.delivered_at,
@@ -752,7 +817,20 @@ pub async fn dispatch_outbox_event(
     event: &ClaimedOutboxEvent,
 ) -> anyhow::Result<()> {
     if !registry.knows(&event.message_type, event.message_version) {
-        release_outbox_lease(pool, event.event_id, &event.claim_fence).await?;
+        park_outbox_claim(pool, event, "unsupported outbox contract").await?;
+        return Ok(());
+    }
+    if let Some(consumer) = event.expected_consumers.iter().find(|consumer| {
+        registry
+            .handler(&event.message_type, event.message_version, consumer)
+            .is_none()
+    }) {
+        park_outbox_claim(
+            pool,
+            event,
+            &format!("unsupported frozen outbox consumer: {consumer}"),
+        )
+        .await?;
         return Ok(());
     }
     let receipts: BTreeMap<String, OutboxReceiptRecord> =
@@ -769,14 +847,18 @@ pub async fn dispatch_outbox_event(
             Some(receipt) if receipt.state != ReceiptState::Retrying => continue,
             // A retrying consumer waits for its own per-recipient backoff.
             Some(receipt) if receipt.next_attempt_at > now => continue,
-            Some(receipt) => receipt.attempts + 1,
-            None => 1,
+            Some(receipt)
+                if receipt.attempt_generation != event.claim_fence.generation()
+                    || receipt.settled_generation == receipt.attempt_generation =>
+            {
+                continue;
+            }
+            Some(receipt) => receipt.attempts,
+            None => continue,
         };
-        let Some(handler) = registry.handler(&event.message_type, event.message_version, consumer)
-        else {
-            release_outbox_lease(pool, event.event_id, &event.claim_fence).await?;
-            return Ok(());
-        };
+        let handler = registry
+            .handler(&event.message_type, event.message_version, consumer)
+            .context("validated outbox consumer has a handler")?;
         let context = DeliveryContext {
             event_id: event.event_id,
             consumer: consumer.clone(),
@@ -851,6 +933,27 @@ pub async fn dispatch_outbox_event(
         }
     }
     settle_outbox_event(pool, event.event_id, &event.claim_fence).await?;
+    Ok(())
+}
+
+/// Also handle a directly supplied claim against a changed registry safely.
+async fn park_outbox_claim(
+    pool: &PgPool,
+    event: &ClaimedOutboxEvent,
+    reason: &str,
+) -> anyhow::Result<()> {
+    sqlx::query!(
+        r#"UPDATE outbox_events SET lease_owner=NULL,lease_expires_at=NULL,last_error=$4,
+             next_attempt_at=clock_timestamp()+interval '5 minutes'
+           WHERE event_id=$1 AND lease_owner=$2 AND claim_generation=$3
+             AND delivery_state='pending' AND lease_expires_at>clock_timestamp()"#,
+        event.event_id,
+        event.claim_fence.owner(),
+        event.claim_fence.generation(),
+        reason,
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

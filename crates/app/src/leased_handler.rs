@@ -19,11 +19,11 @@ where
     tokio::pin!(work);
     tokio::select! {
         biased;
-        result = &mut work => Ok(result),
         result = heartbeat(lease, sent_at + lease, renew) => {
             result?;
             anyhow::bail!("handler heartbeat stopped")
-        }
+        },
+        result = &mut work => Ok(result),
     }
 }
 
@@ -109,5 +109,25 @@ mod tests {
         .await;
         assert!(result.is_err());
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ownership_loss_wins_when_work_and_heartbeat_are_ready_together() {
+        let renewals = AtomicUsize::new(0);
+        let completed = AtomicBool::new(false);
+        let result = run(
+            Duration::from_millis(60),
+            || {
+                let owned = renewals.fetch_add(1, Ordering::SeqCst) == 0;
+                async move { Ok(owned) }
+            },
+            async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                completed.store(true, Ordering::SeqCst);
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!completed.load(Ordering::SeqCst));
     }
 }

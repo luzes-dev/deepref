@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM integration_inbox_events\n           WHERE id = $1 AND processing_state = 'processing'\n             AND lease_owner = $2 AND claim_generation = $3\n             AND lease_expires_at > clock_timestamp()\n           FOR UPDATE",
+  "query": "SELECT id FROM integration_inbox_events\n           WHERE id = $1 AND processing_state = 'processing'\n             AND lease_owner = $2 AND claim_generation = $3\n             AND lease_expires_at > clock_timestamp()",
   "describe": {
     "columns": [
       {
@@ -26,5 +26,5 @@
       false
     ]
   },
-  "hash": "7058e2d0b2dc3f20720b1ef57cbde39aa842721d4dd8e942ee464eb012a61f0c"
+  "hash": "851d6361f57cb2c38bd9d224356f08233c6dbfc9dd7405d15170da91bf7f8ea2"
 }

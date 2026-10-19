@@ -94,7 +94,7 @@ pub async fn run(
                                 "inbox_event",
                                 inbox_id = event.id,
                                 provider = %event.provider,
-                                event_type = event.event_type.as_deref().unwrap_or(""),
+                                event_type = event.event_type.as_str(),
                                 attempt = event.attempts,
                             );
                             active.spawn(

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO outbox_receipts (event_id, consumer, state, delivered_at)\n           VALUES ($1, $2, 'delivered', now())\n           ON CONFLICT (event_id, consumer) DO UPDATE\n           SET state = 'delivered', delivered_at = now(), last_error = NULL, next_attempt_at = now(),\n               settled_generation=outbox_receipts.attempt_generation\n           WHERE outbox_receipts.state <> 'delivered'\n           RETURNING event_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "event_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "926b8dd237feff42f8d27a6dfe6c24a817d01784100d45bb16eabc6694261d93"
+}

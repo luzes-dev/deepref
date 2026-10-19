@@ -60,6 +60,11 @@ CREATE TABLE outbox_receipts (
   state text NOT NULL
     CHECK (state IN ('retrying', 'delivered', 'quarantined')),
   attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  -- One reservation per due consumer per claim generation. Settlement never
+  -- increments attempts; crash recovery settles only unaccounted reservations.
+  attempt_generation bigint NOT NULL DEFAULT 0 CHECK (attempt_generation >= 0),
+  settled_generation bigint NOT NULL DEFAULT 0
+    CHECK (settled_generation >= 0 AND settled_generation <= attempt_generation),
   next_attempt_at timestamptz NOT NULL DEFAULT now(),
   last_error text,
   delivered_at timestamptz,
@@ -80,7 +85,7 @@ CREATE TABLE integration_inbox_events (
   provider text NOT NULL,
   provider_event_id text NOT NULL
     CHECK (char_length(provider_event_id) BETWEEN 1 AND 255),
-  event_type text,
+  event_type text NOT NULL CHECK (event_type <> '' AND event_type = btrim(event_type)),
   -- Only processed payloads may be minimized; the dedup identity stays.
   payload jsonb,
   payload_expires_at timestamptz,

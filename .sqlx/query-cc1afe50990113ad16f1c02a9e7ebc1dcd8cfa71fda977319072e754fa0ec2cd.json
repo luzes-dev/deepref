@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT event_id, consumer, state, attempts, next_attempt_at, last_error, delivered_at\n           FROM outbox_receipts WHERE event_id = $1 ORDER BY consumer",
+  "query": "SELECT event_id, consumer, state, attempts, attempt_generation, settled_generation, next_attempt_at, last_error, delivered_at\n           FROM outbox_receipts WHERE event_id = $1 ORDER BY consumer",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,28 @@
       },
       {
         "ordinal": 4,
+        "name": "attempt_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "attempt_generation"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "settled_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "settled_generation"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
         "name": "next_attempt_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -59,7 +81,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "last_error",
         "type_info": "Text",
         "origin": {
@@ -70,7 +92,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "delivered_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -92,9 +114,11 @@
       false,
       false,
       false,
+      false,
+      false,
       true,
       true
     ]
   },
-  "hash": "3155824907464840135029e478a5422a1c479c48826739e0c4264ab501b25b34"
+  "hash": "cc1afe50990113ad16f1c02a9e7ebc1dcd8cfa71fda977319072e754fa0ec2cd"
 }

@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT state, attempts FROM outbox_receipts WHERE event_id=$1 AND consumer=$2",
+  "query": "SELECT consumer,attempts FROM outbox_receipts\n               WHERE event_id=$1 AND attempt_generation=$2 AND settled_generation<>$2\n                 AND state='retrying'",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "state",
+        "name": "consumer",
         "type_info": "Text",
         "origin": {
           "Table": {
             "table": "outbox_receipts",
-            "name": "state"
+            "name": "consumer"
           }
         }
       },
@@ -29,7 +29,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Text"
+        "Int8"
       ]
     },
     "nullable": [
@@ -37,5 +37,5 @@
       false
     ]
   },
-  "hash": "0658075426cc8596e66232dfee8781f8c2ad612d93c1220120833e4639beddd6"
+  "hash": "97eebbd7d149ff292767fe87bb39f66f0b7f211a614726c04065eae54a37b454"
 }
