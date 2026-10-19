@@ -17,7 +17,7 @@ deepref-server migrate
 deepref-server --print-openapi
 ```
 
-`serve` never applies migrations. Hosted migrations run as the Helm/Argo PreSync Job; local development uses `just migrate`.
+`serve` never applies migrations. Hosted releases run `deepref-server migrate` once before rolling replicas (see the [release and migration runbook](release-and-migration-runbook.md)); local development uses `just migrate`.
 
 Regenerate the Rust-owned OpenAPI document and typed web client with:
 
