@@ -3,6 +3,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub mod acquisition;
+pub mod authorization;
 pub mod bibliography;
 pub mod documents;
 pub mod events;

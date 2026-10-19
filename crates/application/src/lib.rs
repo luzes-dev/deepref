@@ -8,6 +8,7 @@ use deepref_domain::{
 pub mod acquisition;
 pub mod ai_first;
 pub mod appraisal;
+pub mod authorization;
 pub mod automations;
 pub mod deduplication;
 pub mod documents;
