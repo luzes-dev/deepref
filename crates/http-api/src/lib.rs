@@ -27,6 +27,7 @@ pub async fn backfill_project_workspaces(config: &ApiConfig) -> anyhow::Result<(
     tracing::info!(
         batches = report.batches,
         moved = report.moved,
+        users_marked_onboarded = report.users_marked_onboarded,
         total_projects = report.total_projects,
         "project workspace backfill completed and validated"
     );

@@ -363,8 +363,9 @@ pub async fn create_personal_workspace(
 }
 
 /// First-workspace onboarding (03a), run once per user under the user-row lock
-/// `sign_in` holds (`users.onboarded_at IS NULL`). A user who already holds a
-/// membership needs nothing more. Otherwise the oldest usable invitation to
+/// `sign_in` holds (`users.onboarded_at IS NULL`). A user who already holds an
+/// active membership (an existing user the onboarding backfill has not reached
+/// yet) needs nothing more; the caller still marks them onboarded. Otherwise the oldest usable invitation to
 /// the user's verified address joins its workspace and no personal workspace
 /// is created; with none, the user gets a personal workspace as owner.
 pub(crate) async fn onboard_user(
@@ -375,7 +376,8 @@ pub(crate) async fn onboard_user(
     audit: AuditRequest<'_>,
 ) -> Result<(), WorkspaceError> {
     let has_membership: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM workspace_memberships WHERE user_id = $1)",
+        "SELECT EXISTS (
+           SELECT 1 FROM workspace_memberships WHERE user_id = $1 AND status = 'active')",
     )
     .bind(user_id.as_uuid())
     .fetch_one(&mut **tx)
@@ -1524,7 +1526,7 @@ pub(crate) async fn accept_in_transaction(
     invitation_id: Uuid,
     audit: AuditRequest<'_>,
 ) -> Result<AcceptOutcome, WorkspaceError> {
-    let user = sqlx::query("SELECT primary_email, email_verified, status FROM users WHERE id = $1")
+    let user = sqlx::query("SELECT primary_email, verified_email, status FROM users WHERE id = $1")
         .bind(user_id.as_uuid())
         .fetch_optional(&mut **tx)
         .await?;
@@ -1534,7 +1536,7 @@ pub(crate) async fn accept_in_transaction(
         return Err(WorkspaceError::NotPermitted);
     }
     let user_email: String = user.try_get("primary_email")?;
-    let email_verified: bool = user.try_get("email_verified")?;
+    let verified_email: Option<String> = user.try_get("verified_email")?;
     let invitation =
         sqlx::query("SELECT workspace_id, email FROM workspace_invitations WHERE id = $1")
             .bind(invitation_id)
@@ -1546,9 +1548,20 @@ pub(crate) async fn accept_in_transaction(
     if normalize_invitation_email(&user_email).as_deref() != Some(invited_email.as_str()) {
         return Ok(AcceptOutcome::EmailMismatch);
     }
-    // An address binds authority only while the provider vouches for it.
-    if !email_verified {
+    // An address binds authority only while the provider vouches for exactly
+    // this address: the recorded verified address must equal the current one
+    // (and, by the check above, the invitation's). A later email change by a
+    // writer that does not maintain `verified_email` therefore voids it.
+    if verified_email.as_deref() != Some(invited_email.as_str()) {
         return Ok(AcceptOutcome::EmailUnverified);
+    }
+    // Lock order is workspace first, then invitation, the same as workspace
+    // deletion, so the two cannot deadlock. A workspace deleted since the
+    // lookup above leaves nothing to accept.
+    match lock_workspace(tx, workspace_id).await {
+        Ok(()) => {}
+        Err(WorkspaceError::UnknownWorkspace) => return Ok(AcceptOutcome::Unavailable),
+        Err(error) => return Err(error),
     }
     let accepted = sqlx::query(
         "UPDATE workspace_invitations
@@ -1563,7 +1576,6 @@ pub(crate) async fn accept_in_transaction(
     if let Some(row) = accepted {
         let role: String = row.try_get("role")?;
         let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
-        lock_workspace(tx, workspace_id).await?;
         let existing: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2)",
         )
@@ -1686,6 +1698,8 @@ pub(crate) async fn accept_first_pending_invitation(
 /// What one run of the project backfill did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectBackfillReport {
+    /// Users marked onboarded because they already hold an active membership.
+    pub users_marked_onboarded: i64,
     pub batches: u32,
     pub moved: i64,
     pub total_projects: i64,
@@ -1744,10 +1758,43 @@ pub async fn backfill_project_workspaces(
         batches += 1;
         moved += i64::from(batch);
     }
+    let users_marked_onboarded = mark_existing_users_onboarded(pool, batch_size).await?;
     let total_projects = validate_project_workspaces(pool).await?;
     Ok(ProjectBackfillReport {
+        users_marked_onboarded,
         batches,
         moved,
         total_projects,
     })
+}
+
+/// Marks users who already hold an active membership as onboarded, a bounded
+/// batch per transaction (0094 adds the column without touching rows). Rows
+/// another transaction holds are skipped and picked up by a rerun.
+async fn mark_existing_users_onboarded(
+    pool: &PgPool,
+    batch_size: i32,
+) -> Result<i64, WorkspaceError> {
+    let mut marked = 0_i64;
+    loop {
+        let mut tx = pool.begin().await?;
+        let batch = sqlx::query(
+            "UPDATE users SET onboarded_at = now()
+             WHERE id IN (
+               SELECT u.id FROM users u
+               WHERE u.onboarded_at IS NULL
+                 AND EXISTS (SELECT 1 FROM workspace_memberships m
+                             WHERE m.user_id = u.id AND m.status = 'active')
+               ORDER BY u.id LIMIT $1 FOR UPDATE SKIP LOCKED)",
+        )
+        .bind(i64::from(batch_size))
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        if batch == 0 {
+            return Ok(marked);
+        }
+        marked += i64::try_from(batch).unwrap_or(i64::MAX);
+    }
 }

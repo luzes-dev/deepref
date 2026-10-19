@@ -410,7 +410,7 @@ async fn the_backfill_commits_each_batch_and_validation_reports_without_changing
 }
 
 #[tokio::test]
-async fn users_at_migration_time_are_marked_onboarded_and_the_rest_are_left_for_sign_in() {
+async fn existing_users_are_marked_onboarded_by_the_batched_command_not_the_migration() {
     let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
     else {
         return;
@@ -419,21 +419,69 @@ async fn users_at_migration_time_are_marked_onboarded_and_the_rest_are_left_for_
     through_previous_release().run(&pool).await.unwrap();
     write_legacy_rows(&pool).await;
     deepref_app::migrate(&pool).await.unwrap();
-    let onboarded: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM users WHERE onboarded_at IS NOT NULL")
+    let marked = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM users WHERE onboarded_at IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        marked(pool.clone()).await,
+        0,
+        "the migration scans no user row"
+    );
+    let verified: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM users WHERE verified_email IS NOT NULL")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(
-        onboarded, 1,
-        "the existing user holds the migration membership"
+        verified, 0,
+        "no address is trusted until the provider says so"
     );
-    let unverified: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email_verified")
-        .fetch_one(&pool)
+
+    let report = deepref_app::backfill_project_workspaces(&pool, 1)
         .await
         .unwrap();
+    assert_eq!(report.users_marked_onboarded, 1);
+    assert_eq!(marked(pool.clone()).await, 1);
+    let rerun = deepref_app::backfill_project_workspaces(&pool, 1)
+        .await
+        .unwrap();
+    assert_eq!(rerun.users_marked_onboarded, 0);
+}
+
+#[tokio::test]
+async fn validation_never_fails_falsely_beside_concurrent_trigger_inserts() {
+    let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
+    else {
+        return;
+    };
+    let pool = pool_for(&url).await;
+    deepref_app::migrate(&pool).await.expect("migrations apply");
+
+    // An old-shape writer inserts without a workspace; the trigger assigns it.
+    let writer_pool = pool.clone();
+    let writer = tokio::spawn(async move {
+        for index in 0..300 {
+            sqlx::query("INSERT INTO projects (id, name) VALUES ($1, $2)")
+                .bind(Uuid::new_v4())
+                .bind(format!("concurrent {index}"))
+                .execute(&writer_pool)
+                .await
+                .expect("old-shape insert");
+        }
+    });
+    for _ in 0..150 {
+        deepref_app::validate_project_workspaces(&pool)
+            .await
+            .expect("a concurrent insert never makes validation disagree with itself");
+    }
+    writer.await.unwrap();
     assert_eq!(
-        unverified, 0,
-        "no address is trusted until the provider says so"
+        deepref_app::validate_project_workspaces(&pool)
+            .await
+            .unwrap(),
+        300
     );
 }

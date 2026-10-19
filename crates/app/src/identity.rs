@@ -223,6 +223,16 @@ fn user_record(row: &PgRow) -> Result<UserRecord, IdentityStoreError> {
     })
 }
 
+/// The address to record as verified: the provider's email, normalized, only
+/// when the provider says it verified it.
+fn verified_email(profile: &ProviderProfile) -> Option<String> {
+    if profile.email_verified {
+        deepref_application::normalize_invitation_email(&profile.email)
+    } else {
+        None
+    }
+}
+
 /// Resolves the provider identity to its one DeepRef user, creating it on first
 /// sign-in, and records the sign-in. Replaying the same callback creates no
 /// second user and no second `user.provisioned` row.
@@ -236,14 +246,14 @@ pub async fn sign_in(
     let mut tx = pool.begin().await?;
     let new_id = UserId::new(Uuid::new_v4());
     let inserted = sqlx::query(
-        "INSERT INTO users (id, workos_user_id, primary_email, email_verified, display_name, status)
+        "INSERT INTO users (id, workos_user_id, primary_email, verified_email, display_name, status)
          VALUES ($1, $2, $3, $4, $5, 'active')
          ON CONFLICT (workos_user_id) DO NOTHING",
     )
     .bind(new_id.as_uuid())
     .bind(session.external_user_id.as_str())
     .bind(&profile.email)
-    .bind(profile.email_verified)
+    .bind(verified_email(profile))
     .bind(profile.display_name.as_deref())
     .execute(&mut *tx)
     .await?
@@ -263,16 +273,16 @@ pub async fn sign_in(
         // so a profile update cannot reactivate a deactivated user.
         sqlx::query(
             "UPDATE users
-             SET primary_email = $2, email_verified = $4, display_name = $3, updated_at = now()
+             SET primary_email = $2, verified_email = $4, display_name = $3, updated_at = now()
              WHERE workos_user_id = $1
                AND (primary_email IS DISTINCT FROM $2
                     OR display_name IS DISTINCT FROM $3
-                    OR email_verified IS DISTINCT FROM $4)",
+                    OR verified_email IS DISTINCT FROM $4)",
         )
         .bind(session.external_user_id.as_str())
         .bind(&profile.email)
         .bind(profile.display_name.as_deref())
-        .bind(profile.email_verified)
+        .bind(verified_email(profile))
         .execute(&mut *tx)
         .await?;
     }

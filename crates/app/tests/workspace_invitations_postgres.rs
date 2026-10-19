@@ -728,3 +728,86 @@ async fn invitation_events_name_their_invitation() {
     created_revoked.sort();
     assert_eq!(created_revoked, expected);
 }
+
+#[tokio::test]
+async fn an_email_change_by_an_older_binary_voids_the_verification() {
+    let Some(pool) = database().await else { return };
+    let owner = user(&pool, "owner", "owner@example.org").await;
+    let workspace = personal_workspace(&pool, owner).await;
+    let invitation = invite_to_workspace(
+        &pool,
+        owner,
+        workspace,
+        "b@example.org",
+        WorkspaceRole::Admin,
+        in_a_day(),
+        AUDIT,
+    )
+    .await
+    .unwrap();
+
+    // The provider verified address A.
+    let person = user(&pool, "person", "a@example.org").await;
+    // The N-1 binary rewrites the address to the invited one without
+    // touching the column it does not know.
+    sqlx::query("UPDATE users SET primary_email = 'b@example.org' WHERE id = $1")
+        .bind(person.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = accept_invitation(&pool, person, invitation.id, AUDIT)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, WorkspaceError::InvitationEmailUnverified),
+        "{error:?}"
+    );
+    assert_eq!(invitation_status(&pool, invitation.id).await, "pending");
+}
+
+#[tokio::test]
+async fn acceptance_and_workspace_deletion_do_not_deadlock() {
+    let Some(pool) = database().await else { return };
+    for round in 0..8 {
+        let owner = user(
+            &pool,
+            &format!("owner_{round}"),
+            &format!("owner{round}@example.org"),
+        )
+        .await;
+        let workspace = personal_workspace(&pool, owner).await;
+        let email = format!("race{round}@example.org");
+        let invitee = user(&pool, &format!("race_{round}"), &email).await;
+        let invitation = invite_to_workspace(
+            &pool,
+            owner,
+            workspace,
+            &email,
+            WorkspaceRole::Member,
+            in_a_day(),
+            AUDIT,
+        )
+        .await
+        .unwrap();
+        let accept = {
+            let pool = pool.clone();
+            tokio::spawn(
+                async move { accept_invitation(&pool, invitee, invitation.id, AUDIT).await },
+            )
+        };
+        let delete = {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                deepref_app::workspaces::delete_workspace(&pool, owner, workspace, AUDIT).await
+            })
+        };
+        for result in [accept.await.unwrap().map(|_| ()), delete.await.unwrap()] {
+            if let Err(error) = result {
+                assert!(
+                    !matches!(error, WorkspaceError::Database(_)),
+                    "round {round}: {error:?}"
+                );
+            }
+        }
+    }
+}

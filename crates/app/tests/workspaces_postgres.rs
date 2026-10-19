@@ -1286,3 +1286,49 @@ async fn deleting_a_workspace_audits_each_removed_membership_and_ends_its_invita
         "the pending invitation is revoked by name"
     );
 }
+
+#[tokio::test]
+async fn an_existing_member_without_the_onboarding_mark_gets_no_personal_workspace() {
+    let Some(pool) = database().await else { return };
+    let owner = sign_in_user(&pool, "owner").await;
+    let workspace = deepref_domain::WorkspaceId::new(personal_workspace(&pool, "owner").await);
+    // An existing user the onboarding backfill has not reached: an active
+    // membership, no `onboarded_at`.
+    let id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users (id, workos_user_id, primary_email, status)
+         VALUES ($1, 'user_member', 'member@example.org', 'active')",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    add_workspace_member(
+        &pool,
+        deepref_domain::UserId::new(owner),
+        workspace,
+        deepref_domain::UserId::new(id),
+        WorkspaceRole::Member,
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+
+    sign_in(&pool, "user_member", "member@example.org", None).await;
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM workspaces WHERE kind = 'personal'"
+        )
+        .await,
+        1,
+        "only the owner's personal workspace exists"
+    );
+    let marked: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT onboarded_at FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(marked.is_some(), "sign-in marks the user onboarded");
+}

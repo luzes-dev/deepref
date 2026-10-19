@@ -250,7 +250,9 @@ the final contract step:
 2. Operator step, after the roll: `deepref-server backfill-project-workspaces`.
    It moves projects that still lack a workspace in batches of 500, one
    transaction per batch, then validates (total, unassigned, orphaned) in a
-   single statement. It is resumable and safe to rerun; a nonzero unassigned or
+   single statement. The same command marks existing users who hold an active
+   membership as onboarded, in bounded batches (sign-in does the same for any
+   it has not reached). It is resumable and safe to rerun; a nonzero unassigned or
    orphaned count fails the command and changes nothing.
 3. Only after the command reports a clean validation may a later
    `-- phase: contract` migration add `NOT NULL` and drop the trigger. That
@@ -258,6 +260,6 @@ the final contract step:
 
 Onboarding is tracked by `users.onboarded_at`, not by the user insert, so a user
 the previous release provisioned (no memberships) is onboarded by their next
-sign-in. Invitations bind only to a provider-verified address
-(`users.email_verified`). WorkOS reconciliation is serialized per Organization
+sign-in. Invitations bind only to the address the provider verified
+(`users.verified_email`, which must equal the current `primary_email`). WorkOS reconciliation is serialized per Organization
 and rejects any snapshot that began before `workspaces.workos_reconciled_through`.
