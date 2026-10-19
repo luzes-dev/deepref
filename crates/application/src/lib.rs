@@ -78,7 +78,7 @@ pub use study::{
 pub use workspaces::{
     DirectoryError, DirectoryFuture, DirectoryMembership, DirectoryMembershipStatus,
     DirectoryOrganization, OrganizationDirectory, ReconciliationFinding, map_directory_role,
-    personal_workspace_name, workspace_slug,
+    normalize_invitation_email, personal_workspace_name, workspace_slug,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

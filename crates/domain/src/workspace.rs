@@ -97,6 +97,16 @@ impl WorkspaceRole {
         }
     }
 
+    /// Orders roles by authority. A role may be granted only by someone whose
+    /// own rank is at least as high.
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Owner => 3,
+            Self::Admin => 2,
+            Self::Member => 1,
+        }
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "owner" => Some(Self::Owner),

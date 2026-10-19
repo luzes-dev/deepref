@@ -281,19 +281,29 @@ pub async fn sign_in(
         return Ok(SignIn::Deactivated);
     }
     if inserted {
-        // Onboarding (03a): the first sign-in creates one personal workspace
-        // with the user as owner, in this same transaction. A retried callback
-        // inserts no user (`inserted` is false), so it creates no second
-        // workspace; a user that existed before workspaces is onboarded by the
-        // staged migration instead.
-        crate::workspaces::create_personal_workspace(
+        // Onboarding (03a), in this same transaction. A pending invitation to
+        // the provider-verified email joins its workspace and creates no
+        // personal workspace; otherwise the user gets one personal workspace
+        // as owner. A retried callback inserts no user (`inserted` is false),
+        // so it onboards nothing twice; a user that existed before workspaces
+        // is onboarded by the staged migration instead.
+        let joined = crate::workspaces::accept_first_pending_invitation(
             &mut tx,
             user.id,
-            profile.display_name.as_deref(),
             &profile.email,
             audit,
         )
         .await?;
+        if joined.is_none() {
+            crate::workspaces::create_personal_workspace(
+                &mut tx,
+                user.id,
+                profile.display_name.as_deref(),
+                &profile.email,
+                audit,
+            )
+            .await?;
+        }
     }
     sqlx::query(
         "INSERT INTO user_sessions

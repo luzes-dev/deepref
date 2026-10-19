@@ -16,8 +16,8 @@ use std::collections::{HashMap, HashSet};
 
 use deepref_application::workspaces::{
     DirectoryError, DirectoryMembership, DirectoryMembershipStatus, DirectoryOrganization,
-    OrganizationDirectory, ReconciliationFinding, map_directory_role, personal_workspace_name,
-    workspace_slug,
+    OrganizationDirectory, ReconciliationFinding, map_directory_role, normalize_invitation_email,
+    personal_workspace_name, workspace_slug,
 };
 use deepref_domain::{
     ExternalOrganizationId, ExternalUserId, GrantSource, MembershipStatus, ProjectId, ProjectRole,
@@ -61,6 +61,22 @@ pub enum WorkspaceError {
     MigrationWorkspaceProtected,
     #[error("a workspace that still owns projects cannot be deleted")]
     WorkspaceHasProjects,
+    #[error("only an active owner or admin of the workspace may do this")]
+    NotPermitted,
+    #[error("an invitation cannot grant a role above the inviter's own")]
+    RoleAboveInviter,
+    #[error("the invitation address or expiry is invalid")]
+    InvalidInvitation,
+    #[error("a pending invitation for this address already exists")]
+    InvitationAlreadyPending,
+    #[error("no such invitation")]
+    UnknownInvitation,
+    #[error("the invitation is no longer pending")]
+    InvitationUnavailable,
+    #[error("the invitation has expired")]
+    InvitationExpired,
+    #[error("the invitation was issued to a different address")]
+    InvitationEmailMismatch,
     #[error(transparent)]
     Directory(#[from] DirectoryError),
 }
@@ -127,6 +143,10 @@ enum TenancyEvent {
     ProjectAccessGranted(ProjectRole, GrantSource),
     ProjectAccessRoleChanged(ProjectRole),
     ProjectAccessRemoved(ProjectRole, GrantSource),
+    InvitationCreated(WorkspaceRole),
+    InvitationAccepted(WorkspaceRole),
+    InvitationRevoked(WorkspaceRole),
+    InvitationExpired(WorkspaceRole),
 }
 
 impl TenancyEvent {
@@ -142,6 +162,10 @@ impl TenancyEvent {
             Self::ProjectAccessGranted(_, _) => "project_access.granted",
             Self::ProjectAccessRoleChanged(_) => "project_access.role_changed",
             Self::ProjectAccessRemoved(_, _) => "project_access.removed",
+            Self::InvitationCreated(_) => "invitation.created",
+            Self::InvitationAccepted(_) => "invitation.accepted",
+            Self::InvitationRevoked(_) => "invitation.revoked",
+            Self::InvitationExpired(_) => "invitation.expired",
         }
     }
 
@@ -157,6 +181,10 @@ impl TenancyEvent {
                 json!({ "role": role.as_str(), "grant_source": source.as_str() })
             }
             Self::ProjectAccessRoleChanged(role) => json!({ "role": role.as_str() }),
+            Self::InvitationCreated(role)
+            | Self::InvitationAccepted(role)
+            | Self::InvitationRevoked(role)
+            | Self::InvitationExpired(role) => json!({ "role": role.as_str() }),
             Self::WorkspaceRenamed | Self::WorkspaceDeleted => json!({}),
         }
     }
@@ -1142,4 +1170,356 @@ pub async fn reconcile_organizations(
         reports.push(apply_organization_snapshot(pool, &snapshot, audit).await?);
     }
     Ok(reports)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitationRecord {
+    pub id: Uuid,
+    pub workspace_id: WorkspaceId,
+    pub email: String,
+    pub role: WorkspaceRole,
+    pub invited_by: UserId,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// How one acceptance attempt ended. `Expired` and `Unavailable` change
+/// nothing for the user; `Expired` also marks the invitation expired and
+/// audits it, so that write must be committed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcceptOutcome {
+    Accepted(MembershipRecord),
+    Expired,
+    Unavailable,
+    EmailMismatch,
+}
+
+/// The actor's active role in a workspace, if it may invite: only active
+/// owners and admins do.
+async fn inviting_role(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace_id: WorkspaceId,
+    actor: UserId,
+) -> Result<WorkspaceRole, WorkspaceError> {
+    let role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_memberships
+         WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'",
+    )
+    .bind(workspace_id.as_uuid())
+    .bind(actor.as_uuid())
+    .fetch_optional(&mut **tx)
+    .await?;
+    let role = role
+        .as_deref()
+        .and_then(WorkspaceRole::parse)
+        .ok_or(WorkspaceError::NotPermitted)?;
+    if role.rank() < WorkspaceRole::Admin.rank() {
+        return Err(WorkspaceError::NotPermitted);
+    }
+    Ok(role)
+}
+
+/// Creates a pending invitation (`workspace:members:invite`). Only an active
+/// owner or admin may invite, never to a role above their own. A stale pending
+/// invitation to the same address is expired (and audited) first, so a
+/// re-invitation after expiry works while a live one is refused.
+pub async fn invite_to_workspace(
+    pool: &PgPool,
+    actor: UserId,
+    workspace_id: WorkspaceId,
+    email: &str,
+    role: WorkspaceRole,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    audit: AuditRequest<'_>,
+) -> Result<InvitationRecord, WorkspaceError> {
+    let email = normalize_invitation_email(email).ok_or(WorkspaceError::InvalidInvitation)?;
+    if expires_at <= chrono::Utc::now() {
+        return Err(WorkspaceError::InvalidInvitation);
+    }
+    let mut tx = pool.begin().await?;
+    lock_workspace(&mut tx, workspace_id).await?;
+    let inviter = inviting_role(&mut tx, workspace_id, actor).await?;
+    if role.rank() > inviter.rank() {
+        return Err(WorkspaceError::RoleAboveInviter);
+    }
+    let already_member: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+           SELECT 1 FROM workspace_memberships m JOIN users u ON u.id = m.user_id
+           WHERE m.workspace_id = $1 AND m.status = 'active'
+             AND lower(btrim(u.primary_email)) = $2)",
+    )
+    .bind(workspace_id.as_uuid())
+    .bind(&email)
+    .fetch_one(&mut *tx)
+    .await?;
+    if already_member {
+        return Err(WorkspaceError::AlreadyMember);
+    }
+    let stale = sqlx::query(
+        "UPDATE workspace_invitations SET status = 'expired', updated_at = now()
+         WHERE workspace_id = $1 AND email = $2 AND status = 'pending' AND expires_at <= now()
+         RETURNING role",
+    )
+    .bind(workspace_id.as_uuid())
+    .bind(&email)
+    .fetch_all(&mut *tx)
+    .await?;
+    for row in &stale {
+        let stale_role: String = row.try_get("role")?;
+        let stale_role =
+            WorkspaceRole::parse(&stale_role).ok_or(WorkspaceError::Corrupt("role"))?;
+        write_tenancy_audit(
+            &mut tx,
+            TenancyEvent::InvitationExpired(stale_role),
+            AuditPrincipal::System,
+            None,
+            Some(workspace_id),
+            None,
+            audit,
+        )
+        .await?;
+    }
+    let id = Uuid::new_v4();
+    let inserted = sqlx::query(
+        "INSERT INTO workspace_invitations
+           (id, workspace_id, email, role, invited_by, status, expires_at)
+         VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+         ON CONFLICT (workspace_id, email) WHERE status = 'pending' DO NOTHING",
+    )
+    .bind(id)
+    .bind(workspace_id.as_uuid())
+    .bind(&email)
+    .bind(role.as_str())
+    .bind(actor.as_uuid())
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if !inserted {
+        // Dropping the transaction rolls back the stale-expiry audit too; the
+        // caller retries with nothing half-applied.
+        return Err(WorkspaceError::InvitationAlreadyPending);
+    }
+    write_tenancy_audit(
+        &mut tx,
+        TenancyEvent::InvitationCreated(role),
+        AuditPrincipal::User(actor),
+        None,
+        Some(workspace_id),
+        None,
+        audit,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(InvitationRecord {
+        id,
+        workspace_id,
+        email,
+        role,
+        invited_by: actor,
+        expires_at,
+    })
+}
+
+/// Revokes a pending invitation. Only an active owner or admin of its
+/// workspace may, and only while it is still pending.
+pub async fn revoke_invitation(
+    pool: &PgPool,
+    actor: UserId,
+    invitation_id: Uuid,
+    audit: AuditRequest<'_>,
+) -> Result<(), WorkspaceError> {
+    let mut tx = pool.begin().await?;
+    let workspace: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM workspace_invitations WHERE id = $1")
+            .bind(invitation_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let workspace_id = WorkspaceId::new(workspace.ok_or(WorkspaceError::UnknownInvitation)?);
+    inviting_role(&mut tx, workspace_id, actor).await?;
+    let revoked = sqlx::query_scalar::<_, String>(
+        "UPDATE workspace_invitations
+         SET status = 'revoked', revoked_at = now(), updated_at = now()
+         WHERE id = $1 AND status = 'pending' RETURNING role",
+    )
+    .bind(invitation_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(WorkspaceError::InvitationUnavailable)?;
+    let role = WorkspaceRole::parse(&revoked).ok_or(WorkspaceError::Corrupt("role"))?;
+    write_tenancy_audit(
+        &mut tx,
+        TenancyEvent::InvitationRevoked(role),
+        AuditPrincipal::User(actor),
+        None,
+        Some(workspace_id),
+        None,
+        audit,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// One acceptance attempt inside the caller's transaction. Single use is the
+/// conditional UPDATE: of any number of concurrent attempts exactly one
+/// matches `status = 'pending'`. Expiry is judged by the database clock at
+/// this moment. The user's email must equal the invitation's.
+pub(crate) async fn accept_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: UserId,
+    invitation_id: Uuid,
+    audit: AuditRequest<'_>,
+) -> Result<AcceptOutcome, WorkspaceError> {
+    let user = sqlx::query("SELECT primary_email, status FROM users WHERE id = $1")
+        .bind(user_id.as_uuid())
+        .fetch_optional(&mut **tx)
+        .await?;
+    let user = user.ok_or(WorkspaceError::NotPermitted)?;
+    let status: String = user.try_get("status")?;
+    if status != "active" {
+        return Err(WorkspaceError::NotPermitted);
+    }
+    let user_email: String = user.try_get("primary_email")?;
+    let invitation =
+        sqlx::query("SELECT workspace_id, email FROM workspace_invitations WHERE id = $1")
+            .bind(invitation_id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(WorkspaceError::UnknownInvitation)?;
+    let workspace_id = WorkspaceId::new(invitation.try_get("workspace_id")?);
+    let invited_email: String = invitation.try_get("email")?;
+    if normalize_invitation_email(&user_email).as_deref() != Some(invited_email.as_str()) {
+        return Ok(AcceptOutcome::EmailMismatch);
+    }
+    let accepted = sqlx::query(
+        "UPDATE workspace_invitations
+         SET status = 'accepted', accepted_by_user_id = $2, accepted_at = now(), updated_at = now()
+         WHERE id = $1 AND status = 'pending' AND expires_at > now()
+         RETURNING role",
+    )
+    .bind(invitation_id)
+    .bind(user_id.as_uuid())
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(row) = accepted {
+        let role: String = row.try_get("role")?;
+        let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
+        lock_workspace(tx, workspace_id).await?;
+        let existing: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2)",
+        )
+        .bind(workspace_id.as_uuid())
+        .bind(user_id.as_uuid())
+        .fetch_one(&mut **tx)
+        .await?;
+        if existing {
+            return Err(WorkspaceError::AlreadyMember);
+        }
+        let membership = insert_membership_row(
+            tx,
+            workspace_id,
+            user_id,
+            role,
+            MembershipStatus::Active,
+            GrantSource::Local,
+            None,
+        )
+        .await?;
+        write_tenancy_audit(
+            tx,
+            TenancyEvent::InvitationAccepted(role),
+            AuditPrincipal::User(user_id),
+            Some(user_id),
+            Some(workspace_id),
+            None,
+            audit,
+        )
+        .await?;
+        write_tenancy_audit(
+            tx,
+            TenancyEvent::MembershipCreated(role, GrantSource::Local),
+            AuditPrincipal::User(user_id),
+            Some(user_id),
+            Some(workspace_id),
+            None,
+            audit,
+        )
+        .await?;
+        return Ok(AcceptOutcome::Accepted(membership));
+    }
+    let expired = sqlx::query_scalar::<_, String>(
+        "UPDATE workspace_invitations SET status = 'expired', updated_at = now()
+         WHERE id = $1 AND status = 'pending' AND expires_at <= now() RETURNING role",
+    )
+    .bind(invitation_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(role) = expired else {
+        return Ok(AcceptOutcome::Unavailable);
+    };
+    let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
+    write_tenancy_audit(
+        tx,
+        TenancyEvent::InvitationExpired(role),
+        AuditPrincipal::System,
+        None,
+        Some(workspace_id),
+        None,
+        audit,
+    )
+    .await?;
+    Ok(AcceptOutcome::Expired)
+}
+
+/// Accepts an invitation for an authenticated user: binds it to them and
+/// creates a `local` membership. An expired invitation is marked expired (and
+/// audited) before the refusal is returned.
+pub async fn accept_invitation(
+    pool: &PgPool,
+    user_id: UserId,
+    invitation_id: Uuid,
+    audit: AuditRequest<'_>,
+) -> Result<MembershipRecord, WorkspaceError> {
+    let mut tx = pool.begin().await?;
+    let outcome = accept_in_transaction(&mut tx, user_id, invitation_id, audit).await?;
+    tx.commit().await?;
+    match outcome {
+        AcceptOutcome::Accepted(membership) => Ok(membership),
+        AcceptOutcome::Expired => Err(WorkspaceError::InvitationExpired),
+        AcceptOutcome::Unavailable => Err(WorkspaceError::InvitationUnavailable),
+        AcceptOutcome::EmailMismatch => Err(WorkspaceError::InvitationEmailMismatch),
+    }
+}
+
+/// First sign-in (03a): joins the oldest pending, unexpired invitation that
+/// matches the user's email. Candidates are tried oldest first (`created_at`,
+/// then `id`); an expired one is marked expired and skipped, one that another
+/// attempt wins is skipped. Returns the membership joined, or `None` when the
+/// user has no usable invitation and should get a personal workspace.
+pub(crate) async fn accept_first_pending_invitation(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: UserId,
+    email: &str,
+    audit: AuditRequest<'_>,
+) -> Result<Option<MembershipRecord>, WorkspaceError> {
+    let Some(email) = normalize_invitation_email(email) else {
+        return Ok(None);
+    };
+    let candidates: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM workspace_invitations
+         WHERE email = $1 AND status = 'pending'
+         ORDER BY created_at, id",
+    )
+    .bind(&email)
+    .fetch_all(&mut **tx)
+    .await?;
+    for invitation_id in candidates {
+        if let AcceptOutcome::Accepted(membership) =
+            accept_in_transaction(tx, user_id, invitation_id, audit).await?
+        {
+            return Ok(Some(membership));
+        }
+    }
+    Ok(None)
 }

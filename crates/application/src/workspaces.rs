@@ -107,6 +107,21 @@ pub enum ReconciliationFinding {
     WorkspaceWithoutOwner { workspace_id: WorkspaceId },
 }
 
+/// Normalizes an invitation address: trimmed and lowercase, with an `@` that
+/// is neither first nor last and no whitespace. Both the invitation and the
+/// signed-in user's email pass through this, so matching is exact. Returns
+/// `None` for anything that cannot be an address.
+pub fn normalize_invitation_email(raw: &str) -> Option<String> {
+    let email = raw.trim().to_lowercase();
+    let (local, domain) = email.split_once('@')?;
+    let valid = !local.is_empty()
+        && !domain.is_empty()
+        && !domain.contains('@')
+        && email.len() <= 320
+        && !email.chars().any(char::is_whitespace);
+    valid.then_some(email)
+}
+
 /// The display name of the personal workspace first sign-in creates: the
 /// person it belongs to, never an email-as-key. Falls back to the email's
 /// local part so the name is never blank.
@@ -181,6 +196,24 @@ mod tests {
         );
         assert_eq!(map_directory_role(Some("janitor")), None);
         assert_eq!(map_directory_role(None), None);
+    }
+
+    #[test]
+    fn invitation_emails_are_normalized_or_refused() {
+        assert_eq!(
+            normalize_invitation_email("  Ada@Example.ORG "),
+            Some("ada@example.org".to_owned())
+        );
+        for bad in [
+            "",
+            "ada",
+            "@example.org",
+            "ada@",
+            "a b@example.org",
+            "a@b@c",
+        ] {
+            assert_eq!(normalize_invitation_email(bad), None, "{bad}");
+        }
     }
 
     #[test]
