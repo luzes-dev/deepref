@@ -7,6 +7,33 @@ DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a 
 PostgreSQL owns projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, domain events, durable jobs, graph status, and metric snapshots. The v2 evidence workspace is layered alongside the citation-ingestion model: records, reports, studies, screening events/state, review events, documents, audit rows, and leased jobs are all PostgreSQL tables.
 
 Authoritative state changes and their follow-up jobs are committed in one transaction. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, owns a lease with expiry renewal, retries failures with persisted attempts, marks terminal failures dead, and reclaims expired work. Stable dedupe keys prevent duplicate logical jobs. Ingestion preserves cached/fetched facts, discovered children, citations, events, and completion in the same transaction boundary; reconciliation repairs already-committed rows without silently dropping work.
+
+The generic transactional outbox (`outbox_events` with `outbox_receipts`) and
+the provider integration inbox (`integration_inbox_events`, migration `0083`)
+carry asynchronous publication and inbound WorkOS/Polar webhooks without a
+broker. Outbox rows are inserted in the same transaction as the authoritative
+change they describe and stay broker-independent: an in-process dispatcher in
+the worker claims bounded batches with lease expiry renewal and delivers to the
+typed handlers registered per message type and version, and a row is
+`delivered` only when every expected consumer's receipt — written in the
+consumer's own transaction, with its effect — has committed. Claiming or
+leasing never delivers; per-consumer retries back off and quarantine after
+their attempt budget, and quarantined rows are replayed explicitly with the
+same stable event identity. The inbox verifies provider signatures before any
+insert, deduplicates on `(provider, provider_event_id)`, acknowledges only
+after the insert commits, and moves events through
+`received -> processing -> processed | failed -> quarantined` with the same
+retry and replay discipline. The domain-specific `ai_autonomy_outbox` is
+deliberately kept separate from this generic outbox and is not consolidated
+into it; a later migration would need its own explicit decision and
+delivery/idempotency plan.
+
+Provider handlers treat duplicate and out-of-order webhook events as normal:
+they reload authoritative provider state or compare provider versions where
+available. Provider-specific reconciliation hooks run from the worker's
+existing periodic reconciler; WorkOS and Polar adapters register their hooks
+when those integrations land.
+
 Automation, compiled-review and workflow consumers read lifecycle status and
 timestamps from `durable_runs`, `durable_steps` and `durable_attempts`.
 Recipe, workflow graph and review provenance remain in their typed domain
@@ -80,6 +107,38 @@ Other contexts temporarily retain their existing app-root interfaces.
 `cargo xtask boundaries` rejects SQLx and direct query entry points in migrated
 review and assistant-plan transports; unmigrated contexts and dev-test targets
 are intentionally outside that source rule.
+
+### Acceptance status
+
+Handoff 04a is foundation-only until 02/08 wire real WorkOS/Polar verifiers,
+handlers, and reconciliation. Acceptance still needs provider fixtures for real
+signatures, out-of-order projection updates, missed-event reconciliation, and
+commit-before-ack behavior. Production registries are empty; metrics recompute
+continues to enqueue jobs directly. Dispatcher effects are synthetic test
+fixtures until the production pilot in 04b.
+
+Heartbeat ownership checks are polled before ready handler work where possible.
+Database effects must commit with the generation-fenced receipt or inbox
+completion; an inbox preflight check takes no row lock, and completion is the
+final write before commit so long effect transactions do not block renewal.
+Cancellation cannot retract an external request or COMMIT already submitted.
+External effects need downstream idempotency keys (outbox event ID + consumer,
+or inbox provider + provider event ID), and downstream fencing where supported.
+
+Inbox receipt rejects missing, empty, or whitespace-padded `event_type` with a
+typed error. Provider adapters must supply the verified event's explicit type;
+04a does not accept a provider contract that omits it.
+
+Each due outbox consumer reserves one attempt per claim generation. Failure
+bookkeeping and abandoned-claim recovery settle that reservation without
+charging it again; consumers in backoff reserve nothing. Unsupported frozen
+consumers are parked for five minutes with a diagnostic, and claims exclude
+incompatible sets even beyond the bounded parking batch.
+
+Inbox receipt accepts bodies up to 256 KiB. Processed payloads expire after
+30 days; the explicit `purge_processed_inbox_payloads` app operation replaces
+expired payloads with NULL while retaining `(provider, provider_event_id)` and
+processing evidence for deduplication. No purge scheduler is installed.
 
 ## AI foundation and evidence grounding
 
@@ -296,3 +355,49 @@ request. Publication alerts and PMID imports keep their own providers.
 
 Just remains the public command interface, Mise owns tool versions, and xtask
 owns the repository graph. Ordinary build, test, and service commands stay in Just.
+
+## Workspace tenancy: project backfill (handoff 03a)
+
+Every project belongs to one workspace. The staged rollout is expand-only until
+the final contract step:
+
+1. `deepref-server migrate` (once, before any new replica starts) creates the
+   workspace tables, the fixed migration workspace, the nullable
+   `projects.workspace_id`, and a BEFORE INSERT trigger that assigns the
+   migration workspace to any project inserted without one (previous-release
+   binaries). It also runs one bounded backfill batch and grants existing users
+   ownership of the migration workspace. The `projects (workspace_id)` index is
+   built `CONCURRENTLY` by its own `-- no-transaction` migration.
+2. Operator step, after the roll: `deepref-server backfill-project-workspaces`.
+   It moves projects that still lack a workspace in batches of 500, one
+   transaction per batch, then validates (total, unassigned, orphaned) in a
+   single statement. The same command marks existing users who hold an active
+   membership as onboarded, in bounded batches (sign-in does the same for any
+   it has not reached). It is resumable and safe to rerun; a nonzero unassigned or
+   orphaned count fails the command and changes nothing.
+3. Only after the command reports a clean validation may a later
+   `-- phase: contract` migration add `NOT NULL` and drop the trigger. That
+   migration needs a `requires-release-out-of-service` line.
+
+Onboarding is tracked by `users.onboarded_at`, not by the user insert, so a user
+the previous release provisioned (no memberships) is onboarded by their next
+sign-in. Invitations bind only to the address the provider verified
+(`users.verified_email`, which must equal the current `primary_email`). WorkOS reconciliation is serialized per Organization
+and rejects any snapshot that began before `workspaces.workos_reconciled_through`.
+
+## Migration recovery: the denial-window index (handoff 03b)
+
+Migration 0100 builds `admin_audit_denial_window_idx` with
+`CREATE UNIQUE INDEX CONCURRENTLY`, outside a transaction. If it is interrupted
+(process killed, lock timeout, a duplicate key found while building), PostgreSQL
+leaves an INVALID index of that name and the next run of 0100 fails with
+"relation already exists". Recover by hand, then rerun the migrations:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS admin_audit_denial_window_idx;
+```
+
+Migration 0101 asserts the index is valid, ready and unique and refuses to
+continue otherwise, so a skipped or half-built index can never be accepted. The
+two migrations are unreleased; once released they are immutable and any repair
+is a new migration.

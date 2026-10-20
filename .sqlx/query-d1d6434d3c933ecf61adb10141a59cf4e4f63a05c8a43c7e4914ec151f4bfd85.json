@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE integration_inbox_events\n           SET processing_state = 'processed', processed_at = now(),\n               payload_expires_at = clock_timestamp() + make_interval(days => $4),\n               lease_owner = NULL, lease_expires_at = NULL, next_attempt_at = now()\n           WHERE id = $1 AND lease_owner = $2 AND claim_generation = $3\n             AND processing_state = 'processing' AND lease_expires_at > clock_timestamp()\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d1d6434d3c933ecf61adb10141a59cf4e4f63a05c8a43c7e4914ec151f4bfd85"
+}

@@ -20,9 +20,11 @@ import type {
 
 import type {
 	ApiErrorBody,
+	AssignScientificRoleRequest,
 	CreateProject,
 	PaginatedResponseProjectDto,
-	ProjectDto
+	ProjectDto,
+	ScientificAssignmentDto
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -643,6 +645,389 @@ export const createUpdateProject = <TError = ErrorType<ApiErrorBody>, TContext =
 	const backupQueryClient = useQueryClient(queryClient?.());
 	return createMutation(
 		() => ({ ...getUpdateProjectMutationOptions(backupQueryClient, options?.()) }),
+		queryClient
+	);
+};
+export type listScientificAssignmentsResponse200 = {
+	data: ScientificAssignmentDto[];
+	status: 200;
+};
+
+export type listScientificAssignmentsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listScientificAssignmentsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listScientificAssignmentsResponseSuccess = listScientificAssignmentsResponse200 & {
+	headers: Headers;
+};
+export type listScientificAssignmentsResponseError = (
+	listScientificAssignmentsResponse404 | listScientificAssignmentsResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListScientificAssignmentsUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/scientific-assignments`;
+};
+
+export const listScientificAssignments = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listScientificAssignmentsResponseSuccess> => {
+	return customFetch<listScientificAssignmentsResponseSuccess>(
+		getListScientificAssignmentsUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListScientificAssignmentsQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/scientific-assignments`] as const;
+};
+
+export const getListScientificAssignmentsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listScientificAssignments>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listScientificAssignments>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getListScientificAssignmentsQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listScientificAssignments>>> = ({
+		signal
+	}) => listScientificAssignments(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<
+		Awaited<ReturnType<typeof listScientificAssignments>>,
+		TError,
+		TData
+	> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListScientificAssignmentsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listScientificAssignments>>
+>;
+export type ListScientificAssignmentsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListScientificAssignments<
+	TData = Awaited<ReturnType<typeof listScientificAssignments>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listScientificAssignments>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListScientificAssignmentsQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListScientificAssignmentsQuery = async <
+	TData = Awaited<ReturnType<typeof listScientificAssignments>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listScientificAssignments>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListScientificAssignmentsQueryOptions(projectId, options);
+
+	await queryClient.query(queryOptions).catch(() => {});
+
+	return queryClient;
+};
+
+export type assignScientificRoleResponse201 = {
+	data: ScientificAssignmentDto;
+	status: 201;
+};
+
+export type assignScientificRoleResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type assignScientificRoleResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type assignScientificRoleResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type assignScientificRoleResponseSuccess = assignScientificRoleResponse201 & {
+	headers: Headers;
+};
+export type assignScientificRoleResponseError = (
+	| assignScientificRoleResponse400
+	| assignScientificRoleResponse404
+	| assignScientificRoleResponse500
+) & {
+	headers: Headers;
+};
+
+export const getAssignScientificRoleUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/scientific-assignments`;
+};
+
+export const assignScientificRole = async (
+	projectId: string,
+	assignScientificRoleRequest: AssignScientificRoleRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<assignScientificRoleResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
+	};
+	return customFetch<assignScientificRoleResponseSuccess>(getAssignScientificRoleUrl(projectId), {
+		...options,
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(assignScientificRoleRequest)
+	});
+};
+
+export const getAssignScientificRoleMutationKey = () => ['assignScientificRole'] as const;
+
+export const getAssignScientificRoleMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof assignScientificRole>>,
+		TError,
+		AssignScientificRoleMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof assignScientificRole>>,
+	TError,
+	AssignScientificRoleMutationVariables,
+	TContext
+> => {
+	const mutationKey = getAssignScientificRoleMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof assignScientificRole>>,
+		AssignScientificRoleMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return assignScientificRole(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type AssignScientificRoleMutationResult = NonNullable<
+	Awaited<ReturnType<typeof assignScientificRole>>
+>;
+export type AssignScientificRoleMutationBody = BodyType<AssignScientificRoleRequest>;
+export type AssignScientificRoleMutationError = ErrorType<ApiErrorBody>;
+export type AssignScientificRoleMutationVariables = {
+	projectId: string;
+	data: BodyType<AssignScientificRoleRequest>;
+};
+
+export const createAssignScientificRole = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof assignScientificRole>>,
+			TError,
+			AssignScientificRoleMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof assignScientificRole>>,
+	TError,
+	AssignScientificRoleMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getAssignScientificRoleMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type revokeScientificRoleResponse200 = {
+	data: ScientificAssignmentDto;
+	status: 200;
+};
+
+export type revokeScientificRoleResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type revokeScientificRoleResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type revokeScientificRoleResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type revokeScientificRoleResponseSuccess = revokeScientificRoleResponse200 & {
+	headers: Headers;
+};
+export type revokeScientificRoleResponseError = (
+	| revokeScientificRoleResponse400
+	| revokeScientificRoleResponse404
+	| revokeScientificRoleResponse500
+) & {
+	headers: Headers;
+};
+
+export const getRevokeScientificRoleUrl = (projectId: string, userId: string, role: string) => {
+	return `/api/projects/${projectId}/scientific-assignments/${userId}/${role}`;
+};
+
+export const revokeScientificRole = async (
+	projectId: string,
+	userId: string,
+	role: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<revokeScientificRoleResponseSuccess> => {
+	return customFetch<revokeScientificRoleResponseSuccess>(
+		getRevokeScientificRoleUrl(projectId, userId, role),
+		{
+			...options,
+			method: 'DELETE'
+		}
+	);
+};
+
+export const getRevokeScientificRoleMutationKey = () => ['revokeScientificRole'] as const;
+
+export const getRevokeScientificRoleMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof revokeScientificRole>>,
+		TError,
+		RevokeScientificRoleMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof revokeScientificRole>>,
+	TError,
+	RevokeScientificRoleMutationVariables,
+	TContext
+> => {
+	const mutationKey = getRevokeScientificRoleMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof revokeScientificRole>>,
+		RevokeScientificRoleMutationVariables
+	> = (props) => {
+		const { projectId, userId, role } = props ?? {};
+
+		return revokeScientificRole(projectId, userId, role, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RevokeScientificRoleMutationResult = NonNullable<
+	Awaited<ReturnType<typeof revokeScientificRole>>
+>;
+
+export type RevokeScientificRoleMutationError = ErrorType<ApiErrorBody>;
+export type RevokeScientificRoleMutationVariables = {
+	projectId: string;
+	userId: string;
+	role: string;
+};
+
+export const createRevokeScientificRole = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof revokeScientificRole>>,
+			TError,
+			RevokeScientificRoleMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof revokeScientificRole>>,
+	TError,
+	RevokeScientificRoleMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRevokeScientificRoleMutationOptions(options?.()) }),
 		queryClient
 	);
 };

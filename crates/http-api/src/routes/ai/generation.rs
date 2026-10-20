@@ -23,7 +23,8 @@ use deepref_review::ReviewScheduler as _;
 pub(crate) async fn generate_screening_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<GenerateScreeningRequest>,
 ) -> Result<AcceptedReviewRun, ApiError> {
     let snapshot = deepref_app::schedule_screening_review(
@@ -33,7 +34,7 @@ pub(crate) async fn generate_screening_suggestion(
         input.stage.ai(),
         input.protocol_version_id,
         input.expected_revision,
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .await
     .map_err(map_review_preparation_error)?;
@@ -58,13 +59,14 @@ pub(crate) async fn generate_screening_suggestion(
 pub(crate) async fn generate_study_grouping_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<AcceptedReviewRun, ApiError> {
     let snapshot = deepref_app::schedule_study_grouping_review(
         &state.pool,
         project_id,
         report_id,
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .await
     .map_err(map_review_preparation_error)?;
@@ -90,7 +92,8 @@ pub(crate) async fn generate_study_grouping_suggestion(
 pub(crate) async fn generate_appraisal_prefill_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<GenerateAppraisalPrefillRequest>,
 ) -> Result<AcceptedReviewRun, ApiError> {
     let snapshot = deepref_app::schedule_appraisal_prefill_review(
@@ -99,7 +102,7 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
         report_id,
         &input.definition_id,
         input.definition_version,
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .await
     .map_err(map_review_preparation_error)?;
@@ -128,7 +131,8 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
 pub(crate) async fn generate_duplicate_suggestion(
     State(state): State<AppState>,
     Path((project_id, record_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<GenerateDuplicateRequest>,
 ) -> Result<AcceptedReviewRun, ApiError> {
     let snapshot = deepref_app::schedule_duplicate_detection_review(
@@ -136,7 +140,7 @@ pub(crate) async fn generate_duplicate_suggestion(
         project_id,
         record_id,
         input.candidate_report_id,
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .await
     .map_err(map_review_preparation_error)?;
@@ -203,7 +207,8 @@ pub(crate) async fn get_review_run(
 pub(crate) async fn retry_review_run(
     State(state): State<AppState>,
     Path((project_id, run_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<RetryReviewRunRequest>,
 ) -> Result<AcceptedReviewRun, ApiError> {
     let visible: bool = sqlx::query_scalar("SELECT ai_first_run_visible($1,$2)")
@@ -228,7 +233,7 @@ pub(crate) async fn retry_review_run(
         project_id.into(),
         run_id,
         intent,
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .await
     .map_err(map_review_preparation_error)?;

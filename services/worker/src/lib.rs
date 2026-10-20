@@ -26,8 +26,10 @@ pub mod config;
 pub mod delivery;
 pub mod enrichment;
 pub mod heartbeat;
+pub mod inbox_processor;
 pub mod limiter;
 pub mod metadata;
+pub mod outbox_dispatch;
 pub mod pmid_import;
 pub mod processor;
 pub mod reconciler;
@@ -166,7 +168,7 @@ pub async fn run_with_shutdown(
         .acquire_timeout(database.acquire_timeout)
         .idle_timeout(Some(database.idle_timeout))
         .max_lifetime(Some(database.max_lifetime))
-        .connect(&database.url)
+        .connect(database.url())
         .await?;
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     let document_store = Arc::new(DocumentStore::from_config(&config.documents)?);
@@ -195,10 +197,52 @@ pub async fn run_with_shutdown(
         config.runtime.integrations.contact_email.clone(),
         reconciler_signal.clone(),
     ));
-    let reconciler_task = tokio::spawn(reconciler::run(
+    let provider_reconcilers =
+        Arc::new(deepref_application::inbox::ProviderReconcilerRegistry::new());
+    let reconciler_task = tokio::spawn(reconciler::run_with_provider_reconcilers(
         pool.clone(),
         config.reconciler_interval,
-        reconciler_signal,
+        reconciler_signal.clone(),
+        provider_reconcilers,
+    ));
+    // The in-process outbox dispatcher (04a) is the outbox recipient until the
+    // trigger-gated JetStream relay (04b) replaces it on the same rows. Its
+    // registry is empty in 04a; production publication starts with 04b.
+    // The inbox processor shell claims nothing
+    // until provider adapters register handlers in 02/08.
+    let outbox_task = tokio::spawn(supervise_processor(
+        "outbox dispatcher",
+        reconciler_shutdown.clone(),
+        outbox_dispatch::run(
+            pool.clone(),
+            Arc::new(deepref_application::outbox::OutboxRegistry::new()),
+            owner.clone(),
+            outbox_dispatch::OutboxDispatchConfig {
+                batch: 16,
+                concurrency: config.concurrency,
+                claim_lease: config.claim_lease,
+                poll_interval: Duration::from_millis(250),
+                drain_deadline: config.runtime.telemetry.shutdown_deadline,
+            },
+            shutdown::on_signal(reconciler_signal.clone()),
+        ),
+    ));
+    let inbox_task = tokio::spawn(supervise_processor(
+        "inbox processor",
+        reconciler_shutdown.clone(),
+        inbox_processor::run(
+            pool.clone(),
+            Arc::new(deepref_application::inbox::InboxRegistry::new()),
+            owner.clone(),
+            inbox_processor::InboxProcessorConfig {
+                batch: 16,
+                concurrency: config.concurrency,
+                claim_lease: config.claim_lease,
+                poll_interval: Duration::from_millis(250),
+                drain_deadline: config.runtime.telemetry.shutdown_deadline,
+            },
+            shutdown::on_signal(reconciler_signal.clone()),
+        ),
     ));
     // The heartbeat outlives the drain: the worker is alive until its last
     // in-flight job has been settled.
@@ -234,8 +278,12 @@ pub async fn run_with_shutdown(
     );
     let loop_shutdown = {
         let reconciler_shutdown = reconciler_shutdown.clone();
+        let processor_signal = reconciler_signal.clone();
         async move {
-            shutdown_signal.await;
+            tokio::select! {
+                _ = shutdown_signal => {},
+                _ = shutdown::on_signal(processor_signal) => {},
+            }
             reconciler_shutdown.send_replace(true);
         }
     };
@@ -258,12 +306,53 @@ pub async fn run_with_shutdown(
     reconciler_shutdown.send_replace(true);
     let reconciler_drained =
         tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, reconciler_task).await;
+    // These processors enforce their own drain deadline, then abort and await
+    // every owned event. Await the processors themselves instead of dropping
+    // a JoinHandle on an outer timeout and detaching cleanup.
+    let outbox_drained = outbox_task.await;
+    let inbox_drained = inbox_task.await;
     loop_result?;
     match reconciler_drained {
         Ok(result) => result?,
         Err(_) => anyhow::bail!("worker reconciler drain deadline exceeded"),
     }
+    outbox_drained??;
+    inbox_drained??;
     Ok(())
+}
+
+/// An unexpected processor exit (including unwind) stops the worker so its
+/// process supervisor can restart it. Transient claim errors retry in the loop.
+async fn supervise_processor<T>(
+    name: &'static str,
+    shutdown: watch::Sender<bool>,
+    work: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    struct StopOnExit {
+        name: &'static str,
+        shutdown: watch::Sender<bool>,
+    }
+    impl Drop for StopOnExit {
+        fn drop(&mut self) {
+            if !*self.shutdown.borrow() {
+                tracing::error!(
+                    processor = self.name,
+                    "processor stopped unexpectedly; stopping worker"
+                );
+                self.shutdown.send_replace(true);
+            }
+        }
+    }
+    let _guard = StopOnExit {
+        name,
+        shutdown: shutdown.clone(),
+    };
+    let result = work.await;
+    if !*shutdown.borrow() {
+        result?;
+        anyhow::bail!("{name} stopped unexpectedly");
+    }
+    result
 }
 
 fn production_handler(

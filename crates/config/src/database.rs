@@ -1,10 +1,14 @@
 use std::{fs, time::Duration};
 
+use secrecy::{ExposeSecret, SecretString};
+
 use crate::{ConfigError, Environment, optional, parse};
 
+/// Database settings. The URL carries the password, so `Debug` redacts it and
+/// [`DatabaseConfig::url`] is the only way to read it.
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
-    pub url: String,
+    url: SecretString,
     pub pool_min: u32,
     pub pool_max: u32,
     pub acquire_timeout: Duration,
@@ -13,6 +17,12 @@ pub struct DatabaseConfig {
 }
 
 impl DatabaseConfig {
+    /// The only accessor for the connection URL; hand it straight to the pool
+    /// and never log it.
+    pub fn url(&self) -> &str {
+        self.url.expose_secret()
+    }
+
     pub(crate) fn from_source(
         environment: Environment,
         get: &dyn Fn(&str) -> Option<String>,
@@ -35,7 +45,7 @@ impl DatabaseConfig {
                 })?
                 .trim()
                 .to_owned(),
-            (None, None) if environment.is_local() => {
+            (None, None) if environment.is_development() => {
                 "postgres://postgres:postgres@127.0.0.1:5432/deepref".to_owned()
             }
             (None, None) => return Err(ConfigError::Missing("DATABASE_URL", environment)),
@@ -56,7 +66,7 @@ impl DatabaseConfig {
             });
         }
         Ok(Self {
-            url,
+            url: SecretString::from(url),
             pool_min,
             pool_max,
             acquire_timeout: seconds(get, "DATABASE_ACQUIRE_TIMEOUT_SECS", 10)?,

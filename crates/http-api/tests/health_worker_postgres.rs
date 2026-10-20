@@ -33,12 +33,12 @@ async fn database() -> Option<PgPool> {
 fn api_config() -> ApiConfig {
     let runtime = deepref_config::RuntimeConfig::from_map(
         "deepref-api-health-worker-test",
-        &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
+        &HashMap::from([("APP_ENV".to_owned(), "development".to_owned())]),
     )
     .expect("local test runtime should parse");
     ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local test document configuration"),
         runtime,

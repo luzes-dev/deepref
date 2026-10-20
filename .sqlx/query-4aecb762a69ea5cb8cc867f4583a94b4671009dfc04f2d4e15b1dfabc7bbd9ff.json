@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event_id FROM outbox_receipts WHERE event_id = $1 AND consumer = $2 AND state = 'delivered'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "event_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4aecb762a69ea5cb8cc867f4583a94b4671009dfc04f2d4e15b1dfabc7bbd9ff"
+}

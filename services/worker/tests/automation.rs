@@ -127,7 +127,7 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
                 None,
                 None,
                 &deepref_worker::config::WorkerConfig::from_source(
-                    &|name| (name == "APP_ENV").then(|| "local".into())
+                    &|name| (name == "APP_ENV").then(|| "development".into())
                 )
                 .expect("local worker configuration"),
             )
@@ -143,7 +143,7 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
                 None,
                 None,
                 &deepref_worker::config::WorkerConfig::from_source(
-                    &|name| (name == "APP_ENV").then(|| "local".into())
+                    &|name| (name == "APP_ENV").then(|| "development".into())
                 )
                 .expect("local worker configuration"),
             )
@@ -243,7 +243,7 @@ async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<(
             None,
             None,
             &deepref_worker::config::WorkerConfig::from_source(&|name| {
-                (name == "APP_ENV").then(|| "local".into())
+                (name == "APP_ENV").then(|| "development".into())
             })
             .expect("local worker configuration"),
         )
@@ -324,7 +324,7 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
             None,
             None,
             &deepref_worker::config::WorkerConfig::from_source(&|name| {
-                (name == "APP_ENV").then(|| "local".into())
+                (name == "APP_ENV").then(|| "development".into())
             })
             .expect("local worker configuration"),
         )
@@ -340,7 +340,7 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
                 None,
                 None,
                 &deepref_worker::config::WorkerConfig::from_source(
-                    &|name| (name == "APP_ENV").then(|| "local".into())
+                    &|name| (name == "APP_ENV").then(|| "development".into())
                 )
                 .expect("local worker configuration"),
             )
@@ -419,7 +419,7 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
                 None,
                 None,
                 &deepref_worker::config::WorkerConfig::from_source(
-                    &|name| (name == "APP_ENV").then(|| "local".into())
+                    &|name| (name == "APP_ENV").then(|| "development".into())
                 )
                 .expect("local worker configuration"),
             )

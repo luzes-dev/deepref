@@ -140,12 +140,12 @@ async fn database() -> Option<PgPool> {
 fn api_config() -> ApiConfig {
     let runtime = deepref_config::RuntimeConfig::from_map(
         "deepref-api-ai-test",
-        &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
+        &HashMap::from([("APP_ENV".to_owned(), "development".to_owned())]),
     )
     .expect("local test runtime should parse");
     ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local test document configuration"),
         runtime,
@@ -174,7 +174,7 @@ where
     let owner = format!("http-review-test-{run_id}");
     let gateway = Arc::new(gateway);
     let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
-        "APP_ENV" => Some("local".into()),
+        "APP_ENV" => Some("development".into()),
         "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
         _ => None,
     })

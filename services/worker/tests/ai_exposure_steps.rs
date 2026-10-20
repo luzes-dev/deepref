@@ -78,7 +78,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             &job.lease("ai-exposure-test"),
             None,
             &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
-                (name == "APP_ENV").then(|| "local".into())
+                (name == "APP_ENV").then(|| "development".into())
             })
             .expect("local runtime configuration"),
             &deepref_worker::metadata::MetadataClients::default(),

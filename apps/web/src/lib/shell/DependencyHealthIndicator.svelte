@@ -3,24 +3,31 @@
 	import { Button } from '@deepref/ui/button';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { cn } from '@deepref/ui/utils';
-	import { createGetDependencyStatus } from '#lib/api/generated/health/health.js';
+	import {
+		createGetDependencyStatus,
+		createGetProjectDependencyStatus
+	} from '#lib/api/generated/health/health.js';
 	import { summarizeDependencyHealth } from './dependency-health';
 
 	// Scoped to the project in view, so one project's failures do not colour
 	// another project's pages. Without a project the probe covers the workspace.
 	let { projectId = null }: { projectId?: string | null } = $props();
 
-	const dependenciesQuery = createGetDependencyStatus(
-		() => ({ project_id: projectId ?? undefined }),
-		() => ({
-			query: {
-				refetchInterval: 10_000,
-				refetchIntervalInBackground: false,
-				refetchOnWindowFocus: 'always',
-				staleTime: 5_000
-			}
-		})
+	const queryOptions = {
+		refetchInterval: 10_000,
+		refetchIntervalInBackground: false,
+		refetchOnWindowFocus: 'always',
+		staleTime: 5_000
+	} as const;
+	// The project probe needs project:view; the deployment probe is public.
+	const workspaceQuery = createGetDependencyStatus(() => ({
+		query: { ...queryOptions, enabled: !projectId }
+	}));
+	const projectQuery = createGetProjectDependencyStatus(
+		() => projectId ?? '',
+		() => ({ query: { ...queryOptions, enabled: Boolean(projectId) } })
 	);
+	const dependenciesQuery = $derived(projectId ? projectQuery : workspaceQuery);
 
 	const summary = $derived(
 		summarizeDependencyHealth(dependenciesQuery.data?.data, dependenciesQuery.error, {

@@ -60,6 +60,134 @@
         }
       }
     },
+    "/auth/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "completeLogin",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the requested page, or to /signin with an error code"
+          },
+          "404": {
+            "description": "Authentication is not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "startLogin",
+        "parameters": [
+          {
+            "name": "return_to",
+            "in": "query",
+            "description": "A path on this application to return to after sign-in, such as `/projects`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the sign-in provider"
+          },
+          "400": {
+            "description": "return_to is not a path on this application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication is not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Signed out; the session cookie is cleared"
+          },
+          "403": {
+            "description": "Cross-origin request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/automations/catalog": {
       "get": {
         "tags": [
@@ -131,22 +259,8 @@
         "tags": [
           "health"
         ],
+        "summary": "Deployment-wide status. Public like the other probes, so it takes no\nproject filter and carries no per-project data.",
         "operationId": "getDependencyStatus",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "query",
-            "description": "Check only this project's background jobs. Omit for the whole workspace.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "format": "uuid"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -398,6 +512,36 @@
           },
           "429": {
             "description": "Too many calls (60 per minute per address)"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "getCurrentUser",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -5962,7 +6106,7 @@
             }
           },
           "400": {
-            "description": "Invalid run bounds or actor",
+            "description": "Invalid run bounds",
             "content": {
               "application/json": {
                 "schema": {
@@ -6396,6 +6540,39 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/health/dependencies": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "The same probe narrowed to one project's jobs. The PEP requires\n`project:view` on the path's project.",
+        "operationId": "getProjectDependencyStatus",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DependencyStatus"
                 }
               }
             },
@@ -9326,6 +9503,212 @@
           },
           "404": {
             "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/scientific-assignments": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listScientificAssignments",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active scientific assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScientificAssignmentDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "assignScientificRole",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignScientificRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Scientific assignment created or already active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScientificAssignmentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scientific role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or user not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/scientific-assignments/{user_id}/{role}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "revokeScientificRole",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Assigned user",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "description": "Scientific role",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked scientific assignment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScientificAssignmentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scientific role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or active assignment not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -13694,6 +14077,22 @@
           }
         }
       },
+      "AssignScientificRoleRequest": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "AssistantChatRequestDto": {
         "type": "object",
         "required": [
@@ -15145,6 +15544,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace to create the project in. Optional when the caller belongs to\nexactly one workspace that can hold projects; required otherwise. The\ncaller needs `project:create` there. Ignored when updating."
           }
         }
       },
@@ -15214,6 +15621,28 @@
           "full_text",
           "both"
         ]
+      },
+      "CurrentUserResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "DecideAiProposalRequest": {
         "type": "object",
@@ -16054,16 +16483,21 @@
       "EndpointsDto": {
         "type": "object",
         "required": [
-          "webhook_path",
-          "webhook_secret",
+          "credentials_visible",
           "signature_required",
-          "signature_header",
-          "email_path"
+          "signature_header"
         ],
         "properties": {
+          "credentials_visible": {
+            "type": "boolean",
+            "description": "Whether this response carries the credentials. They are capabilities\nthat start runs, so only a caller with `automation:manage` receives\nthem; anyone else who can view the workflow sees the settings alone."
+          },
           "email_path": {
-            "type": "string",
-            "description": "Path of the inbound e-mail address."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path of the inbound e-mail address. Absent without `automation:manage`."
           },
           "signature_header": {
             "type": "string",
@@ -16073,12 +16507,18 @@
             "type": "boolean"
           },
           "webhook_path": {
-            "type": "string",
-            "description": "Path of the webhook address, to be appended to the server address."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path of the webhook address, to be appended to the server address.\nAbsent without `automation:manage`."
           },
           "webhook_secret": {
-            "type": "string",
-            "description": "Shared secret used to sign webhook calls."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shared secret used to sign webhook calls. Absent without\n`automation:manage`."
           }
         }
       },
@@ -16976,6 +17416,28 @@
           "updated": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": [
+          "auth_enabled"
+        ],
+        "properties": {
+          "auth_enabled": {
+            "type": "boolean",
+            "description": "False when the deployment does not require sign-in; `user` is then null."
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CurrentUserResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -18644,18 +19106,6 @@
           "reason"
         ],
         "properties": {
-          "actor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "actor_kind": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "decision": {
             "$ref": "#/components/schemas/ProposalDecisionInput"
           },
@@ -18976,18 +19426,6 @@
         "properties": {
           "action": {
             "$ref": "#/components/schemas/RecordResolutionActionInput"
-          },
-          "actor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "actor_kind": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "proposal_id": {
             "type": [
@@ -19426,18 +19864,6 @@
       "RunDeduplicationRequest": {
         "type": "object",
         "properties": {
-          "actor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "actor_kind": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "limit": {
             "type": [
               "integer",
@@ -19512,6 +19938,44 @@
           },
           "question": {
             "type": "string"
+          }
+        }
+      },
+      "ScientificAssignmentDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "user_id",
+          "role",
+          "assigned_by",
+          "created_at"
+        ],
+        "properties": {
+          "assigned_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

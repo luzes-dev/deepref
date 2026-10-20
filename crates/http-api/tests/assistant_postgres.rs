@@ -27,23 +27,32 @@ use sqlx::{PgPool, Row};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+const DEVELOPMENT_ACTOR_ID: &str = "00000000-0000-0000-0000-000000000003";
+
 async fn database() -> Option<PgPool> {
-    deepref_app::test_isolation::isolated_pool_from_env_first(
+    let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         8,
     )
+    .await?;
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        api_config().runtime.development_principal_enabled(),
+    )
     .await
+    .expect("development principal is initialized for the auth-off runtime");
+    Some(pool)
 }
 
 fn api_config() -> ApiConfig {
     let runtime = RuntimeConfig::from_map(
         "deepref-api-assistant-test",
-        &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
+        &HashMap::from([("APP_ENV".to_owned(), "development".to_owned())]),
     )
     .expect("local test runtime should parse");
     ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local test document configuration"),
         runtime,
@@ -601,7 +610,7 @@ where
     let owner = format!("assistant-review-test-{run_id}");
     let gateway = Arc::new(gateway);
     let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
-        "APP_ENV" => Some("local".into()),
+        "APP_ENV" => Some("development".into()),
         "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
         _ => None,
     })
@@ -930,7 +939,7 @@ async fn classification_proposal_lifecycle_is_atomic_and_fail_closed() {
         .await
         .expect("classification history event");
     assert_eq!(event_type, "study_classified");
-    assert_eq!(actor_id, "classification-reviewer");
+    assert_eq!(actor_id, DEVELOPMENT_ACTOR_ID);
     assert_eq!((before_revision, result_revision), (0, 1));
     let (review_event, review_actor): (String, String) = sqlx::query_as(
         "SELECT event_type,actor_id FROM review_events
@@ -942,7 +951,7 @@ async fn classification_proposal_lifecycle_is_atomic_and_fail_closed() {
     .await
     .expect("classification review event");
     assert_eq!(review_event, "ai_proposal_resolved");
-    assert_eq!(review_actor, "classification-reviewer");
+    assert_eq!(review_actor, DEVELOPMENT_ACTOR_ID);
     cleanup(&pool, accepted).await;
 
     let stale = seed(&pool).await;
@@ -2186,6 +2195,7 @@ async fn assistant_event_stream_surfaces_database_failure_and_closes() {
         "event-test",
         &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
         deepref_ai::ASSISTANT_PROMPT_VERSION,
+        deepref_app::RunPrincipal::DevelopmentBypass,
     )
     .await
     .expect("submit run");

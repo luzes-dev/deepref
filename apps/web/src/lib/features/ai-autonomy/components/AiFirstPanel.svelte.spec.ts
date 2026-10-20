@@ -61,7 +61,6 @@ describe('AI-first owner controls', () => {
 		await waitFor(() => expect(bodies).toHaveLength(1));
 		expect(bodies[0]).toEqual({ target_percent: 95, allow_finalization: false });
 		expect(screen.getByText(/passing does not guarantee true recall/)).toBeInTheDocument();
-		expect(screen.getByText(/this is not authentication/)).toBeInTheDocument();
 		expect(screen.getByText(/Later imports need a new cohort/)).toBeInTheDocument();
 		expect(
 			screen.getByText(/A new positive on a previously excluded control ends this/)
@@ -115,21 +114,22 @@ describe('AI-first owner controls', () => {
 		expect(approval).toBeDisabled();
 	});
 
-	it('sends subsequent queue reads under the saved reviewer ID', async () => {
-		const actors: (string | null)[] = [];
+	it('does not expose a self-asserted reviewer ID or send actor headers', async () => {
+		const actorHeaders: Array<[string | null, string | null]> = [];
 		server.use(
 			http.get(endpoint, ({ request }) => {
-				actors.push(request.headers.get('x-actor-id'));
+				actorHeaders.push([
+					request.headers.get('x-actor-id'),
+					request.headers.get('x-actor-kind')
+				]);
 				return HttpResponse.json({ ceiling: 'off', suspended_reason: null, cohorts: [] });
 			})
 		);
 		render(AiFirstPanelTestHost, { projectId });
 		await screen.findByRole('button', { name: 'Start reversible routing' });
-		await fireEvent.input(screen.getByLabelText('Current reviewer ID'), {
-			target: { value: 'reviewer-b' }
-		});
-		await fireEvent.click(screen.getByRole('button', { name: 'Use ID' }));
-		await waitFor(() => expect(actors).toContain('reviewer-b'));
+		await waitFor(() => expect(actorHeaders.length).toBeGreaterThan(0));
+		expect(screen.queryByLabelText('Current reviewer ID')).not.toBeInTheDocument();
+		expect(actorHeaders.every(([id, kind]) => id === null && kind === null)).toBe(true);
 	});
 
 	it('shows conditional audit workload and draws the chosen fixed sample', async () => {

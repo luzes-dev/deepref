@@ -14,7 +14,7 @@ use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::actor::{Actor, extract_actor};
+use super::actor::Actor;
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -283,13 +283,14 @@ pub(crate) async fn list_protocol_versions(
 pub(crate) async fn save_protocol_draft(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<SaveProtocolRequest>,
 ) -> Result<Json<ProtocolDto>, ApiError> {
     input
         .validate()
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let command = save_command(project_id, input)?;
     let protocol = deepref_app::save_protocol_draft(&state.pool, &command, &protocol_actor(&actor))
         .await
@@ -315,13 +316,14 @@ pub(crate) async fn save_protocol_draft(
 pub(crate) async fn publish_protocol(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<PublishProtocolRequest>,
 ) -> Result<Json<ProtocolDto>, ApiError> {
     input
         .validate()
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let protocol = deepref_app::publish_protocol(
         &state.pool,
         &PublishProtocolCommand {

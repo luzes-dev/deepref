@@ -17,8 +17,13 @@ use uuid::Uuid;
 
 use super::{sse_frame, stream_event_frame, validate_project_id};
 use crate::{
+    auth::CurrentSession,
     error::{ApiError, ErrorResponse},
     state::AppState,
+};
+use deepref_domain::{
+    Principal, ProjectId,
+    authorization::{Permission, Resource},
 };
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +47,7 @@ pub(crate) struct AssistantRunEventsQuery {
 )]
 pub(crate) async fn stream_run_events(
     State(state): State<AppState>,
+    session: Option<CurrentSession>,
     Path((project_id, run_id)): Path<(Uuid, Uuid)>,
     Query(query): Query<AssistantRunEventsQuery>,
 ) -> Result<Response, ApiError> {
@@ -56,6 +62,8 @@ pub(crate) async fn stream_run_events(
     let terminal = record.status.terminal();
     let stream = futures::stream::unfold(
         RunEventPoll {
+            principal: session.map(|CurrentSession(context)| context.principal),
+            checked_at: std::time::Instant::now(),
             state,
             project_id,
             run_id,
@@ -66,6 +74,14 @@ pub(crate) async fn stream_run_events(
         },
         |mut poll: RunEventPoll| async move {
             loop {
+                // A revoked member's open stream ends: the connect-time check
+                // is repeated on an interval, and any answer but "allowed"
+                // (a denial or an unreadable store) closes the stream. The
+                // client resumes with `after_seq`, which is a new request and
+                // is authorized again.
+                if !poll.still_authorized().await {
+                    return None;
+                }
                 if let Some(frame) = poll.buffer.pop_front() {
                     return Some((frame, poll));
                 }
@@ -148,6 +164,9 @@ pub(crate) async fn stream_run_events(
 }
 
 struct RunEventPoll {
+    /// `None` only when authentication is off (local development).
+    principal: Option<Principal>,
+    checked_at: std::time::Instant,
     state: AppState,
     project_id: Uuid,
     run_id: Uuid,
@@ -155,6 +174,27 @@ struct RunEventPoll {
     unavailable: bool,
     terminal: bool,
     buffer: std::collections::VecDeque<Result<Event, std::convert::Infallible>>,
+}
+
+impl RunEventPoll {
+    async fn still_authorized(&mut self) -> bool {
+        let Some(principal) = self.principal else {
+            return true;
+        };
+        if self.checked_at.elapsed() < self.state.stream_recheck {
+            return true;
+        }
+        self.checked_at = std::time::Instant::now();
+        self.state
+            .authorizer
+            .require(
+                &principal,
+                Permission::ProjectView,
+                Resource::Project(ProjectId::new(self.project_id)),
+            )
+            .await
+            .is_ok()
+    }
 }
 
 /// Fetches the full plan behind a `plan` frame, retrying briefly. The worker

@@ -183,7 +183,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
             None,
             Some(Arc::new(FakeFetcher { fail })),
             &deepref_worker::config::WorkerConfig::from_source(&|name| {
-                (name == "APP_ENV").then(|| "local".into())
+                (name == "APP_ENV").then(|| "development".into())
             })
             .expect("local worker configuration"),
         )
@@ -217,7 +217,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
                 None,
                 Some(Arc::new(FakeFetcher { fail: false })),
                 &deepref_worker::config::WorkerConfig::from_source(&|name| {
-                    (name == "APP_ENV").then(|| "local".into())
+                    (name == "APP_ENV").then(|| "development".into())
                 })
                 .expect("local worker configuration"),
             )
@@ -295,7 +295,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         max_attempts: 5,
     };
     let config = deepref_worker::config::WorkerConfig::from_source(&|name| {
-        (name == "APP_ENV").then(|| "local".into())
+        (name == "APP_ENV").then(|| "development".into())
     })
     .expect("local worker configuration");
     let first = handle_job_with_document_services(
@@ -352,7 +352,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         None,
         Some(fetcher),
         &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local worker configuration"),
     )
@@ -455,7 +455,7 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
         Some(Arc::clone(&store)),
         Some(Arc::clone(&parser)),
         &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local worker configuration"),
     )
@@ -469,7 +469,7 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
         Some(store),
         Some(parser),
         &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local worker configuration"),
     )
