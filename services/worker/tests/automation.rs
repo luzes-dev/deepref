@@ -197,7 +197,7 @@ async fn cancelled_durable_run_is_skipped_by_the_runtime_dispatch_guard() -> Res
         None,
         None,
         &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })?,
     )
     .await?;
