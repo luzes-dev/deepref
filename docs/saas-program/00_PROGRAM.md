@@ -142,7 +142,7 @@ Suggested implementation order:
 2. `02_WORKOS_IDENTITY.md`, with `04_NATS_OUTBOX_FOUNDATION.md` part 04a and `07_OBJECT_STORAGE_PRODUCTION.md` alongside
 3. `03_TENANCY_AUTHORIZATION.md`: 03a, then 03b, then 03c
 4. `05_WORKER_TRANSPORT_MIGRATION.md` phase 05a
-5. Business gate: Polar payout eligibility for the actual legal entity and the LGPD privacy/retention/export/deletion policy
+5. Business gate: Polar payout eligibility for the actual legal entity and the LGPD privacy/retention/export/deletion policy. Status: LGPD policy, retention and region decided; Polar is not eligible for the seller and the billing provider is undecided (`BUSINESS_DECISIONS.md`)
 6. `08_POLAR_BILLING_ENTITLEMENTS.md`
 7. `09_AI_USAGE_RESERVATION_METERING.md`
 8. `11_API_KEYS_AUDIT_DOCS.md` Parts B and C
@@ -263,17 +263,16 @@ Normative docs must describe the architecture after each cutover. Historical rev
 
 ## Adoption triggers
 
-NATS, Valkey and asynchronous read models are selected but not scheduled. Each is adopted when its trigger fires. Handoffs reference triggers by name. Fill in `TBD` values before the launch milestone; a trigger with no threshold cannot fire.
+NATS, Valkey and asynchronous read models are selected but not scheduled. Each is adopted when its trigger fires. Handoffs reference triggers by name. The thresholds are proposals. The product owner confirms or replaces them before the launch milestone, and a trigger fires only on the confirmed values.
 
-| Trigger    | Metric                                                                                          | Threshold | Measurement window | Owner |
-| ---------- | ----------------------------------------------------------------------------------------------- | --------- | ------------------ | ----- |
-| `T-NATS`   | Enqueue-to-claim p95 latency                                                                    | TBD       | TBD                | TBD   |
-| `T-NATS`   | Database CPU attributable to claim queries                                                      | TBD       | TBD                | TBD   |
-| `T-NATS`   | Worker replica count                                                                            | TBD       | TBD                | TBD   |
-| `T-NATS`   | Demonstrated event fan-out or replay need: an independent consumer that needs retained delivery | TBD       | TBD                | TBD   |
-| `T-VALKEY` | A limiter that must be shared across API replicas                                               | TBD       | TBD                | TBD   |
-| `T-VALKEY` | Measured cross-replica limit drift with per-process limiters                                    | TBD       | TBD                | TBD   |
-| `T-CQRS`   | Profiled query cost and frequency of a cross-context read                                       | TBD       | TBD                | TBD   |
+| Trigger    | Metric                                                                                                     | Proposed threshold                                                          | Measurement window          | Owner         |
+| ---------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------- | ------------- |
+| `T-NATS`   | Enqueue-to-claim p95 latency per workload pool, after 05a batch claiming                                   | > 2 s                                                                       | 7 consecutive days          | Product owner |
+| `T-NATS`   | Share of PostgreSQL CPU spent in claim, lease-renewal and recovery queries                                 | > 20 %                                                                      | 7-day p95 of hourly samples | Product owner |
+| `T-NATS`   | Worker replicas in any single pool needed to meet its queue-age SLO (12)                                   | > 8                                                                         | Sustained for 14 days       | Product owner |
+| `T-NATS`   | Event fan-out/replay: a second independent consumer of one event family that must replay history it missed | One accepted design doc showing the need and why an outbox dispatcher fails | Per design review           | Product owner |
+| `T-VALKEY` | Load on the 06 PostgreSQL limiter tables                                                                   | > 10 % of PostgreSQL CPU or p95 limiter check > 20 ms                       | 7-day p95                   | Product owner |
+| `T-CQRS`   | Profiled cost and frequency of one cross-context read                                                      | p95 > 500 ms at > 1 request/s, or > 10 % of PostgreSQL CPU                  | 7 days of production traces | Product owner |
 
 Any one `T-NATS` row firing is enough to start 04b and 05b. The same holds for `T-VALKEY` and 06. `T-CQRS` is per read model: each candidate query needs its own profile before 10 builds a projection for it.
 
@@ -296,7 +295,7 @@ Required handoffs:
 12  operations acceptance
 ```
 
-Launch also requires the commercial readiness gate (Polar payout eligibility for the actual legal entity; LGPD privacy, retention, export and deletion policy) to be resolved before 08 starts.
+Launch also requires the commercial readiness gate (Polar payout eligibility for the actual legal entity; LGPD privacy, retention, export and deletion policy) to be resolved before 08 starts. Decisions so far are in `BUSINESS_DECISIONS.md`.
 
 Not required for launch, adopted when a trigger fires or a product requirement pulls them in: 04b, 05b, 06, 10 and 11 Part A (API keys).
 

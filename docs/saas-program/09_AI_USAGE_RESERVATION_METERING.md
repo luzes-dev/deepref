@@ -4,7 +4,7 @@
 
 Make AI usage safe under concurrency, attributable to SaaS tenants and exportable to Polar without making Polar part of the execution hot path.
 
-Read `00_PROGRAM.md`. Complete handoff 03 and handoff 04a, the broker-independent PostgreSQL outbox. The Polar export depends on 04a, not on the 04b broker relay. Complete handoff 08 before enabling commercial credit/meter synchronization.
+Read `00_PROGRAM.md`. Complete handoff 03, handoff 04a (the broker-independent PostgreSQL outbox), and handoff 05a: reservation recovery and reconciliation run as workspace-scoped durable jobs on the 05a execution store. The Polar export depends on 04a, not on the 04b broker relay. Complete handoff 08 before enabling commercial credit/meter synchronization. The billing provider is undecided (`BUSINESS_DECISIONS.md`): build the usage export behind a provider-neutral port and read "Polar" below as "the billing provider" until 08 picks one.
 
 ## Scope
 
@@ -67,7 +67,17 @@ Do not encode today's Polar pricing in the AI provider abstraction.
 
 Replace check-then-spend.
 
-Reservations are conservative upper bounds, never mean estimates: `max_tokens` for the request or run multiplied by the price-table rate, plus margin for rounding. Under-reserving is a limit breach.
+Reservations are conservative upper bounds, never mean estimates. `max_tokens × rate` is not a bound: `ModelPrice` (`crates/ai/src/pricing.rs`) prices input and output tokens at separate rates (`input_micros_per_million_tokens`, `output_micros_per_million_tokens`), and a large prompt can exceed the reservation before the first output token exists. The reserved bound covers:
+
+```text
+bounded input cost (known input token bound at the input rate)
+max output cost (output token cap at the output rate)
+max reasoning/thinking cost where the provider bills it
+other billable components (cache writes, tool or attachment charges)
+margin for rounding
+```
+
+Reserve each agent call before dispatch, including nested tool/model calls a run may make. A call without a defensible bound is refused, not dispatched on an estimate. Under-reserving is a limit breach.
 
 Track conceptually:
 
@@ -96,8 +106,11 @@ add actual spend/units
 On failure:
 
 ```text
-release reservation
+release the reservation only after proving no provider liability
+otherwise settle known usage and retain unresolved liability for reconciliation
 ```
+
+Failure alone never justifies release. An interrupted stream, an ambiguous timeout or a crash after partial output can leave real charges behind. Release requires evidence that the provider accepted no work and charged nothing; otherwise settle the usage that is known and hold the unresolved remainder as liability until the reconciler settles it from provider evidence or voids it with a recorded reason.
 
 Use PostgreSQL constraints/conditional updates or row locking so simultaneous requests cannot oversubscribe the same hard budget.
 
@@ -270,7 +283,7 @@ At minimum:
 2. no more than available amount is reserved;
 3. actual cost lower than estimate releases capacity;
 4. actual cost higher than estimate follows defined settlement policy;
-5. provider failure releases correctly;
+5. provider failure with proven zero provider liability releases the reservation; failure with possible liability does not;
 6. worker crash leaves recoverable reservation;
 7. stale reservation recovery;
 8. duplicate Polar outbox delivery;
@@ -281,7 +294,10 @@ At minimum:
 13. top-up race: two streaming runs top up against the same remaining headroom and only one wins;
 14. usage ledger write failure leaves a recoverable unsettled record instead of dropping usage;
 15. reservation spanning a period boundary settles into exactly one period;
-16. settlement records the price-table version used.
+16. settlement records the price-table version used;
+17. reservation bound covers bounded input cost plus max output/reasoning cost at their separate price-table rates; a large prompt cannot exceed the reservation before output starts;
+18. a call without a defensible cost bound is refused, not dispatched;
+19. partial output followed by failure settles the known usage and retains the unresolved liability for reconciliation.
 
 ## Observability
 
@@ -305,4 +321,4 @@ Do not expose cost/customer identifiers as uncontrolled metric labels.
 
 ## Completion criterion
 
-Concurrent AI work cannot exceed DeepRef's hard configured allowance, reservations hold conservative upper bounds and top up before new liability, every AI charge ends in a settled or explicitly voided record carrying its price-table version and period — including charges whose accounting writes failed and were recovered — and Polar receives replay-safe downstream usage without participating in the request hot path.
+Concurrent AI work cannot exceed DeepRef's hard configured allowance, reservations bound input plus output/reasoning cost at their separate price-table rates and top up before new liability, failure releases a reservation only when no provider liability remains, every AI charge ends in a settled or explicitly voided record carrying its price-table version and period — including charges whose accounting writes failed and were recovered — and Polar receives replay-safe downstream usage without participating in the request hot path.

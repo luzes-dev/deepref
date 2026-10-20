@@ -75,6 +75,7 @@ workspace_memberships (
     workspace_id uuid not null,
     user_id uuid not null,
     workos_membership_id text,
+    grant_source text not null check (grant_source in ('workos_mirrored', 'local')),
     role text not null,
     status text not null,
     created_at timestamptz,
@@ -104,11 +105,12 @@ Use a staged migration:
 1. create workspace tables;
 2. create one deterministic migration workspace for existing data;
 3. add nullable `project.workspace_id`;
-4. backfill every project;
-5. validate counts and references;
-6. add `NOT NULL` and foreign-key constraints;
-7. switch reads/writes;
-8. remove obsolete paths only after cutover.
+4. install a compatibility trigger or default that assigns the migration workspace when an old binary inserts a project without `workspace_id` (the current `projects` table in `crates/app/migrations/0001_initial.sql` has no workspace column);
+5. backfill every project;
+6. switch current reads/writes to use `workspace_id` and drain old writers, leaving the compatibility path active during the rollout;
+7. validate project counts, non-null workspace IDs and references again after old writers have drained;
+8. add `NOT NULL` and foreign-key constraints;
+9. remove the compatibility path and obsolete paths only after cutover.
 
 Preserve all project IDs and scientific records.
 
@@ -166,12 +168,15 @@ the inviter cannot grant a role above their own
 
 Apply WorkOS Organization and membership events through the integration inbox defined in `04_NATS_OUTBOX_FOUNDATION.md` (04a): authenticated receipt, deduplication, ordered processing. Webhooks alone are not sufficient. Add periodic reconciliation that lists Organizations and memberships from WorkOS and repairs local projections that drifted (missed, reordered or failed events).
 
+Record each membership's grant source explicitly as `workos_mirrored` or `local`; do not infer it from a nullable WorkOS membership ID.
+
 Reconciliation rules:
 
 - the local projection only moves forward; an older event never overwrites newer state;
-- a membership missing from WorkOS is deactivated locally, not deleted;
+- a membership absent from its mapped WorkOS Organization is deactivated locally, not deleted, only when its grant source is `workos_mirrored`;
+- absence from WorkOS never revokes a `local` grant; WorkOS Organization mapping is optional, so an unmapped workspace does not imply that a local grant is absent or revoked;
 - a WorkOS Organization with no local workspace is mapped or created through the same path as onboarding;
-- a conflict between WorkOS state and a local DeepRef-only grant is surfaced as a reconciliation finding, not silently resolved.
+- a conflict between WorkOS state and a local DeepRef-only grant is surfaced as a reconciliation finding, not silently resolved or overwritten.
 
 ### Membership removal and deactivation
 
@@ -188,7 +193,7 @@ preserves the user row and all historical provenance
 does not rewrite scientific events, assignments or audit rows
 ```
 
-Deactivating or removing the last `owner` of a workspace is refused until ownership is transferred.
+Refuse a voluntary workspace membership removal or demotion that would leave no active `owner` until ownership is transferred. This guard does not block global user deactivation or an authoritative WorkOS revocation. Global deactivation proceeds immediately even if it leaves a workspace without an active owner; resolve orphaned-workspace ownership through a separate operator recovery flow.
 
 ### Workspace-scoped jobs
 
@@ -373,15 +378,18 @@ Cover:
 03a:
 
 - every project has one workspace after migration;
+- an old binary insert during rollout receives the migration workspace through the compatibility path; after old writers drain, repeat null/reference validation before enforcing constraints;
 - migration is idempotent and preserves project IDs and scientific rows;
 - first sign-in creates one personal workspace exactly once, including on callback retry;
 - sign-in with a pending invitation joins that workspace and creates no personal workspace;
 - invitation expiry, revocation, single use and role ceiling;
 - WorkOS membership events apply through the inbox in order; a stale event does not overwrite newer state;
-- periodic reconciliation repairs a missed removal and a missed addition;
+- periodic reconciliation deactivates a missed WorkOS removal for a mirrored membership and repairs a missed addition;
+- reconciliation preserves local grants absent from WorkOS and surfaces conflicts rather than overwriting them;
 - removing a membership denies the next request to that workspace, with no cached decision surviving, and leaves the user's other workspaces intact;
 - global deactivation rejects requests in every workspace and preserves historical provenance;
-- last-owner removal is refused.
+- voluntary removal or demotion of the last active owner is refused until ownership is transferred;
+- global user deactivation and authoritative WorkOS revocation proceed when they remove the last active owner, leaving recovery to the separate operator flow.
 
 03b:
 
@@ -408,4 +416,4 @@ Cover:
 
 ## Completion criterion
 
-DeepRef has real tenants and real users, released as one gate (03a, 03b and 03c). Every live scientific human action is attributable to an authenticated `UserId`, every project belongs to one workspace, and cross-workspace access is denied centrally and proven by a route/resource coverage matrix with a foreign-workspace test per row, rather than by frontend convention. Previously exposed reviewers are never treated as fresh because their identity changed form. Membership removal takes effect on the next request, and membership, role and permission changes and authorization denials are recorded in the administrative audit.
+DeepRef has real tenants and real users, released as one gate (03a, 03b and 03c). Every live scientific human action is attributable to an authenticated `UserId`, every project belongs to one workspace, and cross-workspace access is denied centrally and proven by a route/resource coverage matrix with a foreign-workspace test per row, rather than by frontend convention. Previously exposed reviewers are never treated as fresh because their identity changed form. Membership removal takes effect on the next request, global user deactivation proceeds immediately even when it leaves an ownerless workspace, and membership, role and permission changes and authorization denials are recorded in the administrative audit.
