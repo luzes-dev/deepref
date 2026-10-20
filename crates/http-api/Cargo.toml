@@ -43,6 +43,7 @@ deepref-app = { workspace = true, features = ["test-support"] }
 deepref-worker = { version = "0.1.0", path = "../../services/worker" }
 rig-core = { workspace = true, features = ["test-utils"] }
 tower.workspace = true
+syn = { version = "2", default-features = false, features = ["full", "parsing", "visit", "derive", "printing"] }
 
 [lints]
 workspace = true

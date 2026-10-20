@@ -10,6 +10,8 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+const DEVELOPMENT_ACTOR_ID: &str = "00000000-0000-0000-0000-000000000003";
+
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
@@ -17,12 +19,12 @@ async fn database() -> Option<PgPool> {
 fn api_config() -> ApiConfig {
     let runtime = deepref_config::RuntimeConfig::from_map(
         "deepref-api-extraction-manual-test",
-        &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
+        &HashMap::from([("APP_ENV".to_owned(), "development".to_owned())]),
     )
     .expect("local test runtime should parse");
     ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local test document configuration"),
         runtime,
@@ -104,7 +106,7 @@ async fn reviewer_can_record_overwrite_and_clear_a_value_without_ai() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(saved["approved_by_actor_id"], "reviewer-http");
+    assert_eq!(saved["approved_by_actor_id"], DEVELOPMENT_ACTOR_ID);
     assert!(saved["source_block_id"].is_null());
 
     let (status, _) = call(

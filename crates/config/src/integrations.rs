@@ -1,6 +1,7 @@
 use std::fmt;
 
 use deepref_domain::ProviderKind;
+use secrecy::{ExposeSecret, SecretString};
 
 /// The chain used when `DEEPREF_METADATA_PROVIDERS` is unset: OpenAlex answers first,
 /// Crossref falls back, and DataCite catches the datasets and software the other two
@@ -53,7 +54,7 @@ pub struct IntegrationsConfig {
     pub metadata_providers: Vec<ProviderKind>,
     /// Optional OpenAlex key. A missing key is valid; keyless calls get a
     /// smaller rate budget. Never printed: `Debug` redacts it.
-    pub openalex_api_key: Option<String>,
+    pub openalex_api_key: Option<SecretString>,
     pub openalex_corpus: OpenAlexCorpus,
 }
 
@@ -109,12 +110,21 @@ impl IntegrationsConfig {
                 .is_some_and(|value| matches!(value.trim(), "off" | "0" | "false")),
             contact_email,
             metadata_providers: metadata_providers(get)?,
-            openalex_api_key: crate::optional(get, "DEEPREF_OPENALEX_API_KEY"),
+            openalex_api_key: crate::optional(get, "DEEPREF_OPENALEX_API_KEY")
+                .map(SecretString::from),
             openalex_corpus,
         })
     }
 
     /// The chain as one comma-separated string, for example `openalex,crossref`.
+    /// The only accessor for the OpenAlex key; hand it straight to the client
+    /// and never log it.
+    pub fn openalex_api_key(&self) -> Option<&str> {
+        self.openalex_api_key
+            .as_ref()
+            .map(ExposeSecret::expose_secret)
+    }
+
     pub fn metadata_chain_label(&self) -> String {
         join_names(&self.metadata_providers, ",")
     }
@@ -331,7 +341,7 @@ mod tests {
 
         let config = load(&[]).unwrap();
         assert_eq!(config.metadata_providers, default_chain);
-        assert_eq!(config.openalex_api_key, None);
+        assert_eq!(config.openalex_api_key(), None);
         assert_eq!(config.openalex_corpus, OpenAlexCorpus::Core);
         assert_eq!(config.metadata_chain_label(), "openalex,crossref,datacite");
     }
@@ -490,14 +500,11 @@ mod tests {
         assert_eq!(
             load(&[("DEEPREF_OPENALEX_API_KEY", "   ")])
                 .unwrap()
-                .openalex_api_key,
+                .openalex_api_key(),
             None
         );
         let config = load(&[("DEEPREF_OPENALEX_API_KEY", "  test-openalex-key  ")]).unwrap();
-        assert_eq!(
-            config.openalex_api_key.as_deref(),
-            Some("test-openalex-key")
-        );
+        assert_eq!(config.openalex_api_key(), Some("test-openalex-key"));
         let debug = format!("{config:?}");
         assert!(!debug.contains("test-openalex-key"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");

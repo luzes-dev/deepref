@@ -1,4 +1,5 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test } from '../../tests/e2e-test';
+import type { Page, Route } from '@playwright/test';
 
 const settings = {
 	default_max_depth: 2,

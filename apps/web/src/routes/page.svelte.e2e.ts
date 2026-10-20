@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../tests/e2e-test';
+import type { Page } from '@playwright/test';
 import type {
 	AcquisitionDto,
 	PaginatedResponseAcquisitionDto
@@ -121,9 +122,9 @@ type WorkspaceMockOptions = {
 };
 
 async function mockHealth(page: Page) {
-	// The overview and the status indicator ask for one project's jobs (`?project_id=`).
+	// The overview and the status indicator ask for one project's jobs (`/projects/{id}/health/dependencies`).
 	await page.route(
-		/http:\/\/localhost:4173\/api\/health\/dependencies(?:\?.*)?$/,
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/health\/dependencies(?:\?.*)?$/,
 		async (route) => {
 			await route.fulfill({ json: availableDependencies });
 		}
@@ -510,7 +511,7 @@ test('renders unified workspace without global ingestion links', async ({ page }
 test('shows dependency degradation without blocking core workspace views', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.route(
-		/http:\/\/localhost:4173\/api\/health\/dependencies(?:\?.*)?$/,
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/health\/dependencies(?:\?.*)?$/,
 		async (route) => {
 			await route.fulfill({
 				json: {

@@ -10,7 +10,7 @@ use deepref_application::{
 };
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
-    ScreeningStage, ScreeningStatus,
+    ScreeningStage, ScreeningStatus, UserId,
 };
 use deepref_review::ai_first::AiFirstCeiling;
 use deepref_review::{
@@ -18,6 +18,7 @@ use deepref_review::{
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use uuid::Uuid;
 
 async fn insert_fixture_route(pool: &PgPool) {
@@ -38,7 +39,28 @@ async fn insert_fixture_route(pool: &PgPool) {
 }
 
 fn actor(id: &str) -> Actor {
-    Actor::new(ActorKind::User, id).unwrap()
+    let value = id.as_bytes().iter().fold(0_u128, |hash, byte| {
+        hash.wrapping_mul(257).wrapping_add(u128::from(*byte))
+    });
+    Actor::authenticated_user(UserId::new(Uuid::from_u128(value)))
+}
+
+fn user_id(id: &str) -> UserId {
+    UserId::new(Uuid::parse_str(actor(id).id()).unwrap())
+}
+
+async fn add_user(pool: &PgPool, id: &str) {
+    let user_id = user_id(id);
+    sqlx::query(
+        "INSERT INTO users(id,workos_user_id,primary_email,status) \
+         VALUES($1,$2,$3,'active') ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(user_id.as_uuid())
+    .bind(format!("ai-first-{id}"))
+    .bind(format!("{id}@example.test"))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 6).await
@@ -59,6 +81,9 @@ impl Fixture {
             .execute(&pool)
             .await
             .unwrap();
+        for id in ["owner", "reviewer-a", "reviewer-b", "reviewer-initial"] {
+            add_user(&pool, id).await;
+        }
         insert_fixture_route(&pool).await;
         let protocol = Self::publish(&pool, project).await;
         let mut x = Vec::new();
@@ -83,6 +108,18 @@ impl Fixture {
         let cohort = start_ai_first_cohort(&pool, project, 95, allow_finalization, &actor("owner"))
             .await
             .unwrap();
+        for id in ["reviewer-a", "reviewer-b"] {
+            sqlx::query(
+                "INSERT INTO scientific_assignments(project_id,user_id,role,assigned_by) \
+                 VALUES($1,$2,'fresh_ai_auditor',$3)",
+            )
+            .bind(project)
+            .bind(user_id(id).as_uuid())
+            .bind(user_id("owner").as_uuid())
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
         // Seed validated exclusions through trusted storage fixtures. Routing itself
         // is exercised by compiled-worker tests; these tests isolate the audit lifecycle.
         for id in &x {
@@ -298,7 +335,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
     let queue = get_screening_queue(
         &f.pool,
         GetScreeningQueueQuery {
-            reviewer_id: Some("reviewer-a".into()),
+            reviewer_id: Some(user_id("reviewer-a")),
             project_id: f.project.into(),
             status: ScreeningQueueStatus::Unscreened,
             search: None,
@@ -360,7 +397,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
         .is_err()
     );
     let mut filtered = GetScreeningQueueQuery {
-        reviewer_id: Some("reviewer-a".into()),
+        reviewer_id: Some(user_id("reviewer-a")),
         project_id: f.project.into(),
         status: ScreeningQueueStatus::Include,
         search: None,
@@ -383,7 +420,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
             .total,
         queue.total
     );
-    filtered.reviewer_id = Some("reviewer-initial".into());
+    filtered.reviewer_id = Some(user_id("reviewer-initial"));
     assert!(
         get_screening_queue(&f.pool, filtered)
             .await
@@ -399,7 +436,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
         "default queue must use frozen mixed order"
     );
     let mut page_query = GetScreeningQueueQuery {
-        reviewer_id: Some("reviewer-a".into()),
+        reviewer_id: Some(user_id("reviewer-a")),
         project_id: f.project.into(),
         status: ScreeningQueueStatus::Unscreened,
         search: None,
@@ -563,6 +600,278 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
             .suspended_reason
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn mapped_legacy_audit_label_blocks_direct_duplicate_screening_post() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    let report = sample[0];
+    let legacy_label = "reviewer-a";
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        legacy_label,
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "verified old audit label",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,decision)
+        VALUES($1,$2,$3,$4,'exclude')",
+    )
+    .bind(f.project)
+    .bind(f.cohort)
+    .bind(report)
+    .bind(legacy_label)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+
+    assert!(
+        f.decide(
+            report,
+            "reviewer-a",
+            deepref_domain::ScreeningDecision::Exclude
+        )
+        .await
+        .is_err(),
+        "a direct POST must resolve aliases before appending another label"
+    );
+    let other = f
+        .decide(
+            report,
+            "reviewer-b",
+            deepref_domain::ScreeningDecision::Exclude,
+        )
+        .await
+        .expect("a distinct authenticated reviewer can supply the second label");
+    assert_eq!(other.title_abstract_status, ScreeningStatus::Unscreened);
+}
+
+#[tokio::test]
+async fn audit_label_trigger_refuses_two_rows_that_resolve_to_one_reviewer() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    let duplicate_report = sample[0];
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "reviewer-a",
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "legacy alias belongs to canonical reviewer",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,decision)
+        VALUES($1,$2,$3,'reviewer-a','exclude')",
+    )
+    .bind(f.project)
+    .bind(f.cohort)
+    .bind(duplicate_report)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let duplicate_insert = sqlx::query("INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+        VALUES($1,$2,$3,$4,$5,'exclude')")
+        .bind(f.project)
+        .bind(f.cohort)
+        .bind(duplicate_report)
+        .bind(user_id("reviewer-a").as_uuid().to_string())
+        .bind(user_id("reviewer-a").as_uuid())
+        .execute(&f.pool)
+        .await;
+    assert!(
+        duplicate_insert.is_err(),
+        "the database blocks a second row for the mapped reviewer"
+    );
+
+    let controls: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT report_id FROM ai_screening_cohort_members WHERE cohort_id=$1 AND audit_control ORDER BY report_id",
+    )
+    .bind(f.cohort)
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
+    for report in sample.iter().chain(controls.iter()) {
+        if *report == duplicate_report {
+            continue;
+        }
+        let decision = if sample.contains(report) {
+            deepref_domain::ScreeningDecision::Exclude
+        } else {
+            deepref_domain::ScreeningDecision::Include
+        };
+        f.decide(*report, "reviewer-a", decision).await.unwrap();
+        f.decide(
+            *report,
+            "reviewer-b",
+            deepref_domain::ScreeningDecision::Exclude,
+        )
+        .await
+        .unwrap();
+    }
+
+    assert!(
+        evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+            .await
+            .is_err(),
+        "one row cannot complete an independent reference"
+    );
+}
+
+#[tokio::test]
+async fn finalize_keeps_trusted_reviewers_distinct_after_mapping_changes() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    f.label_all(&sample, false).await;
+    let result = evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+        .await
+        .unwrap();
+    assert!(result.passed);
+
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        &user_id("reviewer-b").as_uuid().to_string(),
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "operator resolved duplicate canonical reviewer identity",
+    )
+    .await
+    .unwrap();
+    finalize_ai_first_cohort(&f.pool, f.project, f.cohort, true, &actor("owner"))
+        .await
+        .unwrap();
+    assert_eq!(f.status().await, "finalized");
+}
+
+#[tokio::test]
+async fn mapping_change_does_not_override_trusted_finalized_reviewers() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    f.label_all(&sample, false).await;
+    assert!(
+        evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+            .await
+            .unwrap()
+            .passed
+    );
+    finalize_ai_first_cohort(&f.pool, f.project, f.cohort, true, &actor("owner"))
+        .await
+        .unwrap();
+
+    let changed = map_legacy_actor(
+        &f.pool,
+        "user",
+        &user_id("reviewer-b").as_uuid().to_string(),
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "operator resolved an old reviewer identity",
+    )
+    .await
+    .unwrap();
+    assert!(changed.affected_finalized_cohorts.is_empty());
+
+    let metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM admin_audit_events WHERE event_type='legacy_actor.mapped' \
+         AND target_user_id=$1 ORDER BY occurred_at DESC LIMIT 1",
+    )
+    .bind(user_id("reviewer-a").as_uuid())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        metadata["affected_finalized_cohorts"],
+        serde_json::json!([])
+    );
+    assert_eq!(f.status().await, "finalized", "history is not rewritten");
+}
+
+#[tokio::test]
+async fn mapping_lock_serializes_before_finalize_without_taking_project_lock_early() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    f.label_all(&sample, false).await;
+    assert!(
+        evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+            .await
+            .unwrap()
+            .passed
+    );
+
+    let mut mapping_tx = f.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(73003203::bigint)")
+        .fetch_one(&mut *mapping_tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO legacy_actor_mappings \
+         (legacy_actor_kind,legacy_actor_id,user_id,confirmed_by,source) \
+         VALUES('user',$1,$2,$3,'concurrent finalization test')",
+    )
+    .bind(user_id("reviewer-b").as_uuid().to_string())
+    .bind(user_id("reviewer-a").as_uuid())
+    .bind(user_id("owner").as_uuid())
+    .execute(&mut *mapping_tx)
+    .await
+    .unwrap();
+
+    let finalize_pool = f.pool.clone();
+    let project = f.project;
+    let cohort = f.cohort;
+    let finalize = tokio::spawn(async move {
+        finalize_ai_first_cohort(&finalize_pool, project, cohort, true, &actor("owner")).await
+    });
+    let shared_lock_waiting = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks \
+                 WHERE locktype='advisory' AND classid=0::oid AND objid=73003203::oid \
+                   AND objsubid=1 AND NOT granted)",
+            )
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+
+    let mut observer = f.pool.begin().await.unwrap();
+    let project_lock_available =
+        sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(f.project)
+            .fetch_optional(&mut *observer)
+            .await
+            .is_ok();
+    let _ = observer.rollback().await;
+    mapping_tx.commit().await.unwrap();
+
+    let finalized = finalize.await.unwrap();
+    assert!(
+        shared_lock_waiting,
+        "finalization must wait on the mapping lock"
+    );
+    assert!(
+        project_lock_available,
+        "finalization must take the shared lock before the project row lock"
+    );
+    finalized.unwrap();
+    assert_eq!(f.status().await, "finalized");
 }
 
 #[tokio::test]

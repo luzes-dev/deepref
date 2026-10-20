@@ -1,12 +1,8 @@
-use axum::{
-    Json,
-    extract::{Query, State},
-    http::StatusCode,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::Row;
-use utoipa::{IntoParams, ToSchema};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
@@ -54,12 +50,6 @@ pub struct DependencyDetail {
 pub struct DependencyStatus {
     pub postgresql: DependencyDetail,
     pub worker: DependencyDetail,
-}
-
-#[derive(Debug, Deserialize, IntoParams)]
-pub struct DependencyQuery {
-    /// Check only this project's background jobs. Omit for the whole workspace.
-    pub project_id: Option<Uuid>,
 }
 
 /// Queued jobs older than this mean the worker is not keeping up.
@@ -137,13 +127,28 @@ pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessRespon
     }))
 }
 
+/// Deployment-wide status. Public like the other probes, so it takes no
+/// project filter and carries no per-project data.
 #[utoipa::path(get, path="/health/dependencies", operation_id="getDependencyStatus", tag="health",
-    params(DependencyQuery),
     responses((status=200, body=DependencyStatus)))]
-pub async fn dependencies(
+pub async fn dependencies(State(state): State<AppState>) -> Json<DependencyStatus> {
+    Json(dependency_status(&state, None).await)
+}
+
+/// The same probe narrowed to one project's jobs. The PEP requires
+/// `project:view` on the path's project.
+#[utoipa::path(get, path="/projects/{project_id}/health/dependencies",
+    operation_id="getProjectDependencyStatus", tag="health",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    responses((status=200, body=DependencyStatus)))]
+pub async fn project_dependencies(
     State(state): State<AppState>,
-    Query(query): Query<DependencyQuery>,
+    axum::extract::Path(project_id): axum::extract::Path<Uuid>,
 ) -> Json<DependencyStatus> {
+    Json(dependency_status(&state, Some(project_id)).await)
+}
+
+async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> DependencyStatus {
     let postgresql = match sqlx::query("SELECT 1").execute(&state.pool).await {
         Ok(_) => available(),
         Err(error) => {
@@ -170,7 +175,7 @@ pub async fn dependencies(
          WHERE ($2::uuid IS NULL OR project_id = $2)",
     )
     .bind(RECENT_DEAD_WINDOW_SECONDS as f64)
-    .bind(query.project_id)
+    .bind(project_id)
     .bind(LIVE_WORKER_WINDOW_SECONDS as f64)
     .fetch_one(&state.pool)
     .await
@@ -205,7 +210,7 @@ pub async fn dependencies(
             }
         }
     };
-    Json(DependencyStatus { postgresql, worker })
+    DependencyStatus { postgresql, worker }
 }
 
 #[utoipa::path(get, path="/health", operation_id="getDeprecatedHealth", tag="health",

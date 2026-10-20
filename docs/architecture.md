@@ -293,3 +293,49 @@ request. Publication alerts and PMID imports keep their own providers.
 
 Just remains the public command interface, Mise owns tool versions, and xtask
 owns the repository graph. Ordinary build, test, and service commands stay in Just.
+
+## Workspace tenancy: project backfill (handoff 03a)
+
+Every project belongs to one workspace. The staged rollout is expand-only until
+the final contract step:
+
+1. `deepref-server migrate` (once, before any new replica starts) creates the
+   workspace tables, the fixed migration workspace, the nullable
+   `projects.workspace_id`, and a BEFORE INSERT trigger that assigns the
+   migration workspace to any project inserted without one (previous-release
+   binaries). It also runs one bounded backfill batch and grants existing users
+   ownership of the migration workspace. The `projects (workspace_id)` index is
+   built `CONCURRENTLY` by its own `-- no-transaction` migration.
+2. Operator step, after the roll: `deepref-server backfill-project-workspaces`.
+   It moves projects that still lack a workspace in batches of 500, one
+   transaction per batch, then validates (total, unassigned, orphaned) in a
+   single statement. The same command marks existing users who hold an active
+   membership as onboarded, in bounded batches (sign-in does the same for any
+   it has not reached). It is resumable and safe to rerun; a nonzero unassigned or
+   orphaned count fails the command and changes nothing.
+3. Only after the command reports a clean validation may a later
+   `-- phase: contract` migration add `NOT NULL` and drop the trigger. That
+   migration needs a `requires-release-out-of-service` line.
+
+Onboarding is tracked by `users.onboarded_at`, not by the user insert, so a user
+the previous release provisioned (no memberships) is onboarded by their next
+sign-in. Invitations bind only to the address the provider verified
+(`users.verified_email`, which must equal the current `primary_email`). WorkOS reconciliation is serialized per Organization
+and rejects any snapshot that began before `workspaces.workos_reconciled_through`.
+
+## Migration recovery: the denial-window index (handoff 03b)
+
+Migration 0100 builds `admin_audit_denial_window_idx` with
+`CREATE UNIQUE INDEX CONCURRENTLY`, outside a transaction. If it is interrupted
+(process killed, lock timeout, a duplicate key found while building), PostgreSQL
+leaves an INVALID index of that name and the next run of 0100 fails with
+"relation already exists". Recover by hand, then rerun the migrations:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS admin_audit_denial_window_idx;
+```
+
+Migration 0101 asserts the index is valid, ready and unique and refuses to
+continue otherwise, so a skipped or half-built index can never be accepted. The
+two migrations are unreleased; once released they are immutable and any repair
+is a new migration.

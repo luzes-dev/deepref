@@ -13,6 +13,7 @@ mod assistant_host;
 mod assistant_plans;
 mod assistant_runs;
 mod audit_export;
+pub mod authorization;
 mod automations;
 mod autonomy;
 mod deduplication;
@@ -20,9 +21,11 @@ mod documents;
 pub mod durable_runs;
 mod extraction;
 mod graph;
+pub mod identity;
 pub mod inbox;
 mod jobs;
 mod leased_handler;
+mod legacy_actors;
 mod notifications;
 pub mod outbox;
 mod persistence;
@@ -35,6 +38,7 @@ mod review_completion;
 mod review_preparation;
 mod review_run_setup;
 mod review_runs;
+mod scientific_assignments;
 pub mod screening;
 mod second_review;
 mod study;
@@ -42,6 +46,7 @@ mod study;
 pub mod test_isolation;
 mod worker_runtime;
 mod workflows;
+pub mod workspaces;
 
 use sqlx::{
     PgPool,
@@ -105,14 +110,14 @@ pub use assistant::{
     append_assistant_message, create_assistant_conversation, delete_assistant_conversation,
     get_assistant_conversation, list_assistant_conversations, list_assistant_messages,
 };
-pub use assistant_host::PostgresAssistantToolHost;
+pub use assistant_host::{HostAuthorization, PostgresAssistantToolHost};
 pub use assistant_plans::{
     AssistantPlanRecord, NewAssistantPlan, claim_assistant_plan, create_assistant_plan,
     finish_assistant_plan, get_assistant_plan, update_assistant_plan_results,
 };
 pub use assistant_runs::{
     AssistantAgentRunRecord, AssistantRunEventRecord, ClaimedAssistantAgentRun,
-    CompletedAssistantAgentRun, NewAssistantAgentRun, append_assistant_run_event,
+    CompletedAssistantAgentRun, NewAssistantAgentRun, RunPrincipal, append_assistant_run_event,
     begin_assistant_agent_run, complete_assistant_agent_run, create_assistant_agent_run,
     fail_assistant_agent_run, get_assistant_agent_run, list_assistant_run_events,
     submit_assistant_agent_run,
@@ -162,11 +167,16 @@ pub use jobs::{
     PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
     recover_expired_jobs, renew_job,
 };
+pub use legacy_actors::{
+    LegacyActorDecision, LegacyActorDecisionKind, LegacyActorError, LegacyActorKind,
+    list_legacy_actor_decisions, map_legacy_actor, record_legacy_actor_non_identity,
+};
 pub use notifications::{
     MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
-    NotificationSeverity, NotificationUnreadSummary, list_notifications, mark_notifications_read,
+    NotificationSeverity, NotificationUnreadSummary, list_notifications,
+    list_notifications_visible_to, mark_notifications_read, mark_notifications_read_visible_to,
     record_notification, record_notification_in_transaction,
-    record_run_notification_once_in_transaction, unread_summary,
+    record_run_notification_once_in_transaction, unread_summary, unread_summary_visible_to,
 };
 pub use persistence::{
     IntegrityViolation, PersistenceError, PersistenceFailure, RetryPolicy, RetryReason, classify,
@@ -204,6 +214,10 @@ pub use review_runs::{
     get_review_runs, load_leased_review_run, preview_review_identity, schedule_prepared_review_run,
     schedule_prepared_review_run_as,
 };
+pub use scientific_assignments::{
+    ScientificAssignment, ScientificAssignmentError, assign_scientific_reviewer,
+    list_scientific_assignments, revoke_scientific_assignment,
+};
 pub use second_review::{
     SECOND_REVIEW_BATCH, SecondReviewStatus, SecondReviewSweep, second_review_status,
     sweep_second_reviews,
@@ -222,6 +236,15 @@ pub use worker_runtime::{
     reserve_provider_permit,
 };
 pub use workflows::*;
+pub use workspaces::{
+    AcceptOutcome, InvitationRecord, MIGRATION_WORKSPACE_ID, MembershipRecord,
+    OrganizationSnapshot, ProjectAccessRecord, ProjectBackfillReport, ReconciliationReport,
+    WorkspaceError, WorkspaceRecord, accept_invitation, add_workspace_member,
+    apply_organization_snapshot, backfill_project_workspaces, change_membership_role,
+    change_project_access_role, create_personal_workspace, delete_workspace, grant_project_access,
+    invite_to_workspace, reconcile_organizations, remove_membership, rename_workspace,
+    revoke_invitation, revoke_project_access, set_membership_status, validate_project_workspaces,
+};
 
 pub use ai_first::{
     AiFirstCohort, AiFirstError, AiFirstOverview, close_ai_first_cohort, draw_ai_first_audit,

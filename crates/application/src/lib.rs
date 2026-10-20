@@ -1,17 +1,19 @@
 use deepref_domain::{
     Actor, CurrentScreeningState, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId,
     ScreenReportTransitionCommand, ScreeningDecision, ScreeningStage, ScreeningTransition,
-    ScreeningUndoValidationError, ScreeningValidationError, UndoScreeningTransitionCommand,
+    ScreeningUndoValidationError, ScreeningValidationError, UndoScreeningTransitionCommand, UserId,
     transition, undo_transition,
 };
 
 pub mod acquisition;
 pub mod ai_first;
 pub mod appraisal;
+pub mod authorization;
 pub mod automations;
 pub mod deduplication;
 pub mod documents;
 pub mod extraction;
+pub mod identity;
 pub mod inbox;
 pub mod jobs;
 pub mod outbox;
@@ -20,6 +22,7 @@ pub mod protocol;
 pub mod router;
 pub mod study;
 pub mod workflows;
+pub mod workspaces;
 
 pub use acquisition::{
     AttemptPurpose, BudgetStop, CsvColumnMapping, FetchedWork, ImportError, ImportParser,
@@ -74,6 +77,11 @@ pub use router::{
 };
 pub use study::{
     AssignReportToStudy, ClassifyStudy, CreateStudy, RemoveReportFromStudy, RenameStudy,
+};
+pub use workspaces::{
+    DirectoryError, DirectoryFuture, DirectoryMembership, DirectoryMembershipStatus,
+    DirectoryOrganization, OrganizationDirectory, ReconciliationFinding, map_directory_role,
+    normalize_invitation_email, personal_workspace_name, workspace_slug,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,7 +153,7 @@ impl ScreeningQueueSort {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetScreeningQueueQuery {
-    pub reviewer_id: Option<String>,
+    pub reviewer_id: Option<UserId>,
     pub project_id: ProjectId,
     pub status: ScreeningQueueStatus,
     pub search: Option<String>,

@@ -145,7 +145,7 @@ pub async fn run_with_shutdown(
         .acquire_timeout(database.acquire_timeout)
         .idle_timeout(Some(database.idle_timeout))
         .max_lifetime(Some(database.max_lifetime))
-        .connect(&database.url)
+        .connect(database.url())
         .await?;
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     let document_store = Arc::new(DocumentStore::from_config(&config.documents)?);

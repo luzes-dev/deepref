@@ -63,6 +63,7 @@ pub(super) async fn chat_durable(
     actor: Actor,
     conversation_id: Uuid,
     user_message: String,
+    principal: Option<deepref_domain::Principal>,
 ) -> Result<AssistantRunDto, ApiError> {
     if !state.ai_info.configured {
         return Err(ApiError::Configuration(
@@ -99,6 +100,11 @@ pub(super) async fn chat_durable(
         actor.id(),
         &model_route,
         deepref_ai::ASSISTANT_PROMPT_VERSION,
+        // The worker re-checks this person's grants before every tool call.
+        match principal.and_then(|principal| principal.user_id()) {
+            Some(user) => deepref_app::RunPrincipal::User(user),
+            None => deepref_app::RunPrincipal::DevelopmentBypass,
+        },
     )
     .await
     .map_err(map_conversation_error)?;

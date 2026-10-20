@@ -142,7 +142,7 @@ Suggested implementation order:
 2. `02_WORKOS_IDENTITY.md`, with `04_NATS_OUTBOX_FOUNDATION.md` part 04a and `07_OBJECT_STORAGE_PRODUCTION.md` alongside
 3. `03_TENANCY_AUTHORIZATION.md`: 03a, then 03b, then 03c
 4. `05_WORKER_TRANSPORT_MIGRATION.md` phase 05a
-5. Business gate: Polar payout eligibility for the actual legal entity and the LGPD privacy/retention/export/deletion policy
+5. Business gate: Polar payout eligibility for the actual legal entity and the LGPD privacy/retention/export/deletion policy. Status: LGPD policy, retention and region decided; Polar is not eligible for the seller and the billing provider is undecided (`BUSINESS_DECISIONS.md`)
 6. `08_POLAR_BILLING_ENTITLEMENTS.md`
 7. `09_AI_USAGE_RESERVATION_METERING.md`
 8. `11_API_KEYS_AUDIT_DOCS.md` Parts B and C
@@ -295,7 +295,7 @@ Required handoffs:
 12  operations acceptance
 ```
 
-Launch also requires the commercial readiness gate (Polar payout eligibility for the actual legal entity; LGPD privacy, retention, export and deletion policy) to be resolved before 08 starts.
+Launch also requires the commercial readiness gate (Polar payout eligibility for the actual legal entity; LGPD privacy, retention, export and deletion policy) to be resolved before 08 starts. Decisions so far are in `BUSINESS_DECISIONS.md`.
 
 Not required for launch, adopted when a trigger fires or a product requirement pulls them in: 04b, 05b, 06, 10 and 11 Part A (API keys).
 
