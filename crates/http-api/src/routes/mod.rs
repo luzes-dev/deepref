@@ -830,11 +830,11 @@ mod tests {
             .connect_lazy("postgres://postgres:postgres@localhost/deepref")
             .expect("test database URL must be valid");
         let mut values = std::collections::HashMap::new();
-        values.insert("APP_ENV".to_owned(), "local".to_owned());
+        values.insert("APP_ENV".to_owned(), "development".to_owned());
         let runtime = deepref_config::RuntimeConfig::from_map("test", &values).unwrap();
         let config = ApiConfig {
             documents: deepref_config::DocumentConfig::from_source(&|name| {
-                (name == "APP_ENV").then(|| "local".into())
+                (name == "APP_ENV").then(|| "development".into())
             })
             .expect("local test document configuration"),
             runtime,

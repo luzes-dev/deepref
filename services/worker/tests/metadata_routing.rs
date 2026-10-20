@@ -156,7 +156,7 @@ fn worker_config(
     datacite: &MockServer,
 ) -> WorkerConfig {
     let mut config = WorkerConfig::from_source(&|name| match name {
-        "APP_ENV" => Some("local".into()),
+        "APP_ENV" => Some("development".into()),
         "DEEPREF_CONTACT_EMAIL" => Some(CONTACT_EMAIL.into()),
         "DEEPREF_ABSTRACT_ENRICHMENT" => Some("off".into()),
         _ => None,

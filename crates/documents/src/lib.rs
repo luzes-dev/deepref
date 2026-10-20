@@ -1,5 +1,5 @@
 pub use deepref_config::DEFAULT_MAX_DOCUMENT_BYTES;
-use deepref_config::{DocumentConfig, DocumentStorageBackend};
+use deepref_config::{DocumentConfig, DocumentStorageBackend, ExposeSecret};
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -119,7 +119,13 @@ impl DocumentStore {
                 region,
                 access_key_id,
                 secret_access_key,
-            } => StoreConfig::s3(endpoint, bucket, region, access_key_id, secret_access_key)?,
+            } => StoreConfig::s3(
+                endpoint,
+                bucket,
+                region,
+                access_key_id,
+                secret_access_key.expose_secret(),
+            )?,
         };
         Ok(Self::new(store, config.max_bytes))
     }
@@ -625,7 +631,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("deepref-configured-store-{}", Uuid::new_v4()));
         let config = DocumentConfig::from_source(&|name| match name {
-            "APP_ENV" => Some("local".into()),
+            "APP_ENV" => Some("development".into()),
             "DOCUMENT_STORAGE_ROOT" => Some(root.to_string_lossy().into_owned()),
             "DOCUMENT_MAX_BYTES" => Some("1024".into()),
             _ => None,

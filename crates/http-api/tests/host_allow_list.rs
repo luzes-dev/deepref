@@ -22,7 +22,7 @@ fn app() -> axum::Router {
         .unwrap();
     let config = ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local test document configuration"),
         runtime: support::local_runtime(),
