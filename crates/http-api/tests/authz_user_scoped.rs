@@ -510,3 +510,200 @@ async fn a_plan_stops_when_access_is_lost_during_confirmation() {
     .unwrap();
     assert_eq!(denied, 1);
 }
+
+/// Lets the first `real` decisions through to the real decision point, then
+/// answers every later one with `then`.
+struct Scripted {
+    real: deepref_application::authorization::PolicyDecisionPoint<
+        deepref_app::authorization::PostgresAuthorizationStore,
+    >,
+    calls: std::sync::atomic::AtomicUsize,
+    real_calls: usize,
+    then: Result<(), ()>,
+}
+
+impl deepref_application::authorization::Authorizer for Scripted {
+    fn require<'a>(
+        &'a self,
+        principal: &'a deepref_domain::Principal,
+        permission: deepref_domain::authorization::Permission,
+        resource: deepref_domain::authorization::Resource,
+    ) -> deepref_application::authorization::AuthorizationFuture<
+        'a,
+        Result<(), deepref_application::authorization::AuthzError>,
+    > {
+        use deepref_application::authorization::AuthzError;
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call < self.real_calls {
+            return self.real.require(principal, permission, resource);
+        }
+        let answer = match self.then {
+            Ok(()) => Ok(()),
+            Err(()) => Err(AuthzError::Store("injected".to_owned())),
+        };
+        Box::pin(async move { answer })
+    }
+}
+
+struct Deny {
+    real: deepref_application::authorization::PolicyDecisionPoint<
+        deepref_app::authorization::PostgresAuthorizationStore,
+    >,
+    calls: std::sync::atomic::AtomicUsize,
+    real_calls: usize,
+}
+
+impl deepref_application::authorization::Authorizer for Deny {
+    fn require<'a>(
+        &'a self,
+        principal: &'a deepref_domain::Principal,
+        permission: deepref_domain::authorization::Permission,
+        resource: deepref_domain::authorization::Resource,
+    ) -> deepref_application::authorization::AuthorizationFuture<
+        'a,
+        Result<(), deepref_application::authorization::AuthzError>,
+    > {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Only decision number `real_calls` is refused; every other is real.
+        if call != self.real_calls {
+            return self.real.require(principal, permission, resource);
+        }
+        Box::pin(async {
+            Err(deepref_application::authorization::AuthzError::Denied(
+                deepref_application::authorization::AuthzDenied,
+            ))
+        })
+    }
+}
+
+async fn plan_with_manual_then_screening(h: &Harness, project: Uuid) -> Uuid {
+    let conversation: Uuid = sqlx::query_scalar(
+        "INSERT INTO assistant_conversations (project_id, title) VALUES ($1, 'c') RETURNING id",
+    )
+    .bind(project)
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    let actions = serde_json::json!([
+        { "id": "a1", "tool": "request_protocol_publish", "summary": "Publish", "rationale": "r",
+          "affected_count": 0, "args": {}, "executable": false,
+          "manual": { "reason": "do it yourself", "link_target": "protocol" } },
+        { "id": "a2", "tool": "screen_reports", "summary": "Exclude one", "rationale": "r",
+          "affected_count": 1, "executable": true,
+          "args": { "report_ids": [Uuid::new_v4()], "decision": "exclude" } }
+    ]);
+    let plan = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO assistant_plans
+           (id, project_id, conversation_id, status, summary, actions, created_by_kind,
+            created_by_id, model, prompt_version, evidence)
+         VALUES ($1, $2, $3, 'pending', 's', $4, 'user', 'x', 'm', 'v', '[]')",
+    )
+    .bind(plan)
+    .bind(project)
+    .bind(conversation)
+    .bind(actions)
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    plan
+}
+
+#[tokio::test]
+async fn a_store_error_during_confirmation_settles_the_plan_as_failed() {
+    let Some(pool) = support::authz::database().await else {
+        return;
+    };
+    let pool_for_state = pool.clone();
+    let h = Harness::with_state(pool, move |state| {
+        let real = deepref_application::authorization::PolicyDecisionPoint::new(
+            deepref_app::authorization::PostgresAuthorizationStore::new(pool_for_state),
+        );
+        state.with_authorizer(std::sync::Arc::new(Scripted {
+            real,
+            calls: 0.into(),
+            // Call 1 is the route check. Project creation and sign-in make no
+            // decisions through the state authorizer.
+            real_calls: 1,
+            then: Err(()),
+        }))
+    });
+    let owner = h.sign_in("user_A", "a@example.org").await;
+    let project = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO projects (id, name, workspace_id) VALUES (gen_random_uuid(), 'P', $1) RETURNING id",
+    )
+    .bind(owner.workspace.as_uuid())
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    let plan = plan_with_manual_then_screening(&h, project).await;
+    let path = format!("/projects/{project}/assistant/plans/{plan}/confirm");
+    let (status, body) = h.json(&owner, Method::POST, &path, "{}").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "failed", "{body}");
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results[0]["status"], "manual", "earlier outcomes are kept");
+    assert_eq!(results[1]["status"], "failed");
+    // Not stranded: the plan is terminal, not left `confirmed`.
+    let stored: String = sqlx::query_scalar("SELECT status FROM assistant_plans WHERE id = $1")
+        .bind(plan)
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, "failed");
+}
+
+#[tokio::test]
+async fn losing_access_after_one_outcome_keeps_it_and_stays_failed() {
+    let Some(pool) = support::authz::database().await else {
+        return;
+    };
+    let pool_for_state = pool.clone();
+    let h = Harness::with_state(pool, move |state| {
+        let real = deepref_application::authorization::PolicyDecisionPoint::new(
+            deepref_app::authorization::PostgresAuthorizationStore::new(pool_for_state),
+        );
+        state.with_authorizer(std::sync::Arc::new(Deny {
+            real,
+            calls: 0.into(),
+            real_calls: 1,
+        }))
+    });
+    let owner = h.sign_in("user_A", "a@example.org").await;
+    let project = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO projects (id, name, workspace_id) VALUES (gen_random_uuid(), 'P', $1) RETURNING id",
+    )
+    .bind(owner.workspace.as_uuid())
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    let plan = plan_with_manual_then_screening(&h, project).await;
+    let path = format!("/projects/{project}/assistant/plans/{plan}/confirm");
+    let (status, body) = h.json(&owner, Method::POST, &path, "{}").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "failed", "{body}");
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results[0]["status"], "manual", "the first outcome is kept");
+    assert_eq!(results[1]["status"], "skipped");
+    // Reading the plan refreshes review results; that must not rewrite the
+    // access-loss failure as success.
+    let (_, again) = h
+        .json(
+            &owner,
+            Method::GET,
+            &format!("/projects/{project}/assistant/plans/{plan}"),
+            "",
+        )
+        .await;
+    assert_eq!(again["status"], "failed", "{again}");
+    let message: String = sqlx::query_scalar(
+        "SELECT content FROM assistant_messages m JOIN assistant_plans p ON p.conversation_id = m.conversation_id
+         WHERE p.id = $1 AND m.role = 'assistant'",
+    )
+    .bind(plan)
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert!(!message.starts_with("Done"), "{message}");
+    assert!(message.contains("access"), "{message}");
+}

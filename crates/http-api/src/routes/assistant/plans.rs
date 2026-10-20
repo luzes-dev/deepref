@@ -338,6 +338,7 @@ pub(crate) async fn confirm_plan(
     let mut results = Vec::with_capacity(actions.len());
     let mut any_failed = false;
     let mut access_lost = false;
+    let mut authorization_unavailable = false;
     for action in &actions {
         let result = if deselection.whole_action(&action.id) {
             outcome(action, "skipped", "You left this out of the plan.")
@@ -347,25 +348,44 @@ pub(crate) async fn confirm_plan(
                 "skipped",
                 "Your access to this project changed, so this step was not run.",
             )
-        } else if !action_authorized(&state, principal, project_id, action).await? {
-            // Authorized per action against current grants: a removal or
-            // downgrade partway through a bulk confirmation stops the rest.
-            access_lost = true;
+        } else if authorization_unavailable {
             outcome(
                 action,
-                "skipped",
-                "Your access to this project changed, so this step was not run.",
+                "failed",
+                "Access could not be checked, so this step was not run.",
             )
+        } else if let Some(allowed) =
+            authorized_or_unavailable(&state, principal, project_id, action).await
+        {
+            if allowed {
+                run_action(
+                    &state,
+                    ProjectId::new(project_id),
+                    &provenance,
+                    &actor,
+                    action,
+                    &deselection,
+                )
+                .await
+            } else {
+                // Authorized per action against current grants: a removal or
+                // downgrade partway through a bulk confirmation stops the rest.
+                access_lost = true;
+                outcome(
+                    action,
+                    "skipped",
+                    "Your access to this project changed, so this step was not run.",
+                )
+            }
         } else {
-            run_action(
-                &state,
-                ProjectId::new(project_id),
-                &provenance,
-                &actor,
+            // The decision could not be read. The plan is already confirmed, so
+            // stop here and settle it as failed, keeping earlier outcomes.
+            authorization_unavailable = true;
+            outcome(
                 action,
-                &deselection,
+                "failed",
+                "Access could not be checked, so this step was not run.",
             )
-            .await
         };
         any_failed |= result.get("status").and_then(Value::as_str) == Some("failed");
         results.push(result);
@@ -383,7 +403,7 @@ pub(crate) async fn confirm_plan(
         },
         &Value::Array(results),
         (any_failed || access_lost).then_some(if access_lost {
-            "access changed during execution"
+            ACCESS_LOST_ERROR
         } else {
             "one or more actions failed"
         }),
@@ -391,7 +411,9 @@ pub(crate) async fn confirm_plan(
     .await
     .map_err(map_plan_error)?;
 
-    let outcome_text = if any_failed {
+    let outcome_text = if access_lost {
+        "I stopped the plan because your access to this project changed. Details are on the plan."
+    } else if any_failed {
         "I ran the plan, but some actions failed. Details are on the plan."
     } else if any_queued {
         "I queued the plan you confirmed. The AI review runs in the background, and the plan shows its result when it finishes."
@@ -420,6 +442,18 @@ pub(crate) async fn confirm_plan(
 /// The permission of the equivalent direct route for this action, checked
 /// against current PostgreSQL grants and audited on denial. Manual steps run
 /// nothing and need none.
+/// `Some(allowed)`, or `None` when the decision could not be read.
+async fn authorized_or_unavailable(
+    state: &AppState,
+    principal: Option<deepref_domain::Principal>,
+    project_id: Uuid,
+    action: &PlanAction,
+) -> Option<bool> {
+    action_authorized(state, principal, project_id, action)
+        .await
+        .ok()
+}
+
 async fn action_authorized(
     state: &AppState,
     principal: Option<deepref_domain::Principal>,
@@ -457,6 +491,28 @@ fn failure_message(error: &AssistantFailure) -> &'static str {
         AssistantFailure::NotFound => "The item no longer exists in this project.",
         AssistantFailure::Conflict => "This conflicts with the current state of the project.",
         AssistantFailure::Internal => "Something went wrong while doing this.",
+    }
+}
+
+/// Stored as the plan's error when confirmation stopped because the person lost
+/// access. Later result refreshes keep the plan failed while it is set.
+const ACCESS_LOST_ERROR: &str = "access changed during execution";
+
+/// The terminal state after review results change. A plan that stopped for lack
+/// of access stays failed for that reason, whatever its reviews report.
+fn refreshed_state(
+    any_review_failed: bool,
+    prior_error: Option<&str>,
+) -> (AssistantPlanStatus, Option<&'static str>) {
+    if prior_error == Some(ACCESS_LOST_ERROR) {
+        (AssistantPlanStatus::Failed, Some(ACCESS_LOST_ERROR))
+    } else if any_review_failed {
+        (
+            AssistantPlanStatus::Failed,
+            Some("one or more AI reviews failed"),
+        )
+    } else {
+        (AssistantPlanStatus::Executed, None)
     }
 }
 
@@ -633,12 +689,7 @@ async fn refresh_review_steps(
     let any_failed = results
         .iter()
         .any(|result| result.get("status").and_then(Value::as_str) == Some("failed"));
-    let status = if any_failed {
-        AssistantPlanStatus::Failed
-    } else {
-        AssistantPlanStatus::Executed
-    };
-    let error = any_failed.then_some("one or more AI reviews failed");
+    let (status, error) = refreshed_state(any_failed, record.error.as_deref());
     let results = Value::Array(results);
     deepref_app::update_assistant_plan_results(&state.pool, record.id, status, &results, error)
         .await
@@ -911,5 +962,37 @@ mod tests {
         );
         assert_eq!(read_label("search_document"), "full-text passages");
         assert_eq!(read_label("unknown_tool"), "project data");
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn a_refresh_never_turns_an_access_loss_into_success() {
+        let (status, error) = refreshed_state(false, Some(ACCESS_LOST_ERROR));
+        assert_eq!(status, AssistantPlanStatus::Failed);
+        assert_eq!(error, Some(ACCESS_LOST_ERROR));
+        let (status, error) = refreshed_state(true, Some(ACCESS_LOST_ERROR));
+        assert_eq!(
+            (status, error),
+            (AssistantPlanStatus::Failed, Some(ACCESS_LOST_ERROR))
+        );
+    }
+
+    #[test]
+    fn a_refresh_without_an_access_loss_follows_the_reviews() {
+        assert_eq!(
+            refreshed_state(false, None),
+            (AssistantPlanStatus::Executed, None)
+        );
+        assert_eq!(
+            refreshed_state(true, None),
+            (
+                AssistantPlanStatus::Failed,
+                Some("one or more AI reviews failed")
+            )
+        );
     }
 }

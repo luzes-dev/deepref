@@ -56,6 +56,35 @@ impl Harness {
         Self { app, pool, fake }
     }
 
+    /// A harness whose router is built from a state `tweak` adjusts (an
+    /// injected authorizer, a short stream interval).
+    pub fn with_state(
+        pool: PgPool,
+        tweak: impl FnOnce(deepref_http_api::state::AppState) -> deepref_http_api::state::AppState,
+    ) -> Self {
+        let fake = Arc::new(FakeIdentity::default());
+        let runtime = super::runtime_with(&[
+            ("DEEPREF_AUTH_ENABLED", "true"),
+            ("DEEPREF_PUBLIC_ORIGIN", ORIGIN),
+        ]);
+        let config = deepref_http_api::config::ApiConfig {
+            documents: deepref_config::DocumentConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "development".into())
+            })
+            .unwrap(),
+            runtime,
+            bind_addr: "127.0.0.1:8080".parse().unwrap(),
+            cors_allow_any: false,
+            cors_origins: vec![ORIGIN.parse().unwrap()],
+        };
+        let state = deepref_http_api::state::AppState::core(pool.clone()).with_auth(auth_runtime(
+            Arc::clone(&fake),
+            std::time::Duration::from_secs(5),
+        ));
+        let app = deepref_http_api::routes::router(tweak(state), &config);
+        Self { app, pool, fake }
+    }
+
     /// As [`Harness::on`], with a router built from `state`.
     pub fn with_app(pool: PgPool, fake: Arc<FakeIdentity>, app: Router) -> Self {
         Self { app, pool, fake }

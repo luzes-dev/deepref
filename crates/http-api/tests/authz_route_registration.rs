@@ -44,6 +44,15 @@ const METHOD_ROUTER_CONSTRUCTORS: [&str; 18] = [
     "connect",
 ];
 
+const MACRO_NEEDLES: [&str; 6] = [
+    ".route(",
+    ".nest(",
+    ".fallback(",
+    "route_service",
+    "nest_service",
+    ".merge(",
+];
+
 /// The OpenAPI sub-routers `openapi_router` and `workflows::router` merge.
 const KNOWN_MERGES: [&str; 3] = ["uploads", "hooks", "router"];
 
@@ -137,6 +146,26 @@ impl<'ast> Visit<'ast> for Scan {
         visit::visit_expr_method_call(self, node);
     }
 
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        // `syn` does not parse macro bodies, so read their tokens as text. The
+        // utoipa `routes!` macro is the sanctioned way to name handlers.
+        let name = node
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default();
+        if name != "routes" {
+            let text = node.tokens.to_string().replace(' ', "");
+            for needle in MACRO_NEEDLES {
+                if text.contains(needle) {
+                    self.found.push(format!("{needle} inside {name}!{{..}}"));
+                }
+            }
+        }
+        visit::visit_macro(self, node);
+    }
+
     fn visit_expr_call(&mut self, node: &'ast ExprCall) {
         if let Expr::Path(path) = &*node.func
             && let Some(last) = path.path.segments.last()
@@ -199,6 +228,10 @@ fn the_scan_catches_planted_registrations() {
         r#"#[cfg(test)] mod tests { fn t() { Router::new().route("/ok", get(h)); } }
            fn r() -> Router { base.route("/y", delete(h)) }"#,
         r#"impl A { fn r(&self) -> Router { base.route("/z", x) } }"#,
+        // Registrations inside macro bodies, which syn does not parse.
+        r#"fn r() { build!(Router::new().route("/x", get(h))); }"#,
+        r#"fn r() { wrap! { base.nest_service("/x", svc) } }"#,
+        r#"fn r() { m!(a.merge(other)); }"#,
     ];
     for source in planted {
         assert!(!scan_source(source).is_empty(), "not caught: {source}");
@@ -213,6 +246,8 @@ fn the_scan_allows_the_sanctioned_forms() {
         r#"#[cfg(test)] mod tests { fn t() { Router::new().route("/t", get(h)); } }"#,
         r#"#[cfg(test)] fn t() { Router::new().nest("/t", x); }"#,
         r#"fn r() { let _ = map.get(1); }"#,
+        r#"fn r() { let _ = vec![1, 2]; println!("{}", 1); }"#,
+        r#"fn r() -> O { base.routes(routes!(a, b)) }"#,
     ];
     for source in allowed {
         assert_eq!(scan_source(source), Vec::<String>::new(), "{source}");
