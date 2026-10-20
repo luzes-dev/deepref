@@ -8,6 +8,8 @@ mod workspace;
 use anyhow::{Result, bail};
 
 fn main() -> Result<()> {
+    // Developer CLI dispatch only; no security decision depends on argv.
+    // nosemgrep: rust.lang.security.args.args
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [command] if command == "boundaries" => boundaries::run(),

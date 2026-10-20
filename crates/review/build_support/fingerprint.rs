@@ -1974,6 +1974,9 @@ workspace = true
     impl TempWorkspace {
         fn new(label: &str) -> Self {
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            // Test-only workspace keyed by process id and an atomic counter;
+            // it holds fixture files, not security-sensitive data.
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
             let path = std::env::temp_dir().join(format!(
                 "deepref-fingerprint-{label}-{}-{}",
                 std::process::id(),

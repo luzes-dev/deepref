@@ -1,0 +1,59 @@
+[extend]
+useDefault = true
+
+# DeepRef-specific allowlists belong here only for verified false positives or
+# intentional test fixtures. Never allowlist a real credential.
+#
+# The Playwright E2E fixtures in these two files build placeholder `doi_key`
+# values (`test-doi-key`, base64-encoded page numbers) for mocked API responses.
+# Match both the path and the `doi_key` line so unrelated findings in the same
+# files are still reported.
+[[allowlists]]
+description = "Placeholder doi_key values in Playwright API fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''^apps/web/src/routes/page\.svelte\.e2e\.ts$''',
+  '''^apps/web/src/routes/projects/\[projectId\]/graph/page\.svelte\.e2e\.ts$''',
+]
+regexTarget = "line"
+regexes = ['''doi_key:\s*['"`][^'"`]+['"`]''']
+
+# `.env.example` documents the variable shape with an explicit replace-me
+# placeholder; it is not a usable credential.
+[[allowlists]]
+description = "Documented WORKOS_COOKIE_PASSWORD placeholder"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^\.env\.example$''']
+regexTarget = "line"
+regexes = ['''WORKOS_COOKIE_PASSWORD=replace-me-with-at-least-32-characters''']
+
+# Configuration tests construct a fixed 32-hex-character cookie password.
+[[allowlists]]
+description = "Fixed WORKOS cookie password in configuration tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^crates/config/tests/config\.rs$''']
+regexTarget = "line"
+regexes = ['''WORKOS_COOKIE_PASSWORD", "0123456789abcdef0123456789abcdef"''']
+
+# The decision-log HTML uses "KEY" for a localStorage field name, not a
+# credential.
+[[allowlists]]
+description = "localStorage key name in the decision-log page"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^docs/decisions/ai-screening-calibration\.html$''']
+regexTarget = "line"
+regexes = ['''var KEY = "deepref-calibration-decisions-v1"''']
+
+# Terraform tests use a literal placeholder client ID; OAuth client IDs are
+# public identifiers, not client secrets.
+[[allowlists]]
+description = "Placeholder OAuth client IDs in Terraform tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^infra/.*/tests/.*\.tftest\.hcl$''']
+regexTarget = "line"
+regexes = ['''github_oauth_client_id\s*=\s*"Iv1\.placeholder"''']
