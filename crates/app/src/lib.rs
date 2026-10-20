@@ -1,3 +1,4 @@
+pub mod account_deletion;
 mod acquisition;
 mod activity;
 mod agent_tools;
@@ -12,7 +13,9 @@ mod assistant;
 mod assistant_host;
 mod assistant_plans;
 mod assistant_runs;
+pub mod audit_admin;
 mod audit_export;
+pub mod auth_rejections;
 pub mod authorization;
 mod automations;
 mod autonomy;
@@ -28,6 +31,7 @@ mod notifications;
 mod persistence;
 mod pmid_import;
 mod prisma;
+mod project_audit;
 mod project_deletion;
 mod protocol;
 mod review_calibration;
@@ -185,6 +189,7 @@ pub use pmid_import::{
     pmid_run_counts, pmids_in_project, queued_pmids, save_pmid_outcomes, start_pmid_run,
 };
 pub use prisma::{PrismaProjectionError, get_prisma_projection};
+pub use project_audit::{record_project_created, record_project_deleted};
 pub use project_deletion::delete_project_in_transaction;
 pub use protocol::{
     ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,

@@ -743,3 +743,57 @@ async fn logout_revokes_by_cookie_digest_without_the_provider_and_audits_once() 
     );
     assert_eq!(events(&pool, "auth.logout").await, 1);
 }
+
+#[tokio::test]
+async fn a_fulfilled_deletion_never_re_absorbs_provider_pii() {
+    let Some(pool) = database().await else { return };
+    sign_in(
+        &pool,
+        &session("user_A", "sess_1"),
+        &profile("person@example.org", Some("Real Name")),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+
+    // The account deletion was fulfilled (handoff 11): anonymized and logged.
+    sqlx::query(
+        "UPDATE users
+         SET status = 'deactivated', primary_email = 'Former member',
+             display_name = 'Former member', verified_email = NULL
+         WHERE workos_user_id = 'user_A'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO fulfilled_account_deletions (user_id)
+         SELECT id FROM users WHERE workos_user_id = 'user_A'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // A later callback with the same provider identity must not put the PII
+    // back: the anonymized form stands.
+    let outcome = sign_in(
+        &pool,
+        &session("user_A", "sess_2"),
+        &profile("person@example.org", Some("Real Name")),
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, SignIn::Deactivated));
+    let row = sqlx::query(
+        "SELECT primary_email, display_name, verified_email, status FROM users
+         WHERE workos_user_id = 'user_A'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("primary_email"), "Former member");
+    assert_eq!(row.get::<String, _>("display_name"), "Former member");
+    assert!(row.get::<Option<String>, _>("verified_email").is_none());
+    assert_eq!(row.get::<String, _>("status"), "deactivated");
+}
