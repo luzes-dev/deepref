@@ -310,10 +310,12 @@ pub(crate) async fn reject_plan(
 )]
 pub(crate) async fn confirm_plan(
     State(state): State<AppState>,
+    session: Option<crate::auth::CurrentSession>,
     Path((project_id, plan_id)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
     body: Option<Json<ConfirmAssistantPlanRequestDto>>,
 ) -> Result<Json<AssistantPlanDto>, ApiError> {
+    let principal = session.map(|session| session.0.principal);
     let actor = extract_actor(&headers)?;
     let request = body.map(|Json(request)| request).unwrap_or_default();
     let pending = load_plan(&state, project_id, plan_id).await?;
@@ -335,9 +337,25 @@ pub(crate) async fn confirm_plan(
     let actions = parse_actions(&claimed.actions);
     let mut results = Vec::with_capacity(actions.len());
     let mut any_failed = false;
+    let mut access_lost = false;
     for action in &actions {
         let result = if deselection.whole_action(&action.id) {
             outcome(action, "skipped", "You left this out of the plan.")
+        } else if access_lost {
+            outcome(
+                action,
+                "skipped",
+                "Your access to this project changed, so this step was not run.",
+            )
+        } else if !action_authorized(&state, principal, project_id, action).await? {
+            // Authorized per action against current grants: a removal or
+            // downgrade partway through a bulk confirmation stops the rest.
+            access_lost = true;
+            outcome(
+                action,
+                "skipped",
+                "Your access to this project changed, so this step was not run.",
+            )
         } else {
             run_action(
                 &state,
@@ -358,13 +376,17 @@ pub(crate) async fn confirm_plan(
     let finished = deepref_app::finish_assistant_plan(
         &state.pool,
         plan_id,
-        if any_failed {
+        if any_failed || access_lost {
             AssistantPlanStatus::Failed
         } else {
             AssistantPlanStatus::Executed
         },
         &Value::Array(results),
-        any_failed.then_some("one or more actions failed"),
+        (any_failed || access_lost).then_some(if access_lost {
+            "access changed during execution"
+        } else {
+            "one or more actions failed"
+        }),
     )
     .await
     .map_err(map_plan_error)?;
@@ -393,6 +415,37 @@ pub(crate) async fn confirm_plan(
         tracing::warn!(%error, "failed to record plan outcome in the conversation");
     }
     Ok(Json(plan_dto(&finished)))
+}
+
+/// The permission of the equivalent direct route for this action, checked
+/// against current PostgreSQL grants and audited on denial. Manual steps run
+/// nothing and need none.
+async fn action_authorized(
+    state: &AppState,
+    principal: Option<deepref_domain::Principal>,
+    project_id: Uuid,
+    action: &PlanAction,
+) -> Result<bool, ApiError> {
+    if action.manual.is_some() {
+        return Ok(true);
+    }
+    match crate::authz::authorize_audited(
+        state,
+        principal,
+        deepref_app::authorization::assistant_tool_permission(&action.tool),
+        deepref_domain::authorization::Resource::Project(ProjectId::new(project_id)),
+    )
+    .await
+    {
+        Ok(()) => Ok(true),
+        Err(deepref_application::authorization::AuthzError::Denied(_)) => Ok(false),
+        Err(deepref_application::authorization::AuthzError::Store(error)) => {
+            tracing::error!(%error, "authorization data could not be read");
+            Err(ApiError::Internal(anyhow::anyhow!(
+                "authorization is unavailable"
+            )))
+        }
+    }
 }
 
 fn outcome(action: &PlanAction, status: &str, message: impl Into<String>) -> Value {

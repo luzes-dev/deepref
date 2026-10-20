@@ -7,9 +7,10 @@
 -- and one-minute window, and the writer inserts with ON CONFLICT DO NOTHING.
 -- Built CONCURRENTLY so N-1 writers are not blocked during the rollout; the
 -- partial predicate means it indexes no row that exists today.
--- 0100 cleared any invalid leftover of an interrupted earlier build, and this
--- statement has no IF NOT EXISTS so that a second leftover fails loudly instead
--- of being skipped; 0102 refuses to continue past an invalid index.
+--
+-- Deliberately no IF NOT EXISTS: an interrupted build leaves an INVALID index
+-- of this name, and a retry must fail loudly rather than skip it. Recovery is in
+-- docs/architecture.md ("Migration recovery").
 CREATE UNIQUE INDEX CONCURRENTLY admin_audit_denial_window_idx
   ON admin_audit_events (
     principal_user_id,

@@ -2185,6 +2185,7 @@ async fn assistant_event_stream_surfaces_database_failure_and_closes() {
         "event-test",
         &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
         deepref_ai::ASSISTANT_PROMPT_VERSION,
+        deepref_app::RunPrincipal::DevelopmentBypass,
     )
     .await
     .expect("submit run");

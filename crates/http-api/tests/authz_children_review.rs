@@ -798,12 +798,9 @@ async fn extraction_values_and_their_evidence_never_cross_projects() {
             .unwrap();
     assert_eq!(b_values, 1, "only B's own evidence-backed value exists");
 
-    // The AI extraction route under B's project with A's study. The handler
-    // (`schedule_data_extraction_review`, crates/app/src/review_preparation.rs)
-    // never checks that the study belongs to the path project before it
-    // schedules, so the refusal here is the missing model route, not a scoped
-    // lookup: a foreign study and a missing one are treated alike. Whatever
-    // the answer, it must be the same for both, and nothing of A's may move.
+    // The AI extraction route under B's project with A's study: the study is
+    // looked up within the path project, so A's study is a 404, exactly as a
+    // missing one is.
     let (status, _) = same_as_missing(
         &w,
         Method::POST,
@@ -812,7 +809,7 @@ async fn extraction_values_and_their_evidence_never_cross_projects() {
         a_study,
     )
     .await;
-    assert_ne!(status, StatusCode::ACCEPTED);
+    assert_eq!(status, StatusCode::NOT_FOUND);
     // Nothing was scheduled in A's project.
     let a_runs: i64 =
         sqlx::query_scalar("SELECT count(*) FROM review_run_manifests WHERE project_id=$1")

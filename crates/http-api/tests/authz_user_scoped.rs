@@ -393,6 +393,16 @@ async fn the_assistant_cannot_start_an_automation_its_user_may_not() {
         status == StatusCode::FORBIDDEN || stream.contains("assistant_forbidden"),
         "{status} {stream}"
     );
+    let denied: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM admin_audit_events
+         WHERE event_type = 'authorization.denied' AND principal_user_id = $1
+           AND metadata->>'permission' = 'automation:manage'",
+    )
+    .bind(member.user.as_uuid())
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(denied, 1, "the dispatch-level denial is audited");
     let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_runs")
         .fetch_one(&h.pool)
         .await
@@ -408,4 +418,95 @@ async fn the_assistant_cannot_start_an_automation_its_user_may_not() {
         "{status} {}",
         String::from_utf8_lossy(&bytes)
     );
+}
+
+#[tokio::test]
+async fn a_plan_stops_when_access_is_lost_during_confirmation() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let owner = h.sign_in("user_A", "a@example.org").await;
+    let member = h.sign_in("user_B", "b@example.org").await;
+    h.add_member(&owner, &member, WorkspaceRole::Member).await;
+    let project = h.create_project(&owner, "P").await;
+    let conversation: Uuid = sqlx::query_scalar(
+        "INSERT INTO assistant_conversations (project_id, title) VALUES ($1, 'c') RETURNING id",
+    )
+    .bind(project)
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    let actions: Vec<_> = (1..=2)
+        .map(|n| {
+            serde_json::json!({
+                "id": format!("a{n}"), "tool": "screen_reports", "summary": "Exclude one",
+                "rationale": "off topic", "affected_count": 1,
+                "args": { "report_ids": [Uuid::new_v4()], "decision": "exclude" },
+                "executable": true
+            })
+        })
+        .collect();
+    let plan = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO assistant_plans
+           (id, project_id, conversation_id, status, summary, actions, created_by_kind,
+            created_by_id, model, prompt_version, evidence)
+         VALUES ($1, $2, $3, 'pending', 's', $4, 'user', 'x', 'm', 'v', '[]')",
+    )
+    .bind(plan)
+    .bind(project)
+    .bind(conversation)
+    .bind(serde_json::Value::Array(actions))
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    // The member passes the route check, then loses access while the plan is
+    // being confirmed: the status flip to confirmed removes the membership.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE FUNCTION revoke_on_confirm() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+           DELETE FROM workspace_memberships WHERE user_id = '{}'::uuid AND role = 'member';
+           RETURN NEW;
+         END $$",
+        member.user.as_uuid()
+    )))
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER revoke_on_confirm AFTER UPDATE ON assistant_plans
+         FOR EACH ROW WHEN (NEW.status = 'confirmed') EXECUTE FUNCTION revoke_on_confirm()",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    let (status, body) = h
+        .json(
+            &member,
+            Method::POST,
+            &format!("/projects/{project}/assistant/plans/{plan}/confirm"),
+            "{}",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "failed", "{body}");
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    for result in results {
+        assert_eq!(result["status"], "skipped", "{result}");
+        assert!(
+            result["message"].as_str().unwrap().contains("access"),
+            "{result}"
+        );
+    }
+    let denied: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM admin_audit_events
+         WHERE event_type = 'authorization.denied' AND principal_user_id = $1
+           AND metadata->>'permission' = 'screening:perform'",
+    )
+    .bind(member.user.as_uuid())
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(denied, 1);
 }

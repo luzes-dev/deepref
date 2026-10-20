@@ -20,7 +20,7 @@ use deepref_ai::{
     AssistantToolOutput, AssistantToolResult, AssistantTurnInput, BoundedAgentJson,
     run_assistant_react_turn,
 };
-use deepref_domain::authorization::{Permission, Resource};
+use deepref_domain::authorization::Resource;
 use deepref_domain::{
     Actor, DocumentBlockId, DocumentId, ProjectId, RecordId, ReportId, ScreeningStage, StudyDesign,
     StudyId,
@@ -940,24 +940,6 @@ struct ConversationAgentDispatcher {
     principal: Option<deepref_domain::Principal>,
 }
 
-/// The permission the equivalent direct route requires, so the assistant can
-/// never do what its user could not:
-///
-/// | tool | route it mirrors | permission |
-/// | --- | --- | --- |
-/// | `trigger_workflow` | `POST .../automations/runs` | `automation:manage` |
-/// | `propose_*` | `POST .../ai/*` suggestions | `ai:use` |
-/// | read tools | the project's read routes | `project:view` |
-fn tool_permission(tool_name: &str) -> Permission {
-    if tool_name == "trigger_workflow" {
-        return Permission::AutomationManage;
-    }
-    match AgentToolName::parse(tool_name) {
-        Some(name) if name.is_read() => Permission::ProjectView,
-        _ => Permission::AiUse,
-    }
-}
-
 impl AssistantDispatcher for ConversationAgentDispatcher {
     fn execute_tool<'a>(
         &'a self,
@@ -973,17 +955,21 @@ impl AssistantDispatcher for ConversationAgentDispatcher {
             // Authorized at dispatch with the authenticated principal, on every
             // call: membership removal or a role downgrade ends a running turn's
             // tools on the next one.
-            if let Some(principal) = principal {
-                state
-                    .authorizer
-                    .require(
-                        &principal,
-                        tool_permission(tool_name),
-                        Resource::Project(project_id),
-                    )
-                    .await
-                    .map_err(|_| AgentToolError::Forbidden)?;
-            }
+            crate::authz::authorize_audited(
+                &state,
+                principal,
+                deepref_app::authorization::assistant_tool_permission(tool_name),
+                Resource::Project(project_id),
+            )
+            .await
+            .map_err(|error| match error {
+                deepref_application::authorization::AuthzError::Denied(_) => {
+                    AgentToolError::Forbidden
+                }
+                deepref_application::authorization::AuthzError::Store(_) => {
+                    AgentToolError::ExecutionFailed
+                }
+            })?;
             dispatch_assistant_tool(project_id, &state, actor, tool_name, args).await
         })
     }
@@ -1191,6 +1177,7 @@ pub(crate) async fn chat(
             actor,
             body.conversation_id,
             user_message,
+            principal,
         )
         .await
         .map(|dto| (StatusCode::ACCEPTED, Json(dto)).into_response());

@@ -278,7 +278,7 @@ pub struct Denial<'a> {
 /// The audit table is append-only, so a count cannot be bumped in place. The
 /// writer instead *samples*: one row per (user, permission, resource type,
 /// one-minute window). A process-local set skips the round trip for keys it
-/// already wrote this window, and a unique index (migration 0101) makes the
+/// already wrote this window, and a unique index (migration 0100) makes the
 /// bound hold across processes. A flood of denials therefore stores at most
 /// permissions x resource types rows per user per minute.
 pub struct DenialAuditor {
@@ -383,5 +383,97 @@ impl DenialAuditor {
             }
         };
         Ok(written == 1)
+    }
+}
+
+/// The permission the equivalent direct route requires for an assistant tool
+/// or plan action, so the assistant can never do what its user could not:
+///
+/// | tool | route it mirrors | permission |
+/// | --- | --- | --- |
+/// | `trigger_workflow` | `POST .../automations/runs` | `automation:manage` |
+/// | `screen_reports` (plan action) | `POST .../reports/{id}/screening` | `screening:perform` |
+/// | `propose_*` | `POST .../ai/*` suggestions | `ai:use` |
+/// | read tools, overview, report listing | the project's read routes | `project:view` |
+pub fn assistant_tool_permission(tool_name: &str) -> Permission {
+    use deepref_ai::{
+        AgentToolName, TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW, TOOL_SCREEN_REPORTS,
+    };
+    match tool_name {
+        "trigger_workflow" => Permission::AutomationManage,
+        TOOL_SCREEN_REPORTS => Permission::ScreeningPerform,
+        TOOL_PROJECT_OVERVIEW | TOOL_LIST_REPORTS => Permission::ProjectView,
+        other => match AgentToolName::parse(other) {
+            Some(name) if name.is_read() => Permission::ProjectView,
+            _ => Permission::AiUse,
+        },
+    }
+}
+
+/// The one boundary that decides *and* audits: the policy decision point plus
+/// the bounded, sampled denial audit the HTTP middleware uses. Dispatch-level
+/// checks (assistant tools, plan actions, worker turns) go through it so a
+/// denial is never silent.
+#[derive(Clone)]
+pub struct AuditedAuthorizer {
+    authorizer: std::sync::Arc<dyn deepref_application::authorization::Authorizer>,
+    denials: std::sync::Arc<DenialAuditor>,
+}
+
+impl AuditedAuthorizer {
+    pub fn new(
+        authorizer: std::sync::Arc<dyn deepref_application::authorization::Authorizer>,
+        denials: std::sync::Arc<DenialAuditor>,
+    ) -> Self {
+        Self {
+            authorizer,
+            denials,
+        }
+    }
+
+    /// The default wiring over PostgreSQL.
+    pub fn postgres(pool: &PgPool) -> Self {
+        Self::new(
+            std::sync::Arc::new(
+                deepref_application::authorization::PolicyDecisionPoint::new(
+                    PostgresAuthorizationStore::new(pool.clone()),
+                ),
+            ),
+            std::sync::Arc::new(DenialAuditor::new(pool.clone())),
+        )
+    }
+
+    pub async fn require(
+        &self,
+        principal: &deepref_domain::Principal,
+        permission: Permission,
+        resource: Resource,
+        request_id: Option<&str>,
+    ) -> Result<(), AuthzError> {
+        match self
+            .authorizer
+            .require(principal, permission, resource)
+            .await
+        {
+            Err(AuthzError::Denied(denied)) => {
+                if let Some(user) = principal.user_id() {
+                    let resource = match resource {
+                        Resource::Workspace(id) => DeniedResource::Workspace(Some(id)),
+                        Resource::Project(id) => DeniedResource::Project(Some(id)),
+                    };
+                    let denial = Denial {
+                        user,
+                        denied_for: DeniedFor::Permission(permission),
+                        resource,
+                        request_id,
+                    };
+                    if let Err(error) = self.denials.record(denial).await {
+                        tracing::warn!(%error, "authorization denial could not be audited");
+                    }
+                }
+                Err(AuthzError::Denied(denied))
+            }
+            other => other,
+        }
     }
 }

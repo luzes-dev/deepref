@@ -53,6 +53,7 @@ fn new_run(project_id: Uuid, conversation_id: Uuid, trigger: Uuid) -> NewAssista
         build_provenance: json!({}),
         answer_message_id: Uuid::new_v4(),
         plan_id: Uuid::new_v4(),
+        principal: deepref_app::RunPrincipal::DevelopmentBypass,
     }
 }
 
@@ -87,6 +88,7 @@ async fn submit_creates_message_run_and_job_atomically() {
         "tester",
         &json!({"profile": "reasoning"}),
         "assistant.agent.v2",
+        deepref_app::RunPrincipal::DevelopmentBypass,
     )
     .await
     .expect("submit succeeds");

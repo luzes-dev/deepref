@@ -299,6 +299,27 @@ pub(crate) async fn holds(
     }
 }
 
+/// The audited decision for dispatch-level checks (assistant tools, plan
+/// actions): the same decision point and the same bounded, sampled denial audit
+/// as the middleware. `principal` is `None` only with authentication off
+/// (local development), where nothing is decided.
+pub(crate) async fn authorize_audited(
+    state: &AppState,
+    principal: Option<deepref_domain::Principal>,
+    permission: Permission,
+    resource: Resource,
+) -> Result<(), AuthzError> {
+    let Some(principal) = principal else {
+        return Ok(());
+    };
+    deepref_app::authorization::AuditedAuthorizer::new(
+        std::sync::Arc::clone(&state.authorizer),
+        std::sync::Arc::clone(&state.denials),
+    )
+    .require(&principal, permission, resource, None)
+    .await
+}
+
 /// Handler-side check for a resource only the body names (`Rule::Handler`).
 /// A denial is audited and returned as the same `404`.
 pub(crate) async fn require_for_handler(
