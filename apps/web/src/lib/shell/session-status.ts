@@ -10,7 +10,7 @@ export type SessionStatus =
 	| { kind: 'expired' }
 	| { kind: 'error' };
 
-type SessionQuery = {
+export type SessionQuery = {
 	isPending: boolean;
 	data?: { data: MeResponse } | undefined;
 	error?: unknown;

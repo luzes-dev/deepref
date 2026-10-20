@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../../../../tests/e2e-test';
+import type { Page } from '@playwright/test';
 
 const projectId = 'project-1';
 const reportId = '00000000-0000-4000-8000-000000000001';

@@ -14,6 +14,8 @@ Treat this as a business decision, not an engineering workaround. Record the dec
 
 Do not create a foreign legal entity as part of this work.
 
+Status (2026-10-19, `BUSINESS_DECISIONS.md`): the seller is an individual in Brazil, and Polar does not pay out to Brazil. This handoff is paused until the billing provider is chosen, then rewritten for that provider. The LGPD roles, retention periods and data region recorded there apply to whichever provider is chosen.
+
 ## Responsibility split
 
 Polar owns:
