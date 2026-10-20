@@ -300,3 +300,14 @@ deletes in bounded batches, is safe to interrupt and rerun, and records each
 real run as `audit.purged`. Details, the incident-response query
 (`deepref-server audit query`) and the account-deletion restore step are in
 [security.md](security.md).
+
+Account deletion is a request state machine (`account_deletion_requests`:
+`requested`, `cancelled`, `completing`, `completed`). Cancellation and
+completion lock the request row, then the user row; completion claims a due
+request before any destructive work, deletes a workspace only under
+`lock_workspace` after re-checking sole ownership, and finishes in one
+transaction that anonymizes the user, sets the durable `users.deleted_at`
+marker (held by a database trigger) and moves the request to `completed`.
+Restore: re-import the `fulfilled_account_deletions` log and run
+`deepref-server accounts complete-deletions`, which replays every logged
+deletion idempotently.

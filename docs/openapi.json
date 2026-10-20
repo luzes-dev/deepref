@@ -606,6 +606,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The deletion is already completing or complete and can no longer be cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           }
         }
       }

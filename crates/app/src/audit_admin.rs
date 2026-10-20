@@ -23,6 +23,11 @@ pub const ADMIN_AUDIT_RETENTION: &str = "6 months";
 /// without content (BUSINESS_DECISIONS).
 pub const DELETION_PROOF_RETENTION: &str = "5 years";
 
+/// Retention of session rows (BUSINESS_DECISIONS): 30 days after the session
+/// expired or was revoked. Before that a row may still be needed to explain a
+/// request; after it the sealed provider payload has no purpose and goes.
+pub const SESSION_RETENTION: &str = "30 days";
+
 /// The rows the purge may remove, decided exactly as the trigger in migration
 /// 0112 decides them. Stated twice (count and delete) because `sqlx` only
 /// accepts literal SQL; the purge tests assert both agree with the trigger.
@@ -156,9 +161,13 @@ pub async fn query_admin_audit(
 pub struct PurgeReport {
     pub dry_run: bool,
     pub batch_size: i64,
+    /// Bounded audit-delete batches; the other two rows kinds go in one
+    /// statement each and are not counted here.
     pub batches: u32,
     pub audit_rows_purged: u64,
     pub fulfilled_deletion_rows_purged: u64,
+    /// Session rows 30 days past expiry or revocation (BUSINESS_DECISIONS).
+    pub session_rows_purged: u64,
 }
 
 /// Deletes audit rows past their retention cutoff, in bounded batches, and
@@ -181,6 +190,7 @@ pub async fn purge_admin_audit(
         batches: 0,
         audit_rows_purged: 0,
         fulfilled_deletion_rows_purged: 0,
+        session_rows_purged: 0,
     };
     if dry_run {
         let pending: i64 = sqlx::query_scalar(PURGEABLE_COUNT_SQL)
@@ -188,6 +198,7 @@ pub async fn purge_admin_audit(
             .await?;
         report.audit_rows_purged = u64::try_from(pending).unwrap_or(0);
         report.fulfilled_deletion_rows_purged = count_purgeable_fulfilled_rows(pool).await?;
+        report.session_rows_purged = count_purgeable_sessions(pool).await?;
         return Ok(report);
     }
     loop {
@@ -208,6 +219,7 @@ pub async fn purge_admin_audit(
         }
     }
     report.fulfilled_deletion_rows_purged = purge_fulfilled_rows(pool).await?;
+    report.session_rows_purged = purge_sessions(pool).await?;
     // Purging the audit is itself an administrative action (11 Part B): each
     // real run records that it ran and how many rows it removed. A dry run
     // changes nothing and records nothing.
@@ -247,4 +259,42 @@ async fn purge_fulfilled_rows(pool: &PgPool) -> Result<u64, sqlx::Error> {
     .execute(pool)
     .await?
     .rows_affected())
+}
+
+/// Session rows are retained for 30 days after they expired or were revoked
+/// (BUSINESS_DECISIONS), then removed in bounded batches with everything else
+/// in the same daily run. A session row is the only place a sealed provider
+/// payload is kept, so this is also the retention that bounds that data.
+const PURGEABLE_SESSIONS_COUNT_SQL: &str = "SELECT count(*) FROM user_sessions
+   WHERE (revoked_at IS NOT NULL AND revoked_at < now() - interval '30 days')
+      OR (expires_at < now() - interval '30 days')";
+
+const PURGEABLE_SESSIONS_DELETE_SQL: &str = "DELETE FROM user_sessions
+   WHERE id IN (
+     SELECT id FROM user_sessions
+     WHERE (revoked_at IS NOT NULL AND revoked_at < now() - interval '30 days')
+        OR (expires_at < now() - interval '30 days')
+     ORDER BY coalesce(revoked_at, expires_at), id
+     LIMIT $1)";
+
+async fn count_purgeable_sessions(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let pending: i64 = sqlx::query_scalar(PURGEABLE_SESSIONS_COUNT_SQL)
+        .fetch_one(pool)
+        .await?;
+    Ok(u64::try_from(pending).unwrap_or(0))
+}
+
+async fn purge_sessions(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let mut purged = 0;
+    loop {
+        let deleted = sqlx::query(PURGEABLE_SESSIONS_DELETE_SQL)
+            .bind(DEFAULT_PURGE_BATCH)
+            .execute(pool)
+            .await?
+            .rows_affected();
+        purged += deleted;
+        if deleted < DEFAULT_PURGE_BATCH as u64 {
+            return Ok(purged);
+        }
+    }
 }

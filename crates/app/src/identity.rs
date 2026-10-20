@@ -340,11 +340,16 @@ pub async fn sign_in(
         // Profile fields follow the provider; `status` is never touched here,
         // so a profile update cannot reactivate a deactivated user. An account
         // whose deletion has been fulfilled never re-absorbs provider PII
-        // (11, BUSINESS_DECISIONS): the anonymized form stands.
+        // (11, BUSINESS_DECISIONS): the anonymized form stands. The durable
+        // `users.deleted_at` marker is the version-independent guard (the
+        // trigger of migration 0111 enforces it at the database boundary); the
+        // fulfillment log is the belt-and-braces one that also covers a row
+        // restored without its marker.
         sqlx::query(
             "UPDATE users
              SET primary_email = $2, verified_email = $4, display_name = $3, updated_at = now()
              WHERE workos_user_id = $1
+               AND deleted_at IS NULL
                AND NOT EXISTS (
                  SELECT 1 FROM fulfilled_account_deletions f WHERE f.user_id = users.id)
                AND (primary_email IS DISTINCT FROM $2

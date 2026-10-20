@@ -310,14 +310,15 @@ async fn deletion_request_affects_only_its_caller() {
     let b = h.sign_in("user_B", "b@example.org").await;
 
     async fn pending(h: &Harness, user: deepref_domain::UserId) -> bool {
-        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
-            "SELECT deletion_requested_at FROM users WHERE id = $1",
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM account_deletion_requests
+             WHERE user_id = $1 AND state = 'requested'",
         )
         .bind(user.as_uuid())
         .fetch_one(&h.pool)
         .await
         .unwrap()
-        .is_some()
+            > 0
     }
 
     let (status, _) = h

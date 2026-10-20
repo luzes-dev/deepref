@@ -71,7 +71,7 @@ therefore sampled (section 4).
 | Project access granted / role changed / revoked | `project_access.granted` / `.role_changed` / `.removed` | `workspaces::{grant_project_access, change_project_access_role, revoke_project_access}` | |
 | Invitation created / accepted / revoked / expired | `invitation.created` / `.accepted` / `.revoked` / `.expired` | `workspaces::invite_to_workspace`, `accept_in_transaction`, `revoke_invitation` | |
 | Project created | `project.created` | `routes/projects.rs::create_project` (via `record_project_created`) | |
-| Project deleted (and its content) | `project.deleted` | `routes/projects.rs::delete_project`, `account_deletion::delete_solely_owned_workspaces` (via `record_project_deleted`) | |
+| Project deleted (and its content) | `project.deleted` | `routes/projects.rs::delete_project`, `account_deletion::complete_workspace` (via `record_project_deleted`) | |
 | Legacy actor mapped / denied (operator CLI) | `legacy_actor.mapped` / `.non_identity_recorded` | `legacy_actors::{map_legacy_actor, record_legacy_actor_non_identity}` (03c) | |
 | Retention purge run | `audit.purged` | `audit_admin::purge_admin_audit` | |
 
@@ -183,7 +183,7 @@ deepref-server audit purge             # delete in batches of 1000
 
 Each batch is its own transaction; the command is safe to interrupt and rerun
 and prints a JSON report (`batches`, `audit_rows_purged`,
-`fulfilled_deletion_rows_purged`). Every real run records `audit.purged`.
+`fulfilled_deletion_rows_purged`, `session_rows_purged`). Every real run records `audit.purged`.
 
 ---
 
@@ -229,49 +229,94 @@ the table).
 Per BUSINESS_DECISIONS and handoff 11:
 
 1. **Request** — `POST /me/deletion-request` (Authenticated: the caller
-   schedules their own deletion). Records `users.deletion_requested_at` and
-   one `account.deletion_requested`. Idempotent.
-2. **Cancel** — `DELETE /me/deletion-request` any time in the next 30 days.
-   Clears the request and records `account.deletion_cancelled`. Idempotent.
-3. **Complete** — `deepref-server accounts complete-deletions`, daily, 30
-   days after the request. Per account:
-   - deletes the workspaces the user solely owns (no other member remains)
-     and their content, through the existing project and workspace deletions
-     (`project.deleted`, `membership.removed`, `invitation.revoked`,
-     `workspace.deleted` audited); workspaces other members remain in are
-     kept;
-   - deactivates the account and anonymizes the PII: email and display name
-     become `Former member`, `verified_email` is cleared, `deleted_at` is set;
+   schedules their own deletion). Inserts an `account_deletion_requests` row in
+   state `requested` and records one `account.deletion_requested`. Idempotent.
+2. **Cancel** — `DELETE /me/deletion-request`, only from `requested`. Moves the
+   request to `cancelled` and records `account.deletion_cancelled`. From
+   `completing` or `completed` it fails with `409 DELETION_IRREVERSIBLE`. A
+   fresh request after a cancellation is a new row, so the 30 days restart.
+3. **Complete** — `deepref-server accounts complete-deletions`, daily. Per
+   account, in separate transactions:
+   - **claim**: lock the request row, then the user row, re-check
+     `state = 'requested' AND requested_at <= now() - 30 days` and move the
+     request to `completing` before any destructive work;
+   - **per workspace**: take `lock_workspace` (the lock 03a's membership
+     writers and workspace deletion use) and re-check under it that the user
+     is an active `owner`, that no other active membership exists, and that
+     it is not the migration workspace. Then, in ONE transaction, delete the
+     projects and their content, revoke pending invitations (audited) and
+     delete the workspace. If any check fails, only the user's membership is
+     removed; a shared workspace whose last owner leaves is left ownerless for
+     the operator recovery flow (as with 03a's global deactivation) and is
+     listed in `workspaces_left_ownerless` in the command output. A sole
+     non-owner membership never deletes a workspace;
+   - **finalize** (one transaction, request lock then user lock): anonymize
+     the user (email and display name `Former member`, `verified_email`
+     cleared, WorkOS link tombstoned as `deleted:<user uuid>`, `deleted_at`
+     set), delete every session row (they hold the sealed provider payload),
+     delete pending invitations addressed to the user and rewrite the address
+     of the other invitation rows to `deleted-<invitation id>@invalid`,
+     redact the PII in audit metadata (below), log
+     `fulfilled_account_deletions`, move the request to `completed`, and
+     write `user.deactivated` (`source: account_deletion`),
+     `auth.session_revoked` (`user_deactivated`) and the deletion-proof
+     `account.deletion_completed`;
    - **keeps** the stable `UserId`, every scientific provenance reference
      (contributions in shared workspaces stay attributed to the anonymized
-     "former member") and the whole audit history;
-   - revokes remaining sessions (`auth.session_revoked`), writes
-     `user.deactivated` (`source: account_deletion`) and the deletion-proof
-     `account.deletion_completed`, and logs the fulfillment in
-     `fulfilled_account_deletions` (user id and time only).
+     "former member") and the whole audit history.
 
-The completion command is idempotent and safe to interrupt: workspaces are
-deleted first, and the fulfillment is recorded in the same transaction as the
-anonymization. A logged deletion is never recorded twice; re-application is a
-restore remedy (below), not a second deletion. A fulfilled account never
-re-absorbs provider PII: a later sign-in callback with the same provider
-identity updates nothing (`identity::sign_in`, asserted by
-`identity_postgres::a_fulfilled_deletion_never_re_absorbs_provider_pii`).
+#### State machine and lock order
+
+```text
+requested --cancel--> cancelled                (terminal)
+requested --claim-->  completing --> completed (terminal; never due again)
+```
+
+Cancellation and completion take the same locks in the same order: **request
+row, then user row** (workspace completion takes the workspace lock on its own,
+never while holding either). Completion is due only from `requested` past 30
+days, or resuming `completing`; `completed` is never due, whatever happens to
+the five-year proof row.
+
+#### PII erasure
+
+- `users`: see finalize above. The durable marker is `users.deleted_at`, set at
+  completion and never purged. A BEFORE UPDATE trigger
+  (`users_anonymized_account_guard`, migration 0111) re-asserts the anonymized
+  form whenever `OLD.deleted_at IS NOT NULL`, so N-1 raw sign-in SQL and
+  restores cannot write PII back. A later WorkOS sign-in by the same person
+  creates a NEW user.
+- Audit metadata that can hold a name is the `legacy_actor_id` and `source`
+  keys of `legacy_actor.mapped` / `legacy_actor.non_identity_recorded` rows
+  about the user. Completion replaces them with `redacted` through
+  `SET LOCAL deepref.audit_redact = '<user uuid>'`; the append-only trigger
+  (migration 0112) accepts only that one user's rows, only those two keys and
+  only that value, with every other column unchanged.
+- Sessions are also purged 30 days after expiry or revocation
+  (`deepref-server audit purge`, `session_rows_purged`).
+
+The completion command is idempotent and safe to interrupt: every step before
+the finalize is idempotent and the fulfillment is recorded in the same
+transaction as the anonymization. Audit rows are written only when a deletion
+is fulfilled for the first time.
 
 ### Restore step
 
 Backups roll over 35 days; a restore can bring deleted personal data back.
 `fulfilled_account_deletions` is the standing log that prevents it (keep a
-copy in the ops records — it is two columns and no content):
+copy in the ops records, it is two columns and no content):
 
 1. Restore the backup as usual.
 2. Make sure the restore carries the `fulfilled_account_deletions` log
    (re-import the ops copy if the restored point predates it).
 3. Run `deepref-server accounts complete-deletions`.
 
-Every logged deletion is re-applied: the account is anonymized and deactivated
-again, any restored solely-owned workspace and its content are deleted again,
-sessions are revoked again. No audit row is written twice.
+Every logged deletion is replayed on every run, regardless of the profile
+fields: sessions and invitation addresses are cleaned again, solely-owned
+workspaces recreated since (restore or WorkOS reconciliation) are deleted
+again, and the users row is anonymized again (and held there by the trigger
+if `deleted_at` survived). Restored `requested`/`completing` requests of a
+logged deletion end `completed`. No audit row is written twice.
 
 ### Out of scope here
 
@@ -280,8 +325,6 @@ sessions are revoked again. No audit row is written twice.
   rather than the person; billing is undecided (BUSINESS_DECISIONS) and no
   `billing.*` events exist yet.
 - Inactive free accounts (warning at 22 months, deletion at 24) — follow-up.
-- Session retention purge (`user_sessions`, 30 days after expiry/revocation)
-  — follow-up; sessions are revoked but not yet purged.
 
 ---
 

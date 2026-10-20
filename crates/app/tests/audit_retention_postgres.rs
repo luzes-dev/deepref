@@ -105,6 +105,7 @@ async fn the_purge_removes_only_rows_past_their_retention_cutoff() {
             batches: 0,
             audit_rows_purged: 2,
             fulfilled_deletion_rows_purged: 1,
+            session_rows_purged: 0,
         }
     );
     assert!(exists(&pool, old).await, "a dry run deletes nothing");
@@ -269,4 +270,82 @@ async fn the_purge_gate_cannot_reach_young_or_deletion_proof_rows() {
     assert!(!exists(&pool, old).await);
     assert!(exists(&pool, young).await);
     assert!(exists(&pool, proof).await);
+}
+
+/// One session row, inserted at an explicit age so the retention window can be
+/// exercised without waiting.
+async fn make_session(pool: &PgPool, user: Uuid, age_days: i64, revoked: bool) -> Uuid {
+    let id = Uuid::new_v4();
+    let mut hash = [0u8; 32];
+    hash[0..16].copy_from_slice(&id.to_bytes_le());
+    sqlx::query(
+        "INSERT INTO user_sessions
+           (id, user_id, session_token_hash, sealed_provider_session, session_ref,
+            created_at, expires_at, revoked_at)
+         VALUES ($1, $2, $3, 'sealed test provider session', $3,
+                 now() - make_interval(days => $4),
+                 now() - make_interval(days => $4) + interval '1 day',
+                 CASE WHEN $5 THEN now() - make_interval(days => $4) ELSE NULL END)",
+    )
+    .bind(id)
+    .bind(user)
+    .bind(&hash[..])
+    .bind(age_days as i32)
+    .bind(revoked)
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+#[tokio::test]
+async fn the_purge_also_removes_sessions_thirty_days_past_expiry_or_revocation() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let user = make_user(&pool).await;
+    let expired_old = make_session(&pool, user, 40, false).await;
+    let revoked_old = make_session(&pool, user, 40, true).await;
+    let expired_recent = make_session(&pool, user, 10, false).await;
+    let revoked_recent = make_session(&pool, user, 10, true).await;
+    sqlx::query(
+        "INSERT INTO user_sessions
+           (id, user_id, session_token_hash, sealed_provider_session, session_ref, expires_at)
+         VALUES ($1, $2, $3, 'sealed test provider session', $3, now() + interval '1 hour')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user)
+    .bind(&vec![7u8; 32][..])
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let dry = purge_admin_audit(&pool, true, None).await.unwrap();
+    assert_eq!(dry.session_rows_purged, 2, "only the two old rows are due");
+    assert!(
+        session_exists(&pool, expired_old).await,
+        "a dry run deletes nothing"
+    );
+
+    let report = purge_admin_audit(&pool, false, None).await.unwrap();
+    assert_eq!(report.session_rows_purged, 2);
+    assert!(!session_exists(&pool, expired_old).await);
+    assert!(!session_exists(&pool, revoked_old).await);
+    assert!(
+        session_exists(&pool, expired_recent).await,
+        "ten days after expiry is still inside retention"
+    );
+    assert!(
+        session_exists(&pool, revoked_recent).await,
+        "ten days after revocation is still inside retention"
+    );
+}
+
+async fn session_exists(pool: &PgPool, id: Uuid) -> bool {
+    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM user_sessions WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        == 1
 }

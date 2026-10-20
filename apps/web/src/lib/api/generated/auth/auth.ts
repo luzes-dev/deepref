@@ -541,11 +541,18 @@ export type cancelAccountDeletionResponse404 = {
 	status: 404;
 };
 
+export type cancelAccountDeletionResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
 export type cancelAccountDeletionResponseSuccess = cancelAccountDeletionResponse204 & {
 	headers: Headers;
 };
 export type cancelAccountDeletionResponseError = (
-	cancelAccountDeletionResponse401 | cancelAccountDeletionResponse404
+	| cancelAccountDeletionResponse401
+	| cancelAccountDeletionResponse404
+	| cancelAccountDeletionResponse409
 ) & {
 	headers: Headers;
 };

@@ -451,8 +451,10 @@ async fn load_membership_for_update(
 }
 
 /// Serializes membership changes inside one workspace, so two concurrent
-/// changes cannot both decide they are not the last owner.
-async fn lock_workspace(
+/// changes cannot both decide they are not the last owner. Account deletion
+/// completion takes the same lock before it re-checks a workspace, so a member
+/// joining between the candidate scan and the deletion cannot slip past it.
+pub(crate) async fn lock_workspace(
     tx: &mut Transaction<'_, Postgres>,
     workspace_id: WorkspaceId,
 ) -> Result<(), WorkspaceError> {
@@ -873,6 +875,23 @@ pub async fn delete_workspace(
     if projects > 0 {
         return Err(WorkspaceError::WorkspaceHasProjects);
     }
+    delete_workspace_rows(&mut tx, actor, workspace_id, audit).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The workspace-level deletion itself, inside the caller's transaction and
+/// under the workspace lock the caller already took: pending invitations end
+/// as revoked (audited), every membership is audited as removed, and the
+/// workspace disappears. Account deletion completion calls this after it has
+/// deleted the workspace's projects in the same transaction, so projects,
+/// content and workspace go in ONE transaction.
+pub(crate) async fn delete_workspace_rows(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    workspace_id: WorkspaceId,
+    audit: AuditRequest<'_>,
+) -> Result<(), WorkspaceError> {
     // Pending invitations end as revoked (audited); every invitation row is
     // then deleted with the workspace, its history living in the audit trail.
     let pending = sqlx::query(
@@ -880,14 +899,14 @@ pub async fn delete_workspace(
          WHERE workspace_id = $1 AND status = 'pending' ORDER BY created_at, id",
     )
     .bind(workspace_id.as_uuid())
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     for row in &pending {
         let id: Uuid = row.try_get("id")?;
         let role: String = row.try_get("role")?;
         let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
         write_tenancy_audit(
-            &mut tx,
+            tx,
             TenancyEvent::InvitationRevoked(role, id),
             AuditPrincipal::User(actor),
             None,
@@ -899,19 +918,19 @@ pub async fn delete_workspace(
     }
     sqlx::query("DELETE FROM workspace_invitations WHERE workspace_id = $1")
         .bind(workspace_id.as_uuid())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     let members = sqlx::query(
         "SELECT id, workspace_id, user_id, role, status, grant_source, workos_membership_id
          FROM workspace_memberships WHERE workspace_id = $1 ORDER BY created_at, id",
     )
     .bind(workspace_id.as_uuid())
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     for row in &members {
         let member = membership_record(row)?;
         write_tenancy_audit(
-            &mut tx,
+            tx,
             TenancyEvent::MembershipRemoved(member.role, member.grant_source),
             AuditPrincipal::User(actor),
             Some(member.user_id),
@@ -922,7 +941,7 @@ pub async fn delete_workspace(
         .await?;
     }
     write_tenancy_audit(
-        &mut tx,
+        tx,
         TenancyEvent::WorkspaceDeleted,
         AuditPrincipal::User(actor),
         None,
@@ -933,14 +952,104 @@ pub async fn delete_workspace(
     .await?;
     sqlx::query("DELETE FROM workspace_memberships WHERE workspace_id = $1")
         .bind(workspace_id.as_uuid())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("DELETE FROM workspaces WHERE id = $1")
         .bind(workspace_id.as_uuid())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(())
+}
+
+/// Removes one membership inside the caller's transaction, with the
+/// `membership.removed` audit row. Unlike [`remove_membership`] it never
+/// refuses the last-owner loss: an account deletion (and 02's global
+/// deactivation, which never passes through the voluntary path) withdraws
+/// access from someone who is leaving the platform, and a workspace whose last
+/// owner leaves that way is left ownerless for the operator recovery flow. The
+/// workspace lock must already be held.
+pub(crate) async fn remove_membership_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    workspace_id: WorkspaceId,
+    user_id: UserId,
+    audit: AuditRequest<'_>,
+) -> Result<MembershipRecord, WorkspaceError> {
+    let membership = load_membership_for_update(tx, workspace_id, user_id).await?;
+    sqlx::query("DELETE FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2")
+        .bind(workspace_id.as_uuid())
+        .bind(user_id.as_uuid())
+        .execute(&mut **tx)
+        .await?;
+    write_tenancy_audit(
+        tx,
+        TenancyEvent::MembershipRemoved(membership.role, membership.grant_source),
+        AuditPrincipal::User(actor),
+        Some(user_id),
+        Some(workspace_id),
+        None,
+        audit,
+    )
+    .await?;
+    Ok(membership)
+}
+
+/// Account-deletion PII erasure for invitations (11 Part B): a pending
+/// invitation addressed to the account is revoked (audited) and deleted, and
+/// every other invitation row that carries the address keeps its history under
+/// the tombstone `deleted-<invitation id>@invalid`. Returns how many rows
+/// changed. The addresses are matched with the normalization invitations use.
+pub(crate) async fn scrub_user_invitations(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    emails: &[String],
+    audit: AuditRequest<'_>,
+) -> Result<u64, WorkspaceError> {
+    if emails.is_empty() {
+        return Ok(0);
+    }
+    let pending = sqlx::query(
+        "SELECT id, workspace_id, role FROM workspace_invitations
+         WHERE status = 'pending' AND lower(btrim(email)) = ANY($1)
+         ORDER BY created_at, id",
+    )
+    .bind(emails)
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in &pending {
+        let id: Uuid = row.try_get("id")?;
+        let workspace_id = WorkspaceId::new(row.try_get("workspace_id")?);
+        let role: String = row.try_get("role")?;
+        let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
+        write_tenancy_audit(
+            tx,
+            TenancyEvent::InvitationRevoked(role, id),
+            AuditPrincipal::User(actor),
+            None,
+            Some(workspace_id),
+            None,
+            audit,
+        )
+        .await?;
+    }
+    let deleted = sqlx::query(
+        "DELETE FROM workspace_invitations
+         WHERE status = 'pending' AND lower(btrim(email)) = ANY($1)",
+    )
+    .bind(emails)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    let rewritten = sqlx::query(
+        "UPDATE workspace_invitations
+         SET email = 'deleted-' || id || '@invalid', updated_at = now()
+         WHERE status <> 'pending' AND lower(btrim(email)) = ANY($1)",
+    )
+    .bind(emails)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(deleted + rewritten)
 }
 
 /// Applies one WorkOS Organization snapshot to local projections, in one

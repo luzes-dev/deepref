@@ -377,6 +377,15 @@ fn deletion_error(error: AccountDeletionError) -> ApiError {
             ApiError::NotFound("resource not found".to_owned())
         }
         AccountDeletionError::Workspace(error) => ApiError::Internal(anyhow::anyhow!(error)),
+        // The completion has been claimed (or already ran): the deletion can
+        // no longer be cancelled, and pretending otherwise would be a lie.
+        AccountDeletionError::CompletionInFlight | AccountDeletionError::AlreadyCompleted => {
+            ApiError::Conflict {
+                code: "DELETION_IRREVERSIBLE".to_owned(),
+                message: "the account deletion can no longer be cancelled".to_owned(),
+                details: serde_json::json!({}),
+            }
+        }
     }
 }
 
@@ -412,6 +421,7 @@ pub async fn request_account_deletion(
         (status = 204, description = "Any pending deletion request is cancelled"),
         (status = 401, body = ApiErrorBody, description = "No valid session"),
         (status = 404, body = ApiErrorBody, description = "Authentication is not enabled"),
+        (status = 409, body = ApiErrorBody, description = "The deletion is already completing or complete and can no longer be cancelled"),
     ))]
 pub async fn cancel_account_deletion(
     State(state): State<AppState>,
