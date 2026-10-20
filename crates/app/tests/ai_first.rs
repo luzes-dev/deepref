@@ -727,7 +727,7 @@ async fn audit_label_trigger_refuses_two_rows_that_resolve_to_one_reviewer() {
 }
 
 #[tokio::test]
-async fn finalize_rechecks_distinct_reviewers_after_mapping_changes() {
+async fn finalize_keeps_trusted_reviewers_distinct_after_mapping_changes() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, true).await;
     let sample = f.draw().await;
@@ -747,17 +747,14 @@ async fn finalize_rechecks_distinct_reviewers_after_mapping_changes() {
     )
     .await
     .unwrap();
-    assert!(
-        finalize_ai_first_cohort(&f.pool, f.project, f.cohort, true, &actor("owner"))
-            .await
-            .is_err(),
-        "finalization revalidates reviewers after identity mappings change"
-    );
-    assert_eq!(f.status().await, "passed");
+    finalize_ai_first_cohort(&f.pool, f.project, f.cohort, true, &actor("owner"))
+        .await
+        .unwrap();
+    assert_eq!(f.status().await, "finalized");
 }
 
 #[tokio::test]
-async fn mapping_change_reports_finalized_cohorts_it_invalidates() {
+async fn mapping_change_does_not_override_trusted_finalized_reviewers() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, true).await;
     let sample = f.draw().await;
@@ -782,7 +779,7 @@ async fn mapping_change_reports_finalized_cohorts_it_invalidates() {
     )
     .await
     .unwrap();
-    assert_eq!(changed.affected_finalized_cohorts, vec![f.cohort]);
+    assert!(changed.affected_finalized_cohorts.is_empty());
 
     let metadata: serde_json::Value = sqlx::query_scalar(
         "SELECT metadata FROM admin_audit_events WHERE event_type='legacy_actor.mapped' \
@@ -794,7 +791,7 @@ async fn mapping_change_reports_finalized_cohorts_it_invalidates() {
     .unwrap();
     assert_eq!(
         metadata["affected_finalized_cohorts"],
-        serde_json::json!([f.cohort])
+        serde_json::json!([])
     );
     assert_eq!(f.status().await, "finalized", "history is not rewritten");
 }
@@ -873,11 +870,8 @@ async fn mapping_lock_serializes_before_finalize_without_taking_project_lock_ear
         project_lock_available,
         "finalization must take the shared lock before the project row lock"
     );
-    assert!(
-        finalized.is_err(),
-        "after the mapping commits, finalization must see the duplicate identity"
-    );
-    assert_eq!(f.status().await, "passed");
+    finalized.unwrap();
+    assert_eq!(f.status().await, "finalized");
 }
 
 #[tokio::test]

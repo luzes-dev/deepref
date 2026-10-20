@@ -205,6 +205,25 @@ impl Fixture {
         .unwrap();
         id
     }
+
+    async fn insert_label_with_user(&self, actor_id: &str, actor_user_id: UserId) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO ai_screening_audit_labels \
+             (id,project_id,cohort_id,report_id,actor_id,actor_user_id,decision) \
+             VALUES($1,$2,$3,$4,$5,$6,'include')",
+        )
+        .bind(id)
+        .bind(self.project_id)
+        .bind(self.cohort_id)
+        .bind(self.report_id)
+        .bind(actor_id)
+        .bind(actor_user_id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        id
+    }
 }
 
 #[tokio::test]
@@ -519,8 +538,8 @@ async fn uuid_shaped_legacy_label_stays_unknown_until_operator_decision() {
         "an explicit mapping counts as history"
     );
     assert!(
-        !f.fresh_v3(uuid_label_owner).await,
-        "a mapping that conflicts with canonical provenance stays ambiguous"
+        f.fresh_v3(uuid_label_owner).await,
+        "trusted provenance is distinct from a legacy label mapped to someone else"
     );
 
     let unresolved_uuid_label = Uuid::new_v4().to_string();
@@ -540,6 +559,150 @@ async fn uuid_shaped_legacy_label_stays_unknown_until_operator_decision() {
         !second.fresh_v3(second.candidate).await,
         "a denial does not resolve an unknown label to a different user"
     );
+}
+
+#[tokio::test]
+async fn trusted_provenance_precedes_a_conflicting_uuid_label_mapping() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, "unused-approver").await;
+    let bob = f.candidate;
+    let bob_label = bob.as_uuid().to_string();
+    let (alice, _) = create_user(&f.pool, "uuid-label-mapping-alice").await;
+    let (charlie, _) = create_user(&f.pool, "trusted-charlie").await;
+    f.assign_fresh_auditor(charlie).await;
+
+    sqlx::query(
+        "UPDATE ai_screening_cohorts \
+         SET approved_by=$2,approved_by_actor_user_id=NULL WHERE id=$1",
+    )
+    .bind(f.cohort_id)
+    .bind(&bob_label)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        &bob_label,
+        alice,
+        f.operator,
+        "historical label matches a current user's UUID",
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        f.fresh_v3(bob).await,
+        "a conflicting legacy mapping cannot refuse authenticated Bob"
+    );
+    assert!(
+        f.fresh_v3(charlie).await,
+        "the mapped historical Alice is distinct from authenticated Charlie"
+    );
+
+    let bob_may_be_alice: bool =
+        sqlx::query_scalar("SELECT actor_identity_may_be_user('user',$1,$2,$3)")
+            .bind(&bob_label)
+            .bind(bob.as_uuid())
+            .bind(alice.as_uuid())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    let bob_may_be_bob: bool =
+        sqlx::query_scalar("SELECT actor_identity_may_be_user('user',$1,$2,$3)")
+            .bind(&bob_label)
+            .bind(bob.as_uuid())
+            .bind(bob.as_uuid())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert!(!bob_may_be_alice);
+    assert!(bob_may_be_bob);
+
+    let bob_and_charlie_same: bool =
+        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,$2,'user',$3,$4)")
+            .bind(&bob_label)
+            .bind(bob.as_uuid())
+            .bind(charlie.as_uuid().to_string())
+            .bind(charlie.as_uuid())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert!(!bob_and_charlie_same);
+
+    f.insert_label_with_user(&bob_label, bob).await;
+    f.insert_label_with_user(&charlie.as_uuid().to_string(), charlie)
+        .await;
+    let two_distinct_reviewers: bool =
+        sqlx::query_scalar("SELECT ai_first_audit_has_two_distinct_reviewers($1,$2)")
+            .bind(f.cohort_id)
+            .bind(f.report_id)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert!(two_distinct_reviewers);
+
+    let legacy_report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO reports(id,title) VALUES($1,'Legacy UUID label report')")
+        .bind(legacy_report_id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO project_reports(project_id,report_id) VALUES($1,$2)")
+        .bind(f.project_id)
+        .bind(legacy_report_id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO ai_screening_cohort_members \
+         (project_id,cohort_id,report_id,evaluated_revision,sampled) \
+         VALUES($1,$2,$3,0,true)",
+    )
+    .bind(f.project_id)
+    .bind(f.cohort_id)
+    .bind(legacy_report_id)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ai_screening_audit_labels \
+         (project_id,cohort_id,report_id,actor_id,decision) \
+         VALUES($1,$2,$3,$4,'include')",
+    )
+    .bind(f.project_id)
+    .bind(f.cohort_id)
+    .bind(legacy_report_id)
+    .bind(&bob_label)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+
+    let (provenance, resolved_user, may_be_alice, may_be_bob): (
+        Option<Uuid>,
+        Option<Uuid>,
+        bool,
+        bool,
+    ) = sqlx::query_as(
+        "SELECT l.actor_user_id, \
+                resolved_human_actor_user_id('user',l.actor_id,l.actor_user_id), \
+                actor_identity_may_be_user('user',l.actor_id,l.actor_user_id,$4), \
+                actor_identity_may_be_user('user',l.actor_id,l.actor_user_id,$5) \
+         FROM ai_screening_audit_labels l \
+         WHERE l.cohort_id=$1 AND l.report_id=$2 AND l.actor_id=$3",
+    )
+    .bind(f.cohort_id)
+    .bind(legacy_report_id)
+    .bind(&bob_label)
+    .bind(alice.as_uuid())
+    .bind(bob.as_uuid())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(provenance, None);
+    assert_eq!(resolved_user, Some(alice.as_uuid()));
+    assert!(may_be_alice);
+    assert!(!may_be_bob);
 }
 
 #[tokio::test]

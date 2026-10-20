@@ -141,6 +141,23 @@ AS $$
     AND m.legacy_actor_id = p_actor_id
 $$;
 
+-- Trusted provenance identifies the actor directly. Exact mappings resolve
+-- only historical rows that have no provenance.
+CREATE OR REPLACE FUNCTION resolved_human_actor_user_id(
+  p_actor_kind text,
+  p_actor_id text,
+  p_actor_user_id uuid
+) RETURNS uuid
+LANGUAGE sql STABLE
+AS $$
+  SELECT CASE WHEN p_actor_kind = 'user'
+    THEN COALESCE(
+      p_actor_user_id,
+      legacy_human_actor_user_id(p_actor_kind, p_actor_id)
+    )
+  END
+$$;
+
 CREATE OR REPLACE FUNCTION legacy_human_actor_is_unmapped(
   p_actor_kind text,
   p_actor_id text
@@ -156,10 +173,9 @@ AS $$
     )
 $$;
 
--- True when the row is U, or when its unresolved legacy label could be U and
--- no operator non-identity decision rules that user out. Provenance and an
--- exact mapping are both consulted; an unresolved UUID-shaped label is still
--- unresolved.
+-- True when the row resolves to U, or when its unresolved legacy label could
+-- be U and no operator non-identity decision rules that user out. Trusted
+-- provenance takes precedence; exact mappings resolve only legacy rows.
 CREATE OR REPLACE FUNCTION actor_identity_may_be_user(
   p_actor_kind text,
   p_actor_id text,
@@ -168,12 +184,16 @@ CREATE OR REPLACE FUNCTION actor_identity_may_be_user(
 ) RETURNS boolean
 LANGUAGE sql STABLE
 AS $$
+  WITH identity AS (
+    SELECT resolved_human_actor_user_id(
+      p_actor_kind, p_actor_id, p_actor_user_id
+    ) AS actor_user_id
+  )
   SELECT COALESCE(p_actor_kind = 'user'
     AND (
-      p_actor_user_id = p_user_id
-      OR legacy_human_actor_matches_user(p_actor_kind, p_actor_id, p_user_id)
+      i.actor_user_id = p_user_id
       OR (
-        p_actor_user_id IS NULL
+        i.actor_user_id IS NULL
         AND legacy_human_actor_is_unmapped(p_actor_kind, p_actor_id)
         AND NOT EXISTS (
           SELECT 1 FROM legacy_actor_non_identities n
@@ -183,10 +203,11 @@ AS $$
         )
       )
     ), false)
+  FROM identity i
 $$;
 
--- Pairwise distinctness requires two resolved, consistent UserIds. A negative
--- decision only rules out one current user; it cannot prove that two unknown
+-- Pairwise distinctness requires two resolved UserIds. Trusted provenance
+-- wins over a mapping; a negative decision cannot prove that two unresolved
 -- labels belong to different people outside the users table.
 CREATE FUNCTION same_human_actor_identity(
   p_left_kind text,
@@ -198,23 +219,18 @@ CREATE FUNCTION same_human_actor_identity(
 ) RETURNS boolean
 LANGUAGE sql STABLE
 AS $$
-  WITH resolved AS (
-    SELECT legacy_human_actor_user_id(p_left_kind, p_left_id) AS left_mapped_user_id,
-           legacy_human_actor_user_id(p_right_kind, p_right_id) AS right_mapped_user_id
-  ), identities AS (
-    SELECT COALESCE(p_left_user_id, left_mapped_user_id) AS left_user_id,
-           COALESCE(p_right_user_id, right_mapped_user_id) AS right_user_id,
-           p_left_user_id IS NOT NULL AND left_mapped_user_id IS NOT NULL
-             AND p_left_user_id <> left_mapped_user_id AS left_conflict,
-           p_right_user_id IS NOT NULL AND right_mapped_user_id IS NOT NULL
-             AND p_right_user_id <> right_mapped_user_id AS right_conflict
-    FROM resolved
+  WITH identities AS (
+    SELECT resolved_human_actor_user_id(
+             p_left_kind, p_left_id, p_left_user_id
+           ) AS left_user_id,
+           resolved_human_actor_user_id(
+             p_right_kind, p_right_id, p_right_user_id
+           ) AS right_user_id
   )
   SELECT COALESCE(p_left_kind = 'user' AND p_right_kind = 'user'
     AND EXISTS (
       SELECT 1 FROM identities i
-      WHERE i.left_conflict OR i.right_conflict
-         OR i.left_user_id IS NULL OR i.right_user_id IS NULL
+      WHERE i.left_user_id IS NULL OR i.right_user_id IS NULL
          OR i.left_user_id = i.right_user_id
     ), false)
 $$;
@@ -380,20 +396,16 @@ AS $$
   WITH identity_lock AS MATERIALIZED (
     SELECT pg_advisory_xact_lock_shared(73003203)
   ), labels AS (
-    SELECT l.actor_user_id,
-           legacy_human_actor_user_id('user', l.actor_id) AS mapped_user_id
+    SELECT resolved_human_actor_user_id(
+             'user', l.actor_id, l.actor_user_id
+           ) AS user_id
     FROM ai_screening_audit_labels l
     WHERE l.cohort_id = p_cohort AND l.report_id = p_report
-  ), resolved AS (
-    SELECT actor_user_id, mapped_user_id,
-           COALESCE(actor_user_id, mapped_user_id) AS user_id
-    FROM labels
   )
   SELECT count(*) = 2
     AND count(user_id) = 2
     AND count(DISTINCT user_id) = 2
-    AND bool_and(actor_user_id IS NULL OR mapped_user_id IS NULL OR actor_user_id = mapped_user_id)
-  FROM resolved CROSS JOIN identity_lock
+  FROM labels CROSS JOIN identity_lock
 $$;
 
 -- N-1 evaluates and finalizes in application code that still counts rows. Keep
