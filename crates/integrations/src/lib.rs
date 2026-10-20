@@ -19,6 +19,7 @@ mod pubmed;
 #[cfg(test)]
 mod test_permit;
 mod unpaywall;
+mod workos;
 
 pub use crossref::{
     AbstractEnricher, AbstractSource, CROSSREF_BASE, CrossrefClient, CrossrefError,
@@ -44,3 +45,4 @@ pub use pubmed::{
     normalize_pmid, parse_efetch,
 };
 pub use unpaywall::{UnpaywallClient, UnpaywallError, pdf_url_from_response};
+pub use workos::WorkOsIdentityProvider;

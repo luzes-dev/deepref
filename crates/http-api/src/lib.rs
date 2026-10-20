@@ -1,6 +1,8 @@
+pub mod auth;
 pub mod config;
 pub mod error;
 mod host_guard;
+mod origin_guard;
 pub mod routes;
 pub mod state;
 
@@ -82,6 +84,20 @@ pub async fn serve_with_shutdown(
             "{} is not set; AI features are disabled",
             provider.api_key_variable()
         ),
+    }
+    if config.runtime.auth_enabled {
+        let workos =
+            config.runtime.workos.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("DEEPREF_AUTH_ENABLED requires the WorkOS settings")
+            })?;
+        state = state.with_auth(auth::AuthRuntime::new(
+            std::sync::Arc::new(deepref_integrations::WorkOsIdentityProvider::new(workos)),
+            &config.runtime.public_origin,
+            workos.cookie_password(),
+        ));
+        tracing::info!("authentication enabled");
+    } else {
+        tracing::warn!("DEEPREF_AUTH_ENABLED is off; the API serves requests without a session");
     }
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");

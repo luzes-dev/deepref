@@ -20,6 +20,7 @@ mod documents;
 pub mod durable_runs;
 mod extraction;
 mod graph;
+pub mod identity;
 mod jobs;
 mod notifications;
 mod persistence;

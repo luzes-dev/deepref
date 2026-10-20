@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { cn } from '#lib/utils.js';
 	import DependencyHealthIndicator from './DependencyHealthIndicator.svelte';
+	import UserMenu from './UserMenu.svelte';
 	import NotificationBell from './NotificationBell.svelte';
 
 	let {
@@ -40,6 +41,7 @@
 	<div class="flex shrink-0 items-center gap-2">
 		<DependencyHealthIndicator {projectId} />
 		<NotificationBell {projectId} />
+		<UserMenu />
 		{#if rightSnippet}
 			{@render rightSnippet()}
 		{/if}

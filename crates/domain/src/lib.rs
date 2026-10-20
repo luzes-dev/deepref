@@ -7,6 +7,7 @@ pub mod bibliography;
 pub mod documents;
 pub mod events;
 pub mod graph;
+pub mod identity;
 mod ingestion;
 pub mod jobs;
 pub mod protocol;
@@ -14,6 +15,10 @@ mod provider;
 mod reference;
 mod work;
 
+pub use identity::{
+    ExternalUserId, ExternalUserIdError, Principal, ServicePrincipal, SystemPrincipal,
+    UserPrincipal, UserStatus,
+};
 pub use ingestion::{IngestionItemStatus, IngestionStatus};
 pub use jobs::{InvalidJobKind, JobKind};
 pub use provider::{InvalidProviderKind, ProviderKind};
@@ -72,6 +77,7 @@ macro_rules! typed_id {
 typed_id!(ProjectId);
 typed_id!(ProtocolVersionId);
 typed_id!(ExclusionReasonId);
+typed_id!(UserId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

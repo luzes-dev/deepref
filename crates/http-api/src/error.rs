@@ -67,6 +67,45 @@ pub struct ApiErrorBody {
     pub details: Option<serde_json::Value>,
 }
 
+/// Authentication and origin failures. Each has its own code so the browser can
+/// tell a missing session from an expired one, and neither carries provider
+/// detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AuthFailure {
+    #[error("authentication is required")]
+    Unauthenticated,
+    /// Also covers a deactivated account.
+    #[error("the session is invalid or has expired")]
+    SessionExpired,
+    #[error("the request origin is not allowed")]
+    OriginRejected,
+    #[error("the sign-in provider is unavailable")]
+    ProviderUnavailable,
+    #[error("sign-in could not be completed")]
+    ProvisioningFailed,
+}
+
+impl AuthFailure {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "UNAUTHENTICATED",
+            Self::SessionExpired => "SESSION_EXPIRED",
+            Self::OriginRejected => "ORIGIN_REJECTED",
+            Self::ProviderUnavailable => "AUTH_PROVIDER_UNAVAILABLE",
+            Self::ProvisioningFailed => "PROVISIONING_FAILED",
+        }
+    }
+
+    const fn status(self) -> StatusCode {
+        match self {
+            Self::Unauthenticated | Self::SessionExpired => StatusCode::UNAUTHORIZED,
+            Self::OriginRejected => StatusCode::FORBIDDEN,
+            Self::ProviderUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::ProvisioningFailed => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     #[error("database operation failed")]
@@ -75,6 +114,8 @@ pub enum ApiError {
     Internal(#[from] anyhow::Error),
     #[error("{0}")]
     BadRequest(String),
+    #[error(transparent)]
+    Auth(AuthFailure),
     #[error("{0}")]
     Forbidden(String),
     #[error("{0}")]
@@ -161,6 +202,13 @@ impl IntoResponse for ApiError {
                 None,
                 None,
             ),
+            Self::Auth(failure) => (
+                failure.status(),
+                failure.code().to_owned(),
+                failure.to_string(),
+                matches!(failure, AuthFailure::ProviderUnavailable).then_some(1),
+                None,
+            ),
             Self::Forbidden(message) => (
                 StatusCode::FORBIDDEN,
                 "FORBIDDEN".to_owned(),
@@ -225,6 +273,17 @@ impl IntoResponse for ApiError {
             response.headers_mut().insert(header::RETRY_AFTER, value);
         }
         response
+    }
+}
+
+impl From<deepref_app::identity::IdentityStoreError> for ApiError {
+    fn from(error: deepref_app::identity::IdentityStoreError) -> Self {
+        match error {
+            deepref_app::identity::IdentityStoreError::Database(error) => Self::Database(error),
+            deepref_app::identity::IdentityStoreError::Corrupt(what) => {
+                Self::Internal(anyhow::anyhow!("stored user row is invalid: {what}"))
+            }
+        }
     }
 }
 

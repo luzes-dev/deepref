@@ -60,6 +60,134 @@
         }
       }
     },
+    "/auth/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "completeLogin",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the requested page, or to /signin with an error code"
+          },
+          "404": {
+            "description": "Authentication is not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "startLogin",
+        "parameters": [
+          {
+            "name": "return_to",
+            "in": "query",
+            "description": "A path on this application to return to after sign-in, such as `/projects`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the sign-in provider"
+          },
+          "400": {
+            "description": "return_to is not a path on this application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Authentication is not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Signed out; the session cookie is cleared"
+          },
+          "403": {
+            "description": "Cross-origin request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/automations/catalog": {
       "get": {
         "tags": [
@@ -398,6 +526,36 @@
           },
           "429": {
             "description": "Too many calls (60 per minute per address)"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "getCurrentUser",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -15215,6 +15373,28 @@
           "both"
         ]
       },
+      "CurrentUserResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "DecideAiProposalRequest": {
         "type": "object",
         "required": [
@@ -16966,6 +17146,28 @@
           "updated": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": [
+          "auth_enabled"
+        ],
+        "properties": {
+          "auth_enabled": {
+            "type": "boolean",
+            "description": "False when the deployment does not require sign-in; `user` is then null."
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CurrentUserResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
