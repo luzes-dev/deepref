@@ -79,6 +79,9 @@ pub struct ProviderSession {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderProfile {
     pub email: String,
+    /// The provider's verification of `email`. Authority that depends on the
+    /// address (invitations) requires it to be true.
+    pub email_verified: bool,
     pub display_name: Option<String>,
 }
 

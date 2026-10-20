@@ -18,6 +18,22 @@ pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Operator step after `migrate` (docs/saas-program, handoff 03a): assigns the
+/// migration workspace to every project that predates workspaces, one
+/// committed batch at a time, then validates. Safe to interrupt and rerun.
+pub async fn backfill_project_workspaces(config: &ApiConfig) -> anyhow::Result<()> {
+    let pool = database_pool(config).await?;
+    let report = deepref_app::backfill_project_workspaces(&pool, 500).await?;
+    tracing::info!(
+        batches = report.batches,
+        moved = report.moved,
+        users_marked_onboarded = report.users_marked_onboarded,
+        total_projects = report.total_projects,
+        "project workspace backfill completed and validated"
+    );
+    Ok(())
+}
+
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
     serve_with_shutdown(config, shutdown_signal()).await
 }

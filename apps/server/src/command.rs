@@ -4,6 +4,7 @@ pub enum Command {
     Worker,
     All,
     Migrate,
+    BackfillProjectWorkspaces,
     PrintOpenApi,
 }
 
@@ -16,8 +17,13 @@ impl Command {
             [command] if command == "worker" => Ok(Self::Worker),
             [command] if command == "all" => Ok(Self::All),
             [command] if command == "migrate" => Ok(Self::Migrate),
+            [command] if command == "backfill-project-workspaces" => {
+                Ok(Self::BackfillProjectWorkspaces)
+            }
             [command] if command == "--print-openapi" => Ok(Self::PrintOpenApi),
-            _ => anyhow::bail!("usage: deepref-server [serve|worker|all|migrate|--print-openapi]"),
+            _ => anyhow::bail!(
+                "usage: deepref-server [serve|worker|all|migrate|backfill-project-workspaces|--print-openapi]"
+            ),
         }
     }
 }
@@ -34,6 +40,10 @@ mod tests {
         assert_eq!(
             Command::parse(["migrate".into()]).unwrap(),
             Command::Migrate
+        );
+        assert_eq!(
+            Command::parse(["backfill-project-workspaces".into()]).unwrap(),
+            Command::BackfillProjectWorkspaces
         );
         assert!(Command::parse(["import-legacy".into()]).is_err());
         assert_eq!(
