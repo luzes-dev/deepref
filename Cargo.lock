@@ -1129,6 +1129,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "deepref-config",
+ "deepref-domain",
  "deepref-http-api",
  "deepref-telemetry",
  "deepref-worker",

@@ -18,20 +18,20 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             )
             .await
         }
-        Command::Worker => {
+        Command::Worker { pools } => {
             let config = deepref_worker::config::WorkerConfig::from_source(&get)?;
             with_telemetry(
                 config.runtime.telemetry.clone(),
-                deepref_worker::run(config),
+                deepref_worker::run(config, pools),
             )
             .await
         }
-        Command::All => {
+        Command::All { pools } => {
             let api = deepref_http_api::config::ApiConfig::from_source(&get)?;
             let worker = deepref_worker::config::WorkerConfig::from_source(&get)?;
             with_telemetry(
                 api.runtime.telemetry.clone(),
-                run_all(api, worker, wait_for_signal()),
+                run_all(api, worker, pools, wait_for_signal()),
             )
             .await
         }
@@ -129,13 +129,18 @@ where
 async fn run_all(
     api: deepref_http_api::config::ApiConfig,
     worker: deepref_worker::config::WorkerConfig,
+    pools: Vec<deepref_domain::WorkloadClass>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let api_shutdown = wait_for_notification(shutdown_rx.clone());
     let worker_shutdown = wait_for_notification(shutdown_rx);
     let mut api_task = tokio::spawn(deepref_http_api::serve_with_shutdown(api, api_shutdown));
-    let mut worker_task = tokio::spawn(deepref_worker::run_with_shutdown(worker, worker_shutdown));
+    let mut worker_task = tokio::spawn(deepref_worker::run_with_shutdown(
+        worker,
+        pools,
+        worker_shutdown,
+    ));
     let mut shutdown = Box::pin(shutdown);
 
     let first = tokio::select! {

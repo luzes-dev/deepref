@@ -711,7 +711,7 @@ async fn handle_job_with_document_services_inner(
             )
             .bind(payload.step_id)
             .bind(payload.run_id)
-            .bind(job.project_id.as_uuid())
+            .bind(job.require_project()?.as_uuid())
             .fetch_optional(&pool)
             .await?;
             let (handler, status) =
@@ -786,7 +786,7 @@ async fn handle_durable_recipe_step(
     payload: DurableStepJobPayload,
 ) -> anyhow::Result<DeliveryAction> {
     let run_id = deepref_application::AutomationRunId::new(payload.run_id)?;
-    let project_id = job.project_id;
+    let project_id = job.require_project()?;
     let step = if payload.handler_kind == deepref_domain::jobs::DurableHandlerKind::Review {
         let run = deepref_app::get_leased_automation_run(pool, project_id, run_id, lease).await?;
         run.steps

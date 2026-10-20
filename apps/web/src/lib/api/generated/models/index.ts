@@ -335,3 +335,4 @@ export * from './workflowGraphDto.ts';
 export * from './workflowGraphEdgeDto.ts';
 export * from './workflowGraphNodeDto.ts';
 export * from './workflowRunDto.ts';
+export * from './workloadPoolDetail.ts';

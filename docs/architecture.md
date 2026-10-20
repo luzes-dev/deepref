@@ -201,7 +201,7 @@ domain commands remain the sole scientific-write authority.
 
 `deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.
 
-Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the live `JobQueue` port; `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns the OpenAlex, Crossref and DataCite metadata adapters, PubMed, import parsers, Unpaywall and GROBID; `deepref-app` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
+Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the durable-work ports (`DurableExecutionStore`, `WorkTransport`); `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns the OpenAlex, Crossref and DataCite metadata adapters, PubMed, import parsers, Unpaywall and GROBID; `deepref-app` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
 
 Runtime environment access belongs to `deepref-config`. Its typed
 `from_source` constructors support deterministic injected configuration tests;
@@ -215,6 +215,68 @@ distinct from production runtime configuration.
 for `DEEPREF_WORKFLOW_NICHE_NODES`, defaulting to false. Runtime configuration
 defines that value; workflow feature admission and behavior belong to the
 workflow context, not configuration loading.
+
+## Durable jobs: execution store, work transport and workload pools
+
+Durable job execution is split into two application ports
+(`crates/application/src/jobs.rs`). `DurableExecutionStore` owns persisted
+lifecycle semantics: enqueue, claim/fence, lease renewal, attempts, terminal
+transitions, retry due times and recovery. `WorkTransport` owns delivery
+mechanics: waking eligible work and handing it to the worker for a workload
+pool. The only transport today is the PostgreSQL claim path
+(`PostgresClaimTransport` over `PostgresDurableExecutionStore`,
+`crates/app/src/jobs.rs`): delivery means claiming, and the claim remains the
+authority. No provider SDK or SQLx type appears in the ports.
+
+`services/worker/src/delivery.rs` keeps a pure `delivery_matrix` helper for the
+05b broker response contract. The 05a PostgreSQL claim query checks queued
+state, due time, attempt budget and workload class; it does not inspect whether
+an owning run was cancelled or superseded. Runtime dispatch guards load the
+owning run and skip terminal work before invoking its handler. Broker
+ACK/NAK/term semantics belong to 05b, when a broker transport is introduced;
+the 05a claim path has no broker response to send.
+
+Business attempts increment when a claim is accepted and are refunded when an
+unstarted claim is released. The independent monotonic `claim_seq` advances on
+every claim and fences renew, complete, fail and release, even when a released
+claim is reclaimed by the same worker owner. Failure retries persist their due
+time in `available_at`, and expired-lease recovery reuses the attempt the
+crashed claim already spent.
+
+Every job row carries a typed scope — `project`, `workspace` or `platform`
+(`jobs.scope`, with `project_id` / `workspace_id` as the matching tenant
+references and a consistency CHECK). Workspace- and platform-scoped work runs
+with no project row; claiming filters on workload class, never on
+`project_id IS NOT NULL`, and no job fabricates a project.
+
+Every job kind maps to exactly one workload class, derived from the kind at
+enqueue (`JobKind::workload_class`, stored in `jobs.workload_class`) and never
+chosen by the caller. This table is the normative mapping:
+
+| Job kind               | Workload class | Bound / isolation rationale                              |
+| ---------------------- | -------------- | -------------------------------------------------------- |
+| `assistant_agent_run`  | `ai`           | model calls, bounded by provider and usage limits          |
+| `retrieve_document`    | `documents`    | document pipeline: full-text retrieval feeding parsing     |
+| `parse_document`       | `documents`    | CPU/memory-bound PDF parsing                              |
+| `run_deduplication`    | `documents`    | CPU/memory-bound deduplication of imported record corpora |
+| `durable_run_step`     | `workflow`     | durable automation, workflow and review step dispatch      |
+| `work_fetch_requested` | `integration`  | external metadata provider traffic, rate-limit bounded     |
+| `pmid_import`          | `integration`  | external PubMed provider traffic, rate-limit bounded       |
+| `recompute_metrics`    | `projection`   | derived read-model recomputes                             |
+| `recompute_prisma`     | `projection`   | derived read-model recomputes (compatibility)             |
+
+The class set contains only classes real kinds need: there is no `review` class
+today because review work rides `durable_run_step` (handler kind is a dispatch
+detail, not a queue kind). Add a class only when a job kind needs it.
+
+`deepref-server worker --pool <class>[,<class>]` runs one process for the
+selected pools; without `--pool` a worker serves every class, preserving the
+single-process behavior. Several replicas of one pool share the same durable
+consumer. Concurrency is set per pool (`WORKER_CONCURRENCY_<CLASS>`, defaulting
+to `WORKER_CONCURRENCY`), so a saturated pool neither drains nor starves
+another, and each tick claims at most `min(free pool capacity,
+WORKER_CLAIM_BATCH_MAX)` jobs in one statement — never in an unbounded inner
+loop. Idle claim ticks back off instead of polling hot.
 
 ## API and web degradation
 

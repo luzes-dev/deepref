@@ -15919,6 +15919,16 @@
             ],
             "format": "int64"
           },
+          "pools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WorkloadPoolDetail"
+            },
+            "description": "Per-workload queue and capacity measurements (worker only)."
+          },
           "recent_failed": {
             "type": [
               "integer",
@@ -21445,6 +21455,52 @@
           },
           "workflow_name": {
             "type": "string"
+          }
+        }
+      },
+      "WorkloadPoolDetail": {
+        "type": "object",
+        "required": [
+          "class",
+          "queue_depth",
+          "in_flight",
+          "capacity"
+        ],
+        "properties": {
+          "capacity": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Capacity summed across workers with a live heartbeat."
+          },
+          "class": {
+            "type": "string",
+            "description": "Fixed queue class name; contains no tenant or user identity."
+          },
+          "in_flight": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Jobs currently in the running state."
+          },
+          "oldest_due_age_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age in seconds of the oldest due queued job."
+          },
+          "queue_depth": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Due queued jobs in this pool."
+          },
+          "saturation": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "In-flight divided by capacity; absent when no worker serves the pool."
           }
         }
       }

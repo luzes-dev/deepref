@@ -7,9 +7,9 @@
 use std::time::Duration;
 
 use anyhow::{Result, ensure};
-use deepref_app::{PostgresJobQueue, job, recover_expired_jobs};
-use deepref_application::jobs::{EnqueueJob, JobQueue, JobRetry};
-use deepref_domain::ProjectId;
+use deepref_app::{PostgresDurableExecutionStore, claim_jobs, job, recover_expired_jobs};
+use deepref_application::jobs::{ClaimedJob, DurableExecutionStore, EnqueueJob, JobRetry};
+use deepref_domain::{ProjectId, WorkloadClass};
 
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -43,6 +43,18 @@ async fn fixture_project(pool: &PgPool) -> Result<ProjectId> {
     Ok(project_id)
 }
 
+/// One claim across every workload class: the single-job shape the store's
+/// bounded batch claim serves for the minimal contract.
+async fn claim_one(
+    queue: &PostgresDurableExecutionStore,
+    owner: &str,
+    lease: Duration,
+) -> Result<Option<ClaimedJob>> {
+    Ok(DurableExecutionStore::claim(queue, owner, lease, &[], 1)
+        .await?
+        .pop())
+}
+
 async fn cleanup(pool: &PgPool, project_id: ProjectId) -> Result<()> {
     sqlx::query("DELETE FROM projects WHERE id=$1")
         .bind(project_id.as_uuid())
@@ -56,7 +68,7 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
     let Some(pool) = database().await else {
         return Ok(());
     };
-    let queue = PostgresJobQueue { pool: pool.clone() };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
     let project_id = fixture_project(&pool).await?;
     let first_id = Uuid::new_v4();
     let duplicate_id = Uuid::new_v4();
@@ -121,8 +133,8 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
         claim_fixture.priority = i32::MAX;
         queue.enqueue(claim_fixture).await?;
         let (first_claim, second_claim) = tokio::join!(
-            queue.claim("concurrent-owner-a", Duration::from_secs(10)),
-            queue.claim("concurrent-owner-b", Duration::from_secs(10)),
+            claim_one(&queue, "concurrent-owner-a", Duration::from_secs(10)),
+            claim_one(&queue, "concurrent-owner-b", Duration::from_secs(10)),
         );
         let first_claim = first_claim?;
         let second_claim = second_claim?;
@@ -165,7 +177,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
     let Some(pool) = database().await else {
         return Ok(());
     };
-    let queue = PostgresJobQueue { pool: pool.clone() };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
     let project_id = fixture_project(&pool).await?;
     let lease_job_id = Uuid::new_v4();
     let retry_job_id = Uuid::new_v4();
@@ -178,8 +190,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         );
         lease_fixture.priority = i32::MAX;
         queue.enqueue(lease_fixture).await?;
-        let stale = queue
-            .claim("stale-owner", Duration::from_secs(10))
+        let stale = claim_one(&queue, "stale-owner", Duration::from_secs(10))
             .await?
             .ok_or_else(|| anyhow::anyhow!("stale owner should claim the lease fixture"))?;
         ensure!(
@@ -194,8 +205,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         ensure!(recover_expired_jobs(&pool).await? == 1);
         make_available(&pool, lease_job_id).await?;
 
-        let replacement = queue
-            .claim("replacement-owner", Duration::from_secs(10))
+        let replacement = claim_one(&queue, "replacement-owner", Duration::from_secs(10))
             .await?
             .ok_or_else(|| anyhow::anyhow!("expired lease should be reclaimed"))?;
         ensure!(
@@ -261,8 +271,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         retry_job.max_attempts = 2;
         queue.enqueue(retry_job).await?;
 
-        let first_attempt = queue
-            .claim("retry-owner", Duration::from_secs(10))
+        let first_attempt = claim_one(&queue, "retry-owner", Duration::from_secs(10))
             .await?
             .ok_or_else(|| anyhow::anyhow!("retry fixture should be claimed initially"))?;
         ensure!(first_attempt.attempts == 1);
@@ -293,8 +302,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
             .bind(retry_job_id)
             .execute(&pool)
             .await?;
-        let second_attempt = queue
-            .claim("retry-owner", Duration::from_secs(10))
+        let second_attempt = claim_one(&queue, "retry-owner", Duration::from_secs(10))
             .await?
             .ok_or_else(|| anyhow::anyhow!("queued retry should be claimable"))?;
         ensure!(second_attempt.attempts == 2);
@@ -341,7 +349,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
     let Some(pool) = database().await else {
         return Ok(());
     };
-    let queue = PostgresJobQueue { pool: pool.clone() };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
     let project_id = fixture_project(&pool).await?;
     let result = async {
         // max_attempts=1: the crashed first attempt exhausts the budget.
@@ -354,8 +362,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
         );
         poison.max_attempts = 1;
         queue.enqueue(poison).await?;
-        let claimed = queue
-            .claim("crashing-owner", Duration::from_secs(10))
+        let claimed = claim_one(&queue, "crashing-owner", Duration::from_secs(10))
             .await?
             .ok_or_else(|| anyhow::anyhow!("poison job should be claimable"))?;
         ensure!(claimed.id == poison_id && claimed.attempts == 1);
@@ -385,8 +392,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
         );
         retry.max_attempts = 3;
         queue.enqueue(retry).await?;
-        queue
-            .claim("crashing-owner", Duration::from_secs(10))
+        claim_one(&queue, "crashing-owner", Duration::from_secs(10))
             .await?
             .ok_or_else(|| anyhow::anyhow!("retry job should be claimable"))?;
         expire_lease(&pool, retry_id).await?;
@@ -402,8 +408,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
             "a recovered lease must back off before the next attempt"
         );
         ensure!(
-            queue
-                .claim("next-owner", Duration::from_secs(10))
+            claim_one(&queue, "next-owner", Duration::from_secs(10))
                 .await?
                 .is_none(),
             "a backed-off job must not be reclaimed immediately"
@@ -424,8 +429,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
             .execute(&pool)
             .await?;
         ensure!(
-            queue
-                .claim("next-owner", Duration::from_secs(10))
+            claim_one(&queue, "next-owner", Duration::from_secs(10))
                 .await?
                 .is_none(),
             "CLAIM must not start attempt max_attempts+1"
@@ -447,7 +451,7 @@ async fn a_stale_attempt_of_the_same_owner_cannot_touch_the_reclaimed_job() -> R
     let Some(pool) = database().await else {
         return Ok(());
     };
-    let queue = PostgresJobQueue { pool: pool.clone() };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
     let project_id = fixture_project(&pool).await?;
     let job_id = Uuid::new_v4();
     let result = async {
@@ -459,15 +463,13 @@ async fn a_stale_attempt_of_the_same_owner_cannot_touch_the_reclaimed_job() -> R
                 format!("jobs-integration-same-owner:{job_id}"),
             ))
             .await?;
-        let first = queue
-            .claim("one-process", Duration::from_millis(50))
+        let first = claim_one(&queue, "one-process", Duration::from_millis(50))
             .await?
             .ok_or_else(|| anyhow::anyhow!("first attempt should claim"))?;
         expire_lease(&pool, job_id).await?;
         ensure!(recover_expired_jobs(&pool).await? == 1);
         make_available(&pool, job_id).await?;
-        let second = queue
-            .claim("one-process", Duration::from_secs(10))
+        let second = claim_one(&queue, "one-process", Duration::from_secs(10))
             .await?
             .ok_or_else(|| anyhow::anyhow!("the same process should reclaim"))?;
         ensure!(second.id == first.id && second.attempts == first.attempts + 1);
@@ -504,34 +506,247 @@ async fn a_stale_attempt_of_the_same_owner_cannot_touch_the_reclaimed_job() -> R
 }
 
 #[tokio::test]
-async fn an_invalid_persisted_kind_fails_visibly_without_discarding_the_job() -> Result<()> {
+async fn a_released_claim_identity_cannot_mutate_a_reclaim_by_the_same_owner() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
+    let job_id = Uuid::new_v4();
+    let result = async {
+        queue
+            .enqueue(fixture_job(
+                project_id,
+                job_id,
+                deepref_domain::JobKind::RecomputeMetrics,
+                format!("jobs-integration-released-fence:{job_id}"),
+            ))
+            .await?;
+        let first = claim_one(&queue, "same-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("first claim should be available"))?;
+        let stale = first.lease("same-owner");
+        ensure!(queue.release(&stale).await?, "unstarted claim is released");
+
+        let second = claim_one(&queue, "same-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("released job should be reclaimed"))?;
+        let live = second.lease("same-owner");
+        ensure!(
+            first.attempts == second.attempts,
+            "release refunds the attempt"
+        );
+        ensure!(
+            stale.claim_seq < live.claim_seq,
+            "each claim advances the independent claim identity"
+        );
+        ensure!(
+            !queue.renew(&stale, Duration::from_secs(10)).await?,
+            "the stale identity cannot renew the live claim"
+        );
+        ensure!(
+            !queue.complete(&stale).await?,
+            "the stale identity cannot complete the live claim"
+        );
+        ensure!(
+            !queue
+                .fail(&stale, "stale failure", JobRetry::DeadLetter)
+                .await?,
+            "the stale identity cannot fail the live claim"
+        );
+        ensure!(
+            !queue.release(&stale).await?,
+            "the stale identity cannot release the live claim"
+        );
+        let row = sqlx::query("SELECT state,attempts,claim_seq FROM jobs WHERE id=$1")
+            .bind(job_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(row.get::<String, _>("state") == "running");
+        ensure!(row.get::<i32, _>("attempts") == 1);
+        ensure!(row.get::<i64, _>("claim_seq") == live.claim_seq);
+        ensure!(queue.complete(&live).await?, "current claim completes");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
+}
+
+#[tokio::test]
+async fn a_poison_row_is_quarantined_without_stranding_valid_batch_siblings() -> Result<()> {
     let Some(pool) = database().await else {
         return Ok(());
     };
     let project_id = fixture_project(&pool).await?;
-    let job_id = Uuid::new_v4();
+    let poison_id = Uuid::new_v4();
+    let valid_ids = [Uuid::new_v4(), Uuid::new_v4()];
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
     let result = async {
         sqlx::query(
-            "INSERT INTO jobs (id,project_id,kind,payload,priority,dedupe_key) VALUES ($1,$2,'invalid_persisted_kind','{}',$3,$4)",
+            "INSERT INTO jobs (id,project_id,kind,workload_class,payload,priority,dedupe_key)
+             VALUES ($1,$2,'invalid_persisted_kind','workflow','{}',2147483647,$3)",
         )
-        .bind(job_id)
+        .bind(poison_id)
         .bind(project_id.as_uuid())
-        .bind(i32::MAX)
-        .bind(format!("invalid-kind:{job_id}"))
+        .bind(format!("invalid-kind:{poison_id}"))
         .execute(&pool)
         .await?;
-        let queue = PostgresJobQueue { pool: pool.clone() };
-        let error = queue.claim("invalid-kind-owner", Duration::from_secs(30))
-            .await.expect_err("unknown persisted kind must not dispatch or fall back");
-        ensure!(format!("{error:#}").contains("invalid_persisted_kind"));
-        ensure!(format!("{error:#}").contains(&job_id.to_string()));
-        let row = sqlx::query("SELECT kind,state,attempts FROM jobs WHERE id=$1")
-            .bind(job_id).fetch_one(&pool).await?;
-        ensure!(row.get::<String, _>("kind") == "invalid_persisted_kind");
-        ensure!(row.get::<String, _>("state") == "running");
-        ensure!(row.get::<i32, _>("attempts") == 1);
+        for id in valid_ids {
+            queue
+                .enqueue(fixture_job(
+                    project_id,
+                    id,
+                    deepref_domain::JobKind::DurableRunStep,
+                    format!("valid-batch-sibling:{id}"),
+                ))
+                .await?;
+        }
+        let claimed = claim_jobs(
+            &pool,
+            "invalid-kind-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Workflow],
+            3,
+        )
+        .await?;
+        ensure!(claimed.len() == 2, "valid siblings survive poison decoding");
+        ensure!(
+            claimed.iter().all(|job| valid_ids.contains(&job.id)),
+            "both returned jobs are valid siblings"
+        );
+        let poison = sqlx::query("SELECT kind,state,attempts,last_error FROM jobs WHERE id=$1")
+            .bind(poison_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(poison.get::<String, _>("kind") == "invalid_persisted_kind");
+        ensure!(poison.get::<String, _>("state") == "dead");
+        ensure!(poison.get::<i32, _>("attempts") == 0);
+        ensure!(
+            poison
+                .get::<String, _>("last_error")
+                .contains("invalid_persisted_kind")
+        );
+        for id in valid_ids {
+            let row = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await?;
+            ensure!(row.get::<String, _>("state") == "running");
+            ensure!(row.get::<i32, _>("attempts") == 1);
+        }
         Ok::<_, anyhow::Error>(())
-    }.await;
+    }
+    .await;
+    cleanup(&pool, project_id).await?;
+    result
+}
+
+/// A rolling deploy runs the previous release's binary (N-1) against this
+/// schema. Its enqueue statement knows nothing of `workload_class` or `scope`;
+/// the insert must still succeed, the fill trigger classifies the row from its
+/// kind, and the N claim loop delivers it in the pool its kind maps to — and
+/// in no other pool.
+#[tokio::test]
+async fn a_previous_release_enqueue_still_classifies_into_the_right_pool() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let project_id = fixture_project(&pool).await?;
+    let result = async {
+        // The N-1 `enqueue_job` verbatim: the exact column list and statement
+        // shape the previous release inserts with (git show
+        // d3d46a87:crates/app/src/jobs.rs), no workload_class and no scope.
+        let mut n1_jobs = Vec::new();
+        for (id, kind, expected_class, expected_workload) in [
+            (
+                Uuid::new_v4(),
+                "parse_document",
+                "documents",
+                WorkloadClass::Documents,
+            ),
+            (
+                Uuid::new_v4(),
+                "assistant_agent_run",
+                "ai",
+                WorkloadClass::Ai,
+            ),
+        ] {
+            let inserted: Uuid = sqlx::query_scalar(
+                r#"INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7)
+                   ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id
+                   RETURNING id"#,
+            )
+            .bind(id)
+            .bind(project_id.as_uuid())
+            .bind(kind)
+            .bind(serde_json::json!({"fixture_job_id": id}))
+            .bind(0i32)
+            .bind(5i32)
+            .bind(format!("n-1-enqueue:{id}"))
+            .fetch_one(&pool)
+            .await?;
+            ensure!(inserted == id, "the N-1 insert returns its canonical id");
+            n1_jobs.push((id, expected_workload));
+
+            // The fill trigger classifies the row from its kind, exactly as
+            // the N writer would have at enqueue.
+            let row = sqlx::query("SELECT workload_class,scope FROM jobs WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await?;
+            ensure!(row.get::<String, _>("workload_class") == expected_class);
+            ensure!(row.get::<String, _>("scope") == "project");
+            ensure!(expected_workload.as_str() == expected_class);
+        }
+
+        // The N claim loop picks each row up in the pool its kind maps to.
+        let documents = claim_jobs(
+            &pool,
+            "n-1-claim-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Documents],
+            10,
+        )
+        .await?;
+        ensure!(
+            documents.len() == 1,
+            "only the documents job is in the pool"
+        );
+        ensure!(documents[0].id == n1_jobs[0].0);
+        ensure!(documents[0].kind == deepref_domain::JobKind::ParseDocument);
+        ensure!(documents[0].scope == deepref_application::jobs::JobScope::Project(project_id));
+
+        let ai = claim_jobs(
+            &pool,
+            "n-1-claim-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Ai],
+            10,
+        )
+        .await?;
+        ensure!(ai.len() == 1, "only the ai job is in the pool");
+        ensure!(ai[0].id == n1_jobs[1].0);
+        ensure!(ai[0].kind == deepref_domain::JobKind::AssistantAgentRun);
+        ensure!(ai[0].scope == deepref_application::jobs::JobScope::Project(project_id));
+
+        // Pool isolation holds for N-1 rows: neither pool sees the other's
+        // work once its own claim drained it.
+        let remaining = claim_jobs(
+            &pool,
+            "n-1-claim-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Workflow],
+            10,
+        )
+        .await?;
+        ensure!(remaining.is_empty(), "no N-1 row leaks into another pool");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
     cleanup(&pool, project_id).await?;
     result
 }
@@ -552,4 +767,316 @@ async fn make_available(pool: &PgPool, job_id: Uuid) -> Result<()> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// The 05a state-transition matrix: authoritative state decides, the claim
+/// path delivers nothing else. Queued and eligible is claimed and fenced;
+/// queued-but-not-yet-due, live-leased, completed and dead rows are never
+/// delivered; an expired lease is requeued by `recover_expired_jobs` and only
+/// delivered again once its persisted due time passes.
+#[tokio::test]
+async fn the_claim_path_delivers_only_eligible_authoritative_rows() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
+    let due_id = Uuid::new_v4();
+    let later_id = Uuid::new_v4();
+    let result = async {
+        let mut due = fixture_job(
+            project_id,
+            due_id,
+            deepref_domain::JobKind::RecomputeMetrics,
+            format!("jobs-matrix-due:{due_id}"),
+        );
+        due.priority = i32::MAX;
+        queue.enqueue(due).await?;
+        let mut later = fixture_job(
+            project_id,
+            later_id,
+            deepref_domain::JobKind::RecomputeMetrics,
+            format!("jobs-matrix-later:{later_id}"),
+        );
+        later.priority = i32::MAX;
+        queue.enqueue(later).await?;
+        // Persist a future due time: `available_at` is authoritative, so this
+        // row is not delivered early.
+        sqlx::query("UPDATE jobs SET available_at=now()+interval '1 hour' WHERE id=$1")
+            .bind(later_id)
+            .execute(&pool)
+            .await?;
+
+        // queued, eligible -> claim/fence, and exactly one attempt is spent.
+        let claimed = claim_one(&queue, "matrix-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("eligible work must be delivered"))?;
+        ensure!(claimed.id == due_id, "the due job is delivered first");
+        ensure!(claimed.attempts == 1, "the accepted claim is attempt one");
+
+        // queued, not yet eligible -> no-op; the row and its due time stand.
+        ensure!(
+            claim_one(&queue, "matrix-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "no other row is due"
+        );
+        let untouched = sqlx::query("SELECT state,attempts,available_at FROM jobs WHERE id=$1")
+            .bind(later_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(untouched.get::<String, _>("state") == "queued");
+        ensure!(untouched.get::<i32, _>("attempts") == 0);
+
+        // claimed by a live lease -> no-op for every other claimer.
+        ensure!(
+            claim_one(&queue, "other-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "live leases are not stolen"
+        );
+
+        // claimed with an expired lease -> recovery requeues with a persisted
+        // backoff; the row is delivered again only when due.
+        expire_lease(&pool, due_id).await?;
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        ensure!(
+            claim_one(&queue, "matrix-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "recovered work waits for its backoff"
+        );
+        make_available(&pool, due_id).await?;
+        let reclaimed = claim_one(&queue, "matrix-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("recovered work must run again when due"))?;
+        ensure!(reclaimed.id == due_id && reclaimed.attempts == 2);
+
+        // completed -> no-op forever.
+        ensure!(queue.complete(&reclaimed.lease("matrix-owner")).await?);
+        ensure!(
+            claim_one(&queue, "matrix-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "completed work is never delivered again"
+        );
+
+        // dead (terminal failure) -> no-op forever.
+        let dead_id = Uuid::new_v4();
+        let mut dead = fixture_job(
+            project_id,
+            dead_id,
+            deepref_domain::JobKind::RecomputeMetrics,
+            format!("jobs-matrix-dead:{dead_id}"),
+        );
+        dead.priority = i32::MAX;
+        dead.max_attempts = 1;
+        queue.enqueue(dead).await?;
+        let dead_claim = claim_one(&queue, "matrix-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the dead fixture claims once"))?;
+        ensure!(
+            queue
+                .fail(
+                    &dead_claim.lease("matrix-owner"),
+                    "terminal",
+                    JobRetry::DeadLetter
+                )
+                .await?
+        );
+        ensure!(
+            claim_one(&queue, "matrix-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "dead work is never delivered again"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
+}
+
+/// Transport redelivery never multiplies business retries. Under 05a the
+/// claim is the delivery, so attempts increment only on accepted claims: a
+/// claim released before execution starts refunds its attempt, duplicate
+/// deliveries of a live claim increment nothing, and recovery reuses the
+/// attempt the expired claim already spent.
+#[tokio::test]
+async fn business_attempts_increment_only_on_accepted_claims() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
+    let released_id = Uuid::new_v4();
+    let duplicate_id = Uuid::new_v4();
+    let result = async {
+        let mut released = fixture_job(
+            project_id,
+            released_id,
+            deepref_domain::JobKind::RecomputeMetrics,
+            format!("jobs-retry-release:{released_id}"),
+        );
+        released.priority = i32::MAX;
+        queue.enqueue(released).await?;
+
+        // Repeated claim/release churn (a worker draining mid-batch over and
+        // over) spends no attempt: the job stays claimable at full budget.
+        for round in 1..=5 {
+            let claim = claim_one(&queue, "release-owner", Duration::from_secs(10))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("round {round} must claim"))?;
+            ensure!(claim.attempts == 1, "the claim is accepted as attempt one");
+            ensure!(queue.release(&claim.lease("release-owner")).await?);
+            let row =
+                sqlx::query("SELECT state,attempts,lease_owner,available_at FROM jobs WHERE id=$1")
+                    .bind(released_id)
+                    .fetch_one(&pool)
+                    .await?;
+            ensure!(row.get::<String, _>("state") == "queued");
+            ensure!(
+                row.get::<i32, _>("attempts") == 0,
+                "released claims refund their attempt"
+            );
+            ensure!(row.get::<Option<String>, _>("lease_owner").is_none());
+            ensure!(
+                row.get::<chrono::DateTime<chrono::Utc>, _>("available_at") <= chrono::Utc::now(),
+                "released work is immediately claimable"
+            );
+        }
+        let executed = claim_one(&queue, "release-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the job still has its full budget"))?;
+        ensure!(
+            queue.complete(&executed.lease("release-owner")).await?,
+            "the job completes at its first real execution"
+        );
+        let row = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
+            .bind(released_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(
+            row.get::<i32, _>("attempts") == 1,
+            "one execution, one attempt"
+        );
+
+        // A duplicate delivery of one live claim (another claim attempt while
+        // the lease is held) changes no attempt and claims nothing.
+        let mut duplicate = fixture_job(
+            project_id,
+            duplicate_id,
+            deepref_domain::JobKind::RecomputeMetrics,
+            format!("jobs-retry-duplicate:{duplicate_id}"),
+        );
+        duplicate.priority = i32::MAX;
+        queue.enqueue(duplicate).await?;
+        let claim = claim_one(&queue, "duplicate-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the duplicate fixture claims once"))?;
+        ensure!(claim.attempts == 1);
+        ensure!(
+            claim_one(&queue, "duplicate-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "a duplicate delivery is a no-op"
+        );
+        ensure!(
+            queue
+                .fail(
+                    &claim.lease("duplicate-owner"),
+                    "retry once",
+                    JobRetry::After(Duration::ZERO)
+                )
+                .await?,
+            "the failure persists its due time"
+        );
+        let row = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
+            .bind(duplicate_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(
+            row.get::<i32, _>("attempts") == 1,
+            "failure spends no extra attempt"
+        );
+
+        // Recovery reuses the attempt the expired claim already spent.
+        let retry = claim_one(&queue, "duplicate-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the retry is due at once"))?;
+        ensure!(
+            retry.attempts == 2,
+            "each accepted claim is exactly one attempt"
+        );
+        expire_lease(&pool, duplicate_id).await?;
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        let row = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
+            .bind(duplicate_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(row.get::<String, _>("state") == "queued");
+        ensure!(
+            row.get::<i32, _>("attempts") == 2,
+            "recovery never increments attempts"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
+}
+
+/// The batch claim returns at most `limit` rows per statement, in priority
+/// order, and leaves the rest queued for a later tick.
+#[tokio::test]
+async fn the_claim_batch_is_bounded_by_its_limit() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let project_id = fixture_project(&pool).await?;
+    let mut ids = Vec::new();
+    let result = async {
+        for (priority, label) in [(5, "five"), (1, "one"), (4, "four"), (0, "zero")] {
+            let id = Uuid::new_v4();
+            ids.push(id);
+            let mut job = fixture_job(
+                project_id,
+                id,
+                deepref_domain::JobKind::RecomputeMetrics,
+                format!("jobs-batch:{label}:{id}"),
+            );
+            job.priority = priority;
+            PostgresDurableExecutionStore { pool: pool.clone() }
+                .enqueue(job)
+                .await?;
+        }
+        let first = claim_jobs(&pool, "batch-owner", Duration::from_secs(10), &[], 2).await?;
+        ensure!(first.len() == 2, "one statement claims at most the limit");
+        ensure!(
+            first[0].id == ids[0] && first[1].id == ids[2],
+            "the batch is claimed in priority order, got {:?}",
+            first.iter().map(|job| job.id).collect::<Vec<_>>()
+        );
+        let second = claim_jobs(&pool, "batch-owner", Duration::from_secs(10), &[], 2).await?;
+        ensure!(
+            second.len() == 2,
+            "the next tick claims the rest within its limit"
+        );
+        ensure!(
+            claim_jobs(&pool, "batch-owner", Duration::from_secs(10), &[], 2)
+                .await?
+                .is_empty(),
+            "nothing is claimed in an unbounded loop"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
 }

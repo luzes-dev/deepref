@@ -17,7 +17,7 @@ use deepref_ai::{
     AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters,
     ModelProfile, ResolvedModel, runtime::StaticModelFactory, sha256_bytes,
 };
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobScope};
 use deepref_config::RuntimeConfig;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
@@ -619,16 +619,17 @@ where
         let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
             leased_until=now()+interval '5 minutes',lease_renewed_at=now(),attempts=attempts+1
             WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
-            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.claim_seq,j.attempts,j.max_attempts")
             .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
         let job = ClaimedJob {
             id: row.get("id"),
-            project_id: row.get::<Uuid, _>("project_id").into(),
+            scope: JobScope::Project(row.get::<Uuid, _>("project_id").into()),
             kind: row
                 .get::<String, _>("kind")
                 .parse()
                 .expect("durable job kind"),
             payload: row.get("payload"),
+            claim_seq: row.get("claim_seq"),
             attempts: row.get("attempts"),
             max_attempts: row.get("max_attempts"),
         };

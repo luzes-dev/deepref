@@ -184,7 +184,10 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
             else {
                 break;
             };
-            assert_eq!(job.project_id.as_uuid(), project);
+            assert_eq!(
+                job.project_id().expect("project-scoped test job").as_uuid(),
+                project
+            );
             let action = handle_job_with_documents_owned_and_ai(
                 pool.clone(),
                 &job,

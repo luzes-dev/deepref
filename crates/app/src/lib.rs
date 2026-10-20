@@ -164,8 +164,9 @@ pub use graph::{
     MAX_GRAPH_NODES, enqueue_metrics_recompute, load_project_graph, recompute_project_metrics,
 };
 pub use jobs::{
-    PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
-    recover_expired_jobs, renew_job,
+    PostgresClaimTransport, PostgresDurableExecutionStore, claim_job, claim_jobs, complete_job,
+    enqueue_job, enqueue_job_pool, fail_job, job, recover_expired_jobs, release_job, renew_job,
+    scoped_job,
 };
 pub use legacy_actors::{
     LegacyActorDecision, LegacyActorDecisionKind, LegacyActorError, LegacyActorKind,
@@ -232,8 +233,8 @@ pub use study::{
 };
 pub use worker_runtime::{
     MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,
-    record_worker_heartbeat, recover_expired_worker_state, remove_worker_heartbeat,
-    reserve_provider_permit,
+    record_worker_heartbeat, record_worker_heartbeat_with_capacities, recover_expired_worker_state,
+    remove_worker_heartbeat, reserve_provider_permit,
 };
 pub use workflows::*;
 pub use workspaces::{
