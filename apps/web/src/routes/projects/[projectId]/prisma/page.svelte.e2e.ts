@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../../../../tests/e2e-test';
+import type { Page } from '@playwright/test';
 import type { PrismaDto } from '../../../../lib/api/generated/models';
 
 const projectId = 'project-1';
