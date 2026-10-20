@@ -17,7 +17,6 @@ import type {
 import type {
 	ApiErrorBody,
 	DependencyStatus,
-	GetDependencyStatusParams,
 	LivenessResponse,
 	ReadinessResponse
 } from '../models';
@@ -127,54 +126,42 @@ export type getDependencyStatusResponse200 = {
 export type getDependencyStatusResponseSuccess = getDependencyStatusResponse200 & {
 	headers: Headers;
 };
-export const getGetDependencyStatusUrl = (params?: GetDependencyStatusParams) => {
-	const normalizedParams = new URLSearchParams();
-
-	Object.entries(params || {}).forEach(([key, value]) => {
-		if (value !== undefined) {
-			normalizedParams.append(key, value === null ? 'null' : String(value));
-		}
-	});
-
-	const stringifiedParams = normalizedParams.toString();
-
-	return stringifiedParams.length > 0
-		? `/api/health/dependencies?${stringifiedParams}`
-		: `/api/health/dependencies`;
+export const getGetDependencyStatusUrl = () => {
+	return `/api/health/dependencies`;
 };
 
+/**
+ * @summary Deployment-wide status. Public like the other probes, so it takes no
+project filter and carries no per-project data.
+ */
 export const getDependencyStatus = async (
-	params?: GetDependencyStatusParams,
 	options?: Parameters<typeof customFetch>[1]
 ): Promise<getDependencyStatusResponseSuccess> => {
-	return customFetch<getDependencyStatusResponseSuccess>(getGetDependencyStatusUrl(params), {
+	return customFetch<getDependencyStatusResponseSuccess>(getGetDependencyStatusUrl(), {
 		...options,
 		method: 'GET'
 	});
 };
 
-export const getGetDependencyStatusQueryKey = (params?: GetDependencyStatusParams) => {
-	return [`/api/health/dependencies`, ...(params ? [params] : [])] as const;
+export const getGetDependencyStatusQueryKey = () => {
+	return [`/api/health/dependencies`] as const;
 };
 
 export const getGetDependencyStatusQueryOptions = <
 	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
 	TError = ErrorType<unknown>
->(
-	params?: GetDependencyStatusParams,
-	options?: {
-		query?: Partial<
-			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	}
-) => {
+>(options?: {
+	query?: Partial<
+		CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}) => {
 	const { query: queryOptions, request: requestOptions } = options ?? {};
 
-	const queryKey = queryOptions?.queryKey ?? getGetDependencyStatusQueryKey(params);
+	const queryKey = queryOptions?.queryKey ?? getGetDependencyStatusQueryKey();
 
 	const queryFn: QueryFunction<Awaited<ReturnType<typeof getDependencyStatus>>> = ({ signal }) =>
-		getDependencyStatus(params, { signal, ...requestOptions });
+		getDependencyStatus({ signal, ...requestOptions });
 
 	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
 		Awaited<ReturnType<typeof getDependencyStatus>>,
@@ -188,11 +175,15 @@ export type GetDependencyStatusQueryResult = NonNullable<
 >;
 export type GetDependencyStatusQueryError = ErrorType<unknown>;
 
+/**
+ * @summary Deployment-wide status. Public like the other probes, so it takes no
+project filter and carries no per-project data.
+ */
+
 export function createGetDependencyStatus<
 	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
 	TError = ErrorType<unknown>
 >(
-	params?: () => GetDependencyStatusParams,
 	options?: () => {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
@@ -202,19 +193,22 @@ export function createGetDependencyStatus<
 	queryClient?: () => QueryClient
 ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 	const query = createQuery(
-		() => getGetDependencyStatusQueryOptions(params?.(), options?.()),
+		() => getGetDependencyStatusQueryOptions(options?.()),
 		queryClient
 	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
 	return query;
 }
 
+/**
+ * @summary Deployment-wide status. Public like the other probes, so it takes no
+project filter and carries no per-project data.
+ */
 export const prefetchGetDependencyStatusQuery = async <
 	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
 	TError = ErrorType<unknown>
 >(
 	queryClient: QueryClient,
-	params?: GetDependencyStatusParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
@@ -222,7 +216,7 @@ export const prefetchGetDependencyStatusQuery = async <
 		request?: SecondParameter<typeof customFetch>;
 	}
 ): Promise<QueryClient> => {
-	const queryOptions = getGetDependencyStatusQueryOptions(params, options);
+	const queryOptions = getGetDependencyStatusQueryOptions(options);
 
 	await queryClient.query(queryOptions).catch(() => {});
 
@@ -404,6 +398,140 @@ export const prefetchGetReadinessQuery = async <
 	}
 ): Promise<QueryClient> => {
 	const queryOptions = getGetReadinessQueryOptions(options);
+
+	await queryClient.query(queryOptions).catch(() => {});
+
+	return queryClient;
+};
+
+export type getProjectDependencyStatusResponse200 = {
+	data: DependencyStatus;
+	status: 200;
+};
+
+export type getProjectDependencyStatusResponseSuccess = getProjectDependencyStatusResponse200 & {
+	headers: Headers;
+};
+export const getGetProjectDependencyStatusUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/health/dependencies`;
+};
+
+/**
+ * @summary The same probe narrowed to one project's jobs. The PEP requires
+`project:view` on the path's project.
+ */
+export const getProjectDependencyStatus = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getProjectDependencyStatusResponseSuccess> => {
+	return customFetch<getProjectDependencyStatusResponseSuccess>(
+		getGetProjectDependencyStatusUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetProjectDependencyStatusQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/health/dependencies`] as const;
+};
+
+export const getGetProjectDependencyStatusQueryOptions = <
+	TData = Awaited<ReturnType<typeof getProjectDependencyStatus>>,
+	TError = ErrorType<unknown>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof getProjectDependencyStatus>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetProjectDependencyStatusQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectDependencyStatus>>> = ({
+		signal
+	}) => getProjectDependencyStatus(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<
+		Awaited<ReturnType<typeof getProjectDependencyStatus>>,
+		TError,
+		TData
+	> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetProjectDependencyStatusQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getProjectDependencyStatus>>
+>;
+export type GetProjectDependencyStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary The same probe narrowed to one project's jobs. The PEP requires
+`project:view` on the path's project.
+ */
+
+export function createGetProjectDependencyStatus<
+	TData = Awaited<ReturnType<typeof getProjectDependencyStatus>>,
+	TError = ErrorType<unknown>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof getProjectDependencyStatus>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetProjectDependencyStatusQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+/**
+ * @summary The same probe narrowed to one project's jobs. The PEP requires
+`project:view` on the path's project.
+ */
+export const prefetchGetProjectDependencyStatusQuery = async <
+	TData = Awaited<ReturnType<typeof getProjectDependencyStatus>>,
+	TError = ErrorType<unknown>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof getProjectDependencyStatus>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetProjectDependencyStatusQueryOptions(projectId, options);
 
 	await queryClient.query(queryOptions).catch(() => {});
 

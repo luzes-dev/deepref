@@ -9,26 +9,27 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 
 | Rule | Rows |
 | --- | --- |
-| Authenticated | 9 |
+| Authenticated | 8 |
 | Handler | 1 |
 | Open | 10 |
 | PlatformOperator | 1 |
-| Require | 141 |
-| **Total HTTP** | **162** |
+| Require | 142 |
+| RequireIfPresent | 1 |
+| **Total HTTP** | **163** |
 | **Non-HTTP paths** | **10** |
 
 ## HTTP routes
 
 | Method | Path | Rule | Permission | Resource | Foreign-workspace test | Reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| GET | `/ai/status` | Authenticated | - | user-scoped | `n/a` | deployment-wide AI provider status, no tenant data |
+| GET | `/ai/status` | RequireIfPresent | `project:view` | project (query `project_id`, when given) | `authz_foreign_workspace::query_project_routes_are_indistinguishable_from_a_missing_one` | provider status for everyone; the optional project_id adds that project's budget, so it needs project:view |
 | GET | `/auth/callback` | Open | - | - | `n/a` | completes sign-in before a session exists |
 | GET | `/auth/login` | Open | - | - | `n/a` | starts sign-in before a session exists |
 | POST | `/auth/logout` | Open | - | - | `n/a` | revokes by cookie digest and works while the identity provider is down |
 | GET | `/automations/catalog` | Authenticated | - | user-scoped | `n/a` | static block catalog, no tenant data |
 | GET | `/automations/templates` | Authenticated | - | user-scoped | `n/a` | static workflow templates, no tenant data |
 | GET | `/health` | Open | - | - | `n/a` | liveness probe, no data |
-| GET | `/health/dependencies` | Open | - | - | `n/a` | dependency status for operators, no tenant data |
+| GET | `/health/dependencies` | Open | - | - | `n/a` | deployment-wide dependency status: no tenant data and no project filter |
 | GET | `/health/live` | Open | - | - | `n/a` | liveness probe, no data |
 | GET | `/health/ready` | Open | - | - | `n/a` | readiness probe, no tenant data |
 | POST | `/hooks/email/{token}` | Open | - | - | `n/a` | machine delivery authenticated by its private address token |
@@ -124,6 +125,7 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 | POST | `/projects/{project_id}/extraction/fields` | Require | `project:edit` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped mutation |
 | PATCH | `/projects/{project_id}/extraction/fields/{field_id}` | Require | `project:edit` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped mutation |
 | GET | `/projects/{project_id}/graph` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped read |
+| GET | `/projects/{project_id}/health/dependencies` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped job backlog and failures |
 | POST | `/projects/{project_id}/imports` | Require | `project:edit` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped mutation |
 | POST | `/projects/{project_id}/metrics/recompute` | Require | `project:edit` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped mutation |
 | GET | `/projects/{project_id}/prisma` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped read |

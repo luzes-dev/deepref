@@ -278,3 +278,134 @@ async fn user_scoped_routes_answer_the_caller_only() {
         assert_eq!(status, StatusCode::OK, "{path}");
     }
 }
+
+async fn make_workflow(h: &Harness, owner: &support::authz::Person, project: Uuid) -> String {
+    let (status, body) = h
+        .json(
+            owner,
+            Method::POST,
+            &format!("/projects/{project}/automations/workflows"),
+            r#"{"name":"Flow"}"#,
+        )
+        .await;
+    assert!(status.is_success(), "{status} {body}");
+    body["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn workflow_credentials_need_automation_manage() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let owner = h.sign_in("user_A", "a@example.org").await;
+    let member = h.sign_in("user_B", "b@example.org").await;
+    let guest = h.sign_in("user_C", "c@example.org").await;
+    h.add_member(&owner, &member, WorkspaceRole::Member).await;
+    let project = h.create_project(&owner, "P").await;
+    deepref_app::workspaces::grant_project_access(
+        &h.pool,
+        owner.user,
+        deepref_domain::ProjectId::new(project),
+        guest.user,
+        deepref_domain::ProjectRole::Viewer,
+        deepref_app::identity::AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let workflow = make_workflow(&h, &owner, project).await;
+    let path = format!("/projects/{project}/automations/workflows/{workflow}/endpoints");
+
+    let (status, full) = h.json(&owner, Method::GET, &path, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(full["credentials_visible"], true);
+    let token_path = full["webhook_path"].as_str().unwrap().to_owned();
+    let secret = full["webhook_secret"].as_str().unwrap().to_owned();
+    let email_path = full["email_path"].as_str().unwrap().to_owned();
+
+    for person in [&member, &guest] {
+        let (status, redacted) = h.json(person, Method::GET, &path, "").await;
+        assert_eq!(status, StatusCode::OK, "viewing the workflow is allowed");
+        assert_eq!(redacted["credentials_visible"], false);
+        assert!(redacted["webhook_path"].is_null());
+        assert!(redacted["webhook_secret"].is_null());
+        assert!(redacted["email_path"].is_null());
+        assert!(redacted["signature_required"].is_boolean());
+        let text = redacted.to_string();
+        for leaked in [&token_path, &secret, &email_path] {
+            assert!(!text.contains(leaked.as_str()), "{text}");
+        }
+        // And the listing and detail never carry them either.
+        for sibling in [
+            format!("/projects/{project}/automations/workflows"),
+            format!("/projects/{project}/automations/workflows/{workflow}"),
+        ] {
+            let (_, bytes) = h.get(person, &sibling).await;
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(
+                !text.contains(&secret) && !text.contains(token_path.rsplit('/').next().unwrap()),
+                "{sibling}"
+            );
+        }
+    }
+    // Rotation stays a manage action.
+    let (status, _) = h
+        .json(
+            &member,
+            Method::POST,
+            &format!("{path}/webhook/rotate"),
+            "{}",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_assistant_cannot_start_an_automation_its_user_may_not() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let owner = h.sign_in("user_A", "a@example.org").await;
+    let member = h.sign_in("user_B", "b@example.org").await;
+    h.add_member(&owner, &member, WorkspaceRole::Member).await;
+    let project = h.create_project(&owner, "P").await;
+    let (status, conversation) = h
+        .json(
+            &member,
+            Method::POST,
+            &format!("/projects/{project}/assistant/conversations"),
+            r#"{"title":"c"}"#,
+        )
+        .await;
+    assert!(status.is_success(), "{conversation}");
+    let conversation = conversation["id"].as_str().unwrap().to_owned();
+    let command = serde_json::json!({
+        "tool": "trigger_workflow",
+        "args": { "project_id": project, "definition_id": Uuid::new_v4() },
+    })
+    .to_string();
+    let body =
+        serde_json::json!({ "conversation_id": conversation, "message": command }).to_string();
+    let path = format!("/projects/{project}/assistant/chat");
+
+    let (status, bytes) = h.send(&member, Method::POST, &path, Some(&body)).await;
+    let stream = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(
+        status == StatusCode::FORBIDDEN || stream.contains("assistant_forbidden"),
+        "{status} {stream}"
+    );
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_runs")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(runs, 0);
+
+    // The owner holds automation:manage, so the permission check passes (the
+    // random definition then simply does not exist).
+    let (status, bytes) = h.send(&owner, Method::POST, &path, Some(&body)).await;
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("assistant_forbidden")
+            && status != StatusCode::FORBIDDEN,
+        "{status} {}",
+        String::from_utf8_lossy(&bytes)
+    );
+}

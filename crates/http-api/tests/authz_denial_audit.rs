@@ -170,3 +170,65 @@ async fn the_database_refuses_an_unbounded_denial_shape() {
         "one row per user, permission, resource type and window"
     );
 }
+
+#[tokio::test]
+async fn a_failed_audit_insert_does_not_suppress_the_next_attempt() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let b = h.sign_in("user_B", "b@example.org").await;
+    let auditor = DenialAuditor::new(h.pool.clone());
+    let denial = Denial {
+        user: b.user,
+        denied_for: DeniedFor::Permission(Permission::ProjectEdit),
+        resource: DeniedResource::Project(Some(ProjectId::new(Uuid::new_v4()))),
+        request_id: None,
+    };
+    sqlx::query(
+        "CREATE FUNCTION refuse_denials() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN RAISE EXCEPTION 'audit unavailable'; END $$",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER refuse_denials BEFORE INSERT ON admin_audit_events
+         FOR EACH ROW WHEN (NEW.event_type = 'authorization.denied')
+         EXECUTE FUNCTION refuse_denials()",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    assert!(auditor.record(denial).await.is_err(), "the insert fails");
+    assert!(denial_rows(&h.pool, b.user.as_uuid()).await.is_empty());
+
+    sqlx::query("DROP TRIGGER refuse_denials ON admin_audit_events")
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    assert!(
+        auditor.record(denial).await.unwrap(),
+        "after recovery the same key is recorded in the same window"
+    );
+    assert!(
+        !auditor.record(denial).await.unwrap(),
+        "and then remembered"
+    );
+    assert_eq!(denial_rows(&h.pool, b.user.as_uuid()).await.len(), 1);
+}
+
+#[tokio::test]
+async fn the_denial_window_index_exists_and_is_valid() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let valid: Option<bool> = sqlx::query_scalar(
+        "SELECT i.indisvalid AND i.indisready AND i.indisunique
+         FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+         WHERE c.relname = 'admin_audit_denial_window_idx'",
+    )
+    .fetch_optional(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(valid, Some(true));
+}

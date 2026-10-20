@@ -47,6 +47,8 @@ impl Verb {
 pub enum ResourceFrom {
     /// A path parameter holding the id of a project.
     PathParam(&'static str),
+    /// A query-string parameter holding the id of a project.
+    Query(&'static str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +65,10 @@ pub enum Rule {
     /// the authorizer with this permission once it knows it. The PEP still
     /// requires a session.
     Handler(Permission),
+    /// As `Require`, but only when the named query parameter is present. The
+    /// request without it names no tenant resource and the handler returns no
+    /// project data. A present value that is not a UUID is a denial.
+    RequireIfPresent(Permission, ResourceFrom),
     /// Reserved for a platform operator. No user principal holds it.
     PlatformOperator,
 }
@@ -120,6 +126,21 @@ const fn platform_operator(method: Verb, path: &'static str, reason: &'static st
     }
 }
 
+const fn project_query(
+    method: Verb,
+    path: &'static str,
+    permission: Permission,
+    reason: &'static str,
+) -> RouteRule {
+    RouteRule {
+        method,
+        path,
+        rule: Rule::RequireIfPresent(permission, ResourceFrom::Query("project_id")),
+        foreign_test: "authz_foreign_workspace::query_project_routes_are_indistinguishable_from_a_missing_one",
+        reason,
+    }
+}
+
 const fn handler(
     method: Verb,
     path: &'static str,
@@ -151,10 +172,17 @@ const fn project(
 }
 
 pub static ROUTES: &[RouteRule] = &[
-    authenticated(
+    project(
+        Verb::Get,
+        "/projects/{project_id}/health/dependencies",
+        Permission::ProjectView,
+        "project-scoped job backlog and failures",
+    ),
+    project_query(
         Verb::Get,
         "/ai/status",
-        "deployment-wide AI provider status, no tenant data",
+        Permission::ProjectView,
+        "provider status for everyone; the optional project_id adds that project's budget, so it needs project:view",
     ),
     open(
         Verb::Get,
@@ -185,7 +213,7 @@ pub static ROUTES: &[RouteRule] = &[
     open(
         Verb::Get,
         "/health/dependencies",
-        "dependency status for operators, no tenant data",
+        "deployment-wide dependency status: no tenant data and no project filter",
     ),
     open(Verb::Get, "/health/live", "liveness probe, no data"),
     open(
@@ -1102,7 +1130,14 @@ pub static ROUTES: &[RouteRule] = &[
 ];
 
 /// The row for a request, by method and the router's matched path template.
+/// `HEAD` is answered by the router from the `GET` handler, so it takes the
+/// `GET` row.
 pub fn lookup(method: &str, matched_path: &str) -> Option<&'static RouteRule> {
+    let method = if method.eq_ignore_ascii_case("HEAD") {
+        "GET"
+    } else {
+        method
+    };
     let verb = Verb::parse(method)?;
     ROUTES
         .iter()

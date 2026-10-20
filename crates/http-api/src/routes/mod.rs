@@ -50,6 +50,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(health::ready))
         .routes(routes!(health::dependencies))
         .routes(routes!(health::deprecated_health))
+        .routes(routes!(health::project_dependencies))
         .routes(routes!(auth::get_me))
         .routes(routes!(auth::login))
         .routes(routes!(auth::callback))
@@ -304,7 +305,6 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
                     config.runtime.environment.is_development(),
                 ),
                 state: state.clone(),
-                registered: Arc::new(crate::authz::matrix::router_routes()),
             },
             crate::authz::enforce,
         ))

@@ -393,24 +393,31 @@ fn version_dto(record: WorkflowVersionRecord) -> Result<VersionDto, ApiError> {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct EndpointsDto {
+    /// Whether this response carries the credentials. They are capabilities
+    /// that start runs, so only a caller with `automation:manage` receives
+    /// them; anyone else who can view the workflow sees the settings alone.
+    pub credentials_visible: bool,
     /// Path of the webhook address, to be appended to the server address.
-    pub webhook_path: String,
-    /// Shared secret used to sign webhook calls.
-    pub webhook_secret: String,
+    /// Absent without `automation:manage`.
+    pub webhook_path: Option<String>,
+    /// Shared secret used to sign webhook calls. Absent without
+    /// `automation:manage`.
+    pub webhook_secret: Option<String>,
     pub signature_required: bool,
     /// Header carrying `sha256=<hex HMAC-SHA256 of the raw body>`.
     pub signature_header: String,
-    /// Path of the inbound e-mail address.
-    pub email_path: String,
+    /// Path of the inbound e-mail address. Absent without `automation:manage`.
+    pub email_path: Option<String>,
 }
 
-fn endpoints_dto(config: WebhookConfig) -> EndpointsDto {
+fn endpoints_dto(config: WebhookConfig, credentials_visible: bool) -> EndpointsDto {
     EndpointsDto {
-        webhook_path: format!("/hooks/workflows/{}", config.token),
-        webhook_secret: config.secret,
+        credentials_visible,
+        webhook_path: credentials_visible.then(|| format!("/hooks/workflows/{}", config.token)),
+        webhook_secret: credentials_visible.then_some(config.secret),
         signature_required: config.signature_required,
         signature_header: "X-DeepRef-Signature".to_owned(),
-        email_path: format!("/hooks/email/{}", config.email_token),
+        email_path: credentials_visible.then(|| format!("/hooks/email/{}", config.email_token)),
     }
 }
 
@@ -1395,12 +1402,21 @@ fn sample_trigger_data(sample: Value) -> Value {
 )]
 pub(crate) async fn get_endpoints(
     State(state): State<AppState>,
+    session: Option<crate::auth::CurrentSession>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<EndpointsDto>, ApiError> {
     let config = deepref_app::get_webhook_config(&state.pool, project_id(project)?, workflow)
         .await
         .map_err(map_error)?;
-    Ok(Json(endpoints_dto(config)))
+    // Viewing the workflow does not entitle the caller to its credentials.
+    let visible = crate::authz::holds(
+        &state,
+        session.as_ref().map(|session| &session.0),
+        deepref_domain::authorization::Permission::AutomationManage,
+        deepref_domain::authorization::Resource::Project(deepref_domain::ProjectId::new(project)),
+    )
+    .await?;
+    Ok(Json(endpoints_dto(config, visible)))
 }
 
 #[utoipa::path(
@@ -1425,7 +1441,7 @@ pub(crate) async fn update_endpoints(
     )
     .await
     .map_err(map_error)?;
-    Ok(Json(endpoints_dto(config)))
+    Ok(Json(endpoints_dto(config, true)))
 }
 
 async fn rotate(
@@ -1442,7 +1458,7 @@ async fn rotate(
     )
     .await
     .map_err(map_error)?;
-    Ok(Json(endpoints_dto(config)))
+    Ok(Json(endpoints_dto(config, true)))
 }
 
 #[utoipa::path(

@@ -102,6 +102,21 @@ fn rule_columns(rule: Rule) -> (&'static str, String, String) {
             format!("`{}`", permission.as_str()),
             format!("project (`{{{name}}}`)"),
         ),
+        Rule::RequireIfPresent(permission, ResourceFrom::Query(name)) => (
+            "RequireIfPresent",
+            format!("`{}`", permission.as_str()),
+            format!("project (query `{name}`, when given)"),
+        ),
+        Rule::Require(permission, ResourceFrom::Query(name)) => (
+            "Require",
+            format!("`{}`", permission.as_str()),
+            format!("project (query `{name}`)"),
+        ),
+        Rule::RequireIfPresent(permission, ResourceFrom::PathParam(name)) => (
+            "RequireIfPresent",
+            format!("`{}`", permission.as_str()),
+            format!("project (`{{{name}}}`, when given)"),
+        ),
         Rule::Handler(permission) => (
             "Handler",
             format!("`{}`", permission.as_str()),

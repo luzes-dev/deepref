@@ -355,3 +355,162 @@ async fn every_permission_named_in_the_table_exists_and_scopes_to_a_project() {
         assert!(Permission::ALL.contains(&permission));
     }
 }
+
+#[tokio::test]
+async fn head_on_a_foreign_project_is_the_same_as_on_a_missing_one() {
+    let Some(t) = two_workspaces().await else {
+        return;
+    };
+    let mut checked = 0;
+    for row in project_rows()
+        .into_iter()
+        .filter(|row| row.method == Verb::Get)
+    {
+        let foreign = concrete(row.path, t.a_project);
+        let missing = foreign.replace(&t.a_project.to_string(), &Uuid::new_v4().to_string());
+        let (foreign_status, foreign_body) = t.h.send(&t.b, Method::HEAD, &foreign, None).await;
+        let (missing_status, missing_body) = t.h.send(&t.b, Method::HEAD, &missing, None).await;
+        assert_eq!(foreign_status, StatusCode::NOT_FOUND, "HEAD {}", row.path);
+        assert_eq!(foreign_status, missing_status, "HEAD {}", row.path);
+        assert_eq!(foreign_body, missing_body, "HEAD {}", row.path);
+        checked += 1;
+    }
+    assert!(checked > 60, "{checked}");
+    // The owner's HEAD still reaches the handler.
+    let (status, _) =
+        t.h.send(
+            &t.a,
+            Method::HEAD,
+            &format!("/projects/{}", t.a_project),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// Every method against every registered project path, as a foreign principal:
+/// a method the table lists is denied exactly like a missing project, and any
+/// other method is the router's 405. Nothing is ever served. This is the guard
+/// for routes or methods registered outside the OpenAPI router.
+#[tokio::test]
+async fn every_method_on_every_project_path_is_denied_or_not_allowed() {
+    let Some(t) = two_workspaces().await else {
+        return;
+    };
+    let mut paths: Vec<&str> = project_rows().iter().map(|row| row.path).collect();
+    paths.sort_unstable();
+    paths.dedup();
+    let methods = [
+        Method::GET,
+        Method::HEAD,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+    ];
+    let mut failures = Vec::new();
+    for path in &paths {
+        for method in &methods {
+            let foreign = concrete(path, t.a_project);
+            let missing = foreign.replace(&t.a_project.to_string(), &Uuid::new_v4().to_string());
+            let (status, body) = t.h.send(&t.b, method.clone(), &foreign, None).await;
+            let (missing_status, missing_body) =
+                t.h.send(&t.b, method.clone(), &missing, None).await;
+            let lookup = if method == Method::HEAD {
+                "GET"
+            } else {
+                method.as_str()
+            };
+            let listed = deepref_http_api::authz::policy::lookup(lookup, path).is_some();
+            let ok = if *method == Method::OPTIONS {
+                // Answered by the CORS layer outside the PEP: no handler, no body.
+                body.is_empty() && body == missing_body && status == missing_status
+            } else if listed {
+                status == StatusCode::NOT_FOUND
+                    && status == missing_status
+                    && normalize(&body) == normalize(&missing_body)
+            } else {
+                status == StatusCode::METHOD_NOT_ALLOWED && missing_status == status
+            };
+            if !ok {
+                failures.push(format!(
+                    "{method} {path}: {status} (missing: {missing_status}), listed={listed}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
+async fn query_project_routes_are_indistinguishable_from_a_missing_one() {
+    let Some(t) = two_workspaces().await else {
+        return;
+    };
+    for row in ROUTES
+        .iter()
+        .filter(|row| matches!(row.rule, Rule::RequireIfPresent(..)))
+    {
+        let foreign = format!("{}?project_id={}", row.path, t.a_project);
+        let missing = format!("{}?project_id={}", row.path, Uuid::new_v4());
+        let garbage = format!("{}?project_id=not-a-uuid", row.path);
+        let (fs, fb) = t.h.send(&t.b, method(row.method), &foreign, None).await;
+        let (ms, mb) = t.h.send(&t.b, method(row.method), &missing, None).await;
+        let (gs, gb) = t.h.send(&t.b, method(row.method), &garbage, None).await;
+        assert_eq!(fs, StatusCode::NOT_FOUND, "{}", row.path);
+        assert_eq!((fs, normalize(&fb)), (ms, normalize(&mb)), "{}", row.path);
+        assert_eq!((fs, normalize(&fb)), (gs, normalize(&gb)), "{}", row.path);
+        // Without the parameter no project data is returned.
+        let (status, body) = t.h.get(&t.b, row.path).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["budget"].is_null(), "{body}");
+        // The owner gets their own project's data.
+        let own = format!("{}?project_id={}", row.path, t.a_project);
+        let (status, body) = t.h.get(&t.a, &own).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["budget"].is_object(), "{body}");
+    }
+}
+
+#[test]
+fn no_route_is_registered_outside_the_openapi_router() {
+    // The only `.route(` is the `/openapi.json` document itself; every other
+    // operation goes through `routes!`, which the OpenAPI-derived check sees.
+    fn walk(dir: &std::path::Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for needle in [
+                    ".route(",
+                    ".route_service(",
+                    ".nest(",
+                    ".nest_service(",
+                    ".fallback",
+                    ".route_layer(",
+                ] {
+                    // Test modules build throwaway routers; only production code counts.
+                    let production = text.split("#[cfg(test)]").next().unwrap();
+                    for _ in production.matches(needle) {
+                        found.push(format!("{}: {needle}", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut found,
+    );
+    found.retain(|entry| !entry.contains("routes/mod.rs: .route("));
+    assert!(
+        found.is_empty(),
+        "undocumented route registration: {found:?}"
+    );
+}

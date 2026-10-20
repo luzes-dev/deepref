@@ -6,13 +6,30 @@
  */
 
 export interface EndpointsDto {
-	/** Path of the inbound e-mail address. */
-	email_path: string;
+	/**
+	 * Whether this response carries the credentials. They are capabilities
+	 * that start runs, so only a caller with `automation:manage` receives
+	 * them; anyone else who can view the workflow sees the settings alone.
+	 */
+	credentials_visible: boolean;
+	/**
+	 * Path of the inbound e-mail address. Absent without `automation:manage`.
+	 * @nullable
+	 */
+	email_path?: string | null;
 	/** Header carrying `sha256=<hex HMAC-SHA256 of the raw body>`. */
 	signature_header: string;
 	signature_required: boolean;
-	/** Path of the webhook address, to be appended to the server address. */
-	webhook_path: string;
-	/** Shared secret used to sign webhook calls. */
-	webhook_secret: string;
+	/**
+	 * Path of the webhook address, to be appended to the server address.
+	 * Absent without `automation:manage`.
+	 * @nullable
+	 */
+	webhook_path?: string | null;
+	/**
+	 * Shared secret used to sign webhook calls. Absent without
+	 * `automation:manage`.
+	 * @nullable
+	 */
+	webhook_secret?: string | null;
 }

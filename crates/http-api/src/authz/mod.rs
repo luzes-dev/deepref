@@ -15,6 +15,7 @@ pub mod policy;
 
 use axum::{
     extract::{RawPathParams, Request, State},
+    http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -62,16 +63,22 @@ impl AuthzMode {
 pub(crate) struct Pep {
     pub(crate) mode: AuthzMode,
     pub(crate) state: AppState,
-    /// Every (method, path) the router registers. A request whose method the
-    /// route does not register is answered `405` by the router and runs no
-    /// handler; every registered operation must have a row.
-    pub(crate) registered: std::sync::Arc<std::collections::BTreeSet<matrix::RouteKey>>,
 }
 
 /// The denial every "no" becomes: byte-identical to the `404` for a project
 /// that does not exist.
 pub(crate) fn denied_response() -> Response {
     ApiError::NotFound("resource not found".to_owned()).into_response()
+}
+
+fn method_not_allowed(allowed: &[&str]) -> Response {
+    let mut response = StatusCode::METHOD_NOT_ALLOWED.into_response();
+    if let Ok(value) = axum::http::HeaderValue::from_str(&allowed.join(", ")) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::ALLOW, value);
+    }
+    response
 }
 
 /// What a denial needs from the request, copied out so no borrow of the
@@ -95,7 +102,12 @@ pub(crate) async fn enforce(
         // No route matched: the router's own 404 answers. No handler runs.
         return next.run(request).await;
     };
-    let method = request.method().as_str().to_owned();
+    // The router answers HEAD from the GET handler, so HEAD is decided as GET.
+    let method = match request.method().as_str() {
+        "HEAD" => "GET".to_owned(),
+        other => other.to_owned(),
+    };
+    let query = request.uri().query().map(str::to_owned);
     let session = request.extensions().get::<SessionContext>().cloned();
     let caller = Caller {
         user: session
@@ -107,8 +119,16 @@ pub(crate) async fn enforce(
             .map(std::string::ToString::to_string),
     };
     let Some(row) = policy::lookup(&method, &matched) else {
-        if !pep.registered.contains(&(method.clone(), matched.clone())) {
-            return next.run(request).await;
+        // The router can serve a method no row lists: `routes!` with several
+        // paths registers every handler on every path. Such a combination is
+        // answered `405` here and never reaches a handler.
+        let allowed: Vec<&str> = policy::ROUTES
+            .iter()
+            .filter(|row| row.path == matched)
+            .map(|row| row.method.as_str())
+            .collect();
+        if !allowed.is_empty() {
+            return method_not_allowed(&allowed);
         }
         tracing::error!(
             %method, route = %matched,
@@ -138,6 +158,11 @@ pub(crate) async fn enforce(
     let Some(session) = session else {
         return ApiError::Auth(AuthFailure::Unauthenticated).into_response();
     };
+    let (permission, source, optional) = match row.rule {
+        Rule::Require(permission, source) => (permission, source, false),
+        Rule::RequireIfPresent(permission, source) => (permission, source, true),
+        _ => (Permission::ProjectView, ResourceFrom::PathParam(""), false),
+    };
     match row.rule {
         Rule::Open | Rule::Authenticated | Rule::Handler(_) => next.run(request).await,
         Rule::PlatformOperator => {
@@ -149,11 +174,27 @@ pub(crate) async fn enforce(
             )
             .await
         }
-        Rule::Require(permission, ResourceFrom::PathParam(name)) => {
-            let id = params
-                .iter()
-                .find(|(key, _)| *key == name)
-                .and_then(|(_, value)| Uuid::parse_str(value).ok());
+        Rule::Require(..) | Rule::RequireIfPresent(..) => {
+            let raw = match source {
+                ResourceFrom::PathParam(name) => params
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_owned()),
+                ResourceFrom::Query(name) => query.as_deref().and_then(|query| {
+                    serde_urlencoded::from_str::<Vec<(String, String)>>(query)
+                        .ok()
+                        .and_then(|pairs| {
+                            pairs
+                                .into_iter()
+                                .find(|(key, _)| key == name)
+                                .map(|(_, v)| v)
+                        })
+                }),
+            };
+            if optional && raw.is_none() {
+                return next.run(request).await;
+            }
+            let id = raw.and_then(|value| Uuid::parse_str(&value).ok());
             let Some(id) = id else {
                 return deny(
                     &pep.state,
@@ -229,6 +270,35 @@ pub(crate) async fn record_denial(
     }
 }
 
+/// Whether the caller holds `permission` on `resource`, for handlers that
+/// shape a response by privilege rather than refuse it (credential
+/// redaction). Not audited: nothing was denied. With authentication off
+/// (local development) it is true.
+pub(crate) async fn holds(
+    state: &AppState,
+    session: Option<&SessionContext>,
+    permission: Permission,
+    resource: Resource,
+) -> Result<bool, ApiError> {
+    let Some(session) = session else {
+        return Ok(true);
+    };
+    match state
+        .authorizer
+        .require(&session.principal, permission, resource)
+        .await
+    {
+        Ok(()) => Ok(true),
+        Err(AuthzError::Denied(_)) => Ok(false),
+        Err(AuthzError::Store(error)) => {
+            tracing::error!(%error, "authorization data could not be read");
+            Err(ApiError::Internal(anyhow::anyhow!(
+                "authorization is unavailable"
+            )))
+        }
+    }
+}
+
 /// Handler-side check for a resource only the body names (`Rule::Handler`).
 /// A denial is audited and returned as the same `404`.
 pub(crate) async fn require_for_handler(
@@ -288,16 +358,6 @@ mod tests {
 
     use super::*;
 
-    fn registered(path: &str) -> std::sync::Arc<std::collections::BTreeSet<matrix::RouteKey>> {
-        std::sync::Arc::new(
-            [
-                ("GET".to_owned(), path.to_owned()),
-                ("PATCH".to_owned(), path.to_owned()),
-            ]
-            .into(),
-        )
-    }
-
     fn lazy_state() -> AppState {
         AppState::new(
             sqlx::postgres::PgPoolOptions::new()
@@ -330,7 +390,6 @@ mod tests {
                 Pep {
                     mode,
                     state: lazy_state(),
-                    registered: registered(path),
                 },
                 enforce,
             ))
@@ -368,6 +427,40 @@ mod tests {
             StatusCode::NOT_FOUND,
             "the development bypass skips decisions, not the table: a route with no row is a bug"
         );
+    }
+
+    #[tokio::test]
+    async fn a_method_no_row_lists_is_405_and_never_reaches_a_handler() {
+        let app = Router::new()
+            .route(
+                "/me",
+                get(|| async { "reached" }).post(|| async { "reached" }),
+            )
+            .layer(from_fn_with_state(
+                Pep {
+                    mode: AuthzMode::Enforced,
+                    state: lazy_state(),
+                },
+                enforce,
+            ))
+            .layer(axum::middleware::from_fn(
+                |mut request: Request<Body>, next: axum::middleware::Next| async move {
+                    request.extensions_mut().insert(session());
+                    next.run(request).await
+                },
+            ));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.headers()[axum::http::header::ALLOW], "GET");
     }
 
     #[tokio::test]
@@ -409,7 +502,6 @@ mod tests {
                 Pep {
                     mode: AuthzMode::Enforced,
                     state: lazy_state(),
-                    registered: registered("/settings"),
                 },
                 enforce,
             ))

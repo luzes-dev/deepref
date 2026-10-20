@@ -101,7 +101,7 @@ ALTER TABLE admin_audit_events ADD CONSTRAINT admin_audit_events_check CHECK (
   -- row is a fixed shape: the permission and resource type come from closed
   -- lists, `window` is the minute bucket (epoch minutes), and the resource
   -- identifier is stored only when it parsed as a UUID. No request body, path
-  -- text or caller-supplied string is ever stored. 0100 makes one row per
+  -- text or caller-supplied string is ever stored. 0101 makes one row per
   -- (user, permission, resource type, window) the most the table can hold.
   OR (event_type = 'authorization.denied'
       AND principal_kind = 'user' AND principal_user_id IS NOT NULL

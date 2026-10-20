@@ -20,6 +20,7 @@ use deepref_ai::{
     AssistantToolOutput, AssistantToolResult, AssistantTurnInput, BoundedAgentJson,
     run_assistant_react_turn,
 };
+use deepref_domain::authorization::{Permission, Resource};
 use deepref_domain::{
     Actor, DocumentBlockId, DocumentId, ProjectId, RecordId, ReportId, ScreeningStage, StudyDesign,
     StudyId,
@@ -935,6 +936,26 @@ struct ConversationAgentDispatcher {
     project_id: ProjectId,
     state: AppState,
     actor: Actor,
+    /// The authenticated principal, `None` only with authentication off.
+    principal: Option<deepref_domain::Principal>,
+}
+
+/// The permission the equivalent direct route requires, so the assistant can
+/// never do what its user could not:
+///
+/// | tool | route it mirrors | permission |
+/// | --- | --- | --- |
+/// | `trigger_workflow` | `POST .../automations/runs` | `automation:manage` |
+/// | `propose_*` | `POST .../ai/*` suggestions | `ai:use` |
+/// | read tools | the project's read routes | `project:view` |
+fn tool_permission(tool_name: &str) -> Permission {
+    if tool_name == "trigger_workflow" {
+        return Permission::AutomationManage;
+    }
+    match AgentToolName::parse(tool_name) {
+        Some(name) if name.is_read() => Permission::ProjectView,
+        _ => Permission::AiUse,
+    }
 }
 
 impl AssistantDispatcher for ConversationAgentDispatcher {
@@ -947,7 +968,22 @@ impl AssistantDispatcher for ConversationAgentDispatcher {
         let project_id = self.project_id;
         let state = self.state.clone();
         let actor = self.actor.clone();
+        let principal = self.principal;
         Box::pin(async move {
+            // Authorized at dispatch with the authenticated principal, on every
+            // call: membership removal or a role downgrade ends a running turn's
+            // tools on the next one.
+            if let Some(principal) = principal {
+                state
+                    .authorizer
+                    .require(
+                        &principal,
+                        tool_permission(tool_name),
+                        Resource::Project(project_id),
+                    )
+                    .await
+                    .map_err(|_| AgentToolError::Forbidden)?;
+            }
             dispatch_assistant_tool(project_id, &state, actor, tool_name, args).await
         })
     }
@@ -1124,10 +1160,12 @@ type AssistantSseState = (
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn chat(
     State(state): State<AppState>,
+    session: Option<crate::auth::CurrentSession>,
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
     Json(body): Json<AssistantChatRequestDto>,
 ) -> Result<Response, ApiError> {
+    let principal = session.map(|session| session.0.principal);
     validate_project_id(project_id)?;
     let actor = extract_actor(&headers)?;
     if !deepref_app::project_exists(&state.pool, project_id).await? {
@@ -1191,6 +1229,7 @@ pub(crate) async fn chat(
             project_id: turn_project_id,
             state: turn_state.clone(),
             actor: actor.clone(),
+            principal,
         };
         let input = AssistantTurnInput {
             project_id: turn_project_id,

@@ -278,7 +278,7 @@ pub struct Denial<'a> {
 /// The audit table is append-only, so a count cannot be bumped in place. The
 /// writer instead *samples*: one row per (user, permission, resource type,
 /// one-minute window). A process-local set skips the round trip for keys it
-/// already wrote this window, and a unique index (migration 0100) makes the
+/// already wrote this window, and a unique index (migration 0101) makes the
 /// bound hold across processes. A flood of denials therefore stores at most
 /// permissions x resource types rows per user per minute.
 pub struct DenialAuditor {
@@ -312,8 +312,26 @@ impl DenialAuditor {
         i64::try_from(seconds / 60).unwrap_or(0)
     }
 
-    /// Whether this process has already written the key in `window`; if not,
-    /// claims it.
+    fn key(user: UserId, denial: &Denial<'_>) -> (Uuid, &'static str, &'static str) {
+        (
+            user.as_uuid(),
+            denial.denied_for.as_str(),
+            denial.resource.type_name(),
+        )
+    }
+
+    /// Forgets a claim whose insert failed, so the next denial retries it.
+    fn release(&self, user: UserId, denial: &Denial<'_>, window: i64) {
+        if let Ok(mut seen) = self.seen.lock()
+            && seen.window == window
+        {
+            seen.keys.remove(&Self::key(user, denial));
+        }
+    }
+
+    /// Whether this process has not yet written the key in `window`; if so,
+    /// claims it. The claim stands only once the insert succeeds (a unique
+    /// conflict counts: the row exists).
     fn claim(&self, user: UserId, denial: &Denial<'_>, window: i64) -> bool {
         let Ok(mut seen) = self.seen.lock() else {
             return true;
@@ -322,11 +340,7 @@ impl DenialAuditor {
             seen.window = window;
             seen.keys.clear();
         }
-        seen.keys.insert((
-            user.as_uuid(),
-            denial.denied_for.as_str(),
-            denial.resource.type_name(),
-        ))
+        seen.keys.insert(Self::key(user, denial))
     }
 
     /// Returns whether a row was written. A failed write is the caller's to
@@ -346,7 +360,7 @@ impl DenialAuditor {
             "resource_type": denial.resource.type_name(),
             "window": window.to_string(),
         });
-        let written = sqlx::query(
+        let written = match sqlx::query(
             "INSERT INTO admin_audit_events \
                (id, event_type, principal_kind, principal_user_id, workspace_id, project_id, \
                 request_id, metadata) \
@@ -360,8 +374,14 @@ impl DenialAuditor {
         .bind(denial.request_id.filter(|id| id.len() <= 200))
         .bind(metadata)
         .execute(&self.pool)
-        .await?
-        .rows_affected();
+        .await
+        {
+            Ok(result) => result.rows_affected(),
+            Err(error) => {
+                self.release(denial.user, &denial, window);
+                return Err(error);
+            }
+        };
         Ok(written == 1)
     }
 }
