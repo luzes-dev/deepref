@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod protocol;
 mod provider;
 mod reference;
+pub mod scientific_assignment;
 mod work;
 pub mod workspace;
 
@@ -25,6 +26,7 @@ pub use ingestion::{IngestionItemStatus, IngestionStatus};
 pub use jobs::{InvalidJobKind, JobKind};
 pub use provider::{InvalidProviderKind, ProviderKind};
 pub use reference::Reference;
+pub use scientific_assignment::ScientificAssignmentRole;
 pub use work::{FetchStatus, Work, WorkWithReferences};
 pub use workspace::{
     ExternalOrganizationId, ExternalOrganizationIdError, GrantSource, MembershipStatus,
@@ -123,6 +125,8 @@ pub enum ActorValidationError {
 pub struct Actor {
     kind: ActorKind,
     id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
+    user_id: Option<UserId>,
 }
 
 impl Actor {
@@ -131,7 +135,23 @@ impl Actor {
         if id.trim().is_empty() {
             return Err(ActorValidationError::BlankId);
         }
-        Ok(Self { kind, id })
+        Ok(Self {
+            kind,
+            id,
+            user_id: None,
+        })
+    }
+
+    /// Construct a human actor from a trusted authenticated user identity.
+    ///
+    /// `Actor::new(ActorKind::User, ...)` remains an untrusted legacy actor;
+    /// UUID-shaped text does not grant user provenance.
+    pub fn authenticated_user(user_id: UserId) -> Self {
+        Self {
+            kind: ActorKind::User,
+            id: user_id.as_uuid().to_string(),
+            user_id: Some(user_id),
+        }
     }
 
     pub const fn kind(&self) -> ActorKind {
@@ -140,6 +160,12 @@ impl Actor {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The authenticated user identity, when this actor came from a trusted
+    /// principal rather than a free-text actor label.
+    pub const fn user_id(&self) -> Option<UserId> {
+        self.user_id
     }
 }
 
@@ -687,5 +713,17 @@ mod tests {
         let actor = Actor::new(ActorKind::System, "worker").expect("actor should be valid");
         assert_eq!(actor.kind(), ActorKind::System);
         assert_eq!(actor.id(), "worker");
+    }
+
+    #[test]
+    fn uuid_shaped_actor_text_does_not_grant_authenticated_provenance() {
+        let user_id = UserId::new(Uuid::from_u128(0x1234));
+        let legacy = Actor::new(ActorKind::User, user_id.as_uuid().to_string())
+            .expect("UUID text is a valid legacy label");
+        let authenticated = Actor::authenticated_user(user_id);
+
+        assert_eq!(legacy.user_id(), None);
+        assert_eq!(authenticated.user_id(), Some(user_id));
+        assert_eq!(authenticated.id(), legacy.id());
     }
 }

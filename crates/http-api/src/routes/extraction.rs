@@ -10,10 +10,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{
-    actor::extract_actor,
-    ai::{AcceptedReviewRun, ReviewRunDto, accepted_review_run},
-};
+use super::ai::{AcceptedReviewRun, ReviewRunDto, accepted_review_run};
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -203,7 +200,8 @@ pub(crate) async fn list_study_extraction_values(
 pub(crate) async fn record_extraction_value(
     State(state): State<AppState>,
     Path((project_id, study_id, field_id)): Path<(Uuid, Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<RecordExtractionValueRequest>,
 ) -> Result<Json<ExtractionValueDto>, ApiError> {
     let value = match input.value {
@@ -230,7 +228,7 @@ pub(crate) async fn record_extraction_value(
                     document_block_id: source.document_block_id,
                 }),
         },
-        &extract_actor(&headers)?,
+        &request_actor.actor,
     )
     .await
     .map_err(map_extraction_error)?;
@@ -248,14 +246,15 @@ pub(crate) async fn record_extraction_value(
 pub(crate) async fn clear_extraction_value(
     State(state): State<AppState>,
     Path((project_id, study_id, field_id)): Path<(Uuid, Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<axum::http::StatusCode, ApiError> {
     deepref_app::clear_value(
         &state.pool,
         project_id,
         study_id,
         field_id,
-        &extract_actor(&headers)?,
+        &request_actor.actor,
     )
     .await
     .map_err(map_extraction_error)?;
@@ -273,13 +272,14 @@ pub(crate) async fn clear_extraction_value(
 pub(crate) async fn generate_data_extraction_suggestion(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<AcceptedReviewRun, ApiError> {
     let snapshot = deepref_app::schedule_data_extraction_review(
         &state.pool,
         project_id,
         study_id,
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .await
     .map_err(super::ai::map_review_preparation_error)?;

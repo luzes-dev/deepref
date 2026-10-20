@@ -21,7 +21,7 @@ use deepref_application::{
 };
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
-    ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage,
+    ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage, UserId,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -32,7 +32,20 @@ async fn database() -> Option<PgPool> {
 }
 
 fn person() -> Actor {
-    Actor::new(ActorKind::User, "tester").expect("actor")
+    Actor::new(ActorKind::User, "00000000-0000-0000-0000-000000000001").expect("actor")
+}
+
+async fn insert_user(pool: &PgPool, user_id: UserId, label: &str) {
+    sqlx::query(
+        "INSERT INTO users(id,workos_user_id,primary_email,status) \
+         VALUES($1,$2,$3,'active')",
+    )
+    .bind(user_id.as_uuid())
+    .bind(format!("exposure-{label}-{}", Uuid::new_v4()))
+    .bind(format!("exposure-{label}-{}@example.test", Uuid::new_v4()))
+    .execute(pool)
+    .await
+    .expect("identity fixture");
 }
 
 async fn project(pool: &PgPool) -> Uuid {
@@ -215,6 +228,16 @@ async fn screening_proposal(
 
 /// The person's screening decision on a record at title and abstract.
 async fn decide(pool: &PgPool, project_id: Uuid, report_id: Uuid, decision: ScreeningDecision) {
+    decide_as(pool, project_id, report_id, decision, person()).await;
+}
+
+async fn decide_as(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    decision: ScreeningDecision,
+    actor: Actor,
+) {
     let protocol_id = get_published_protocol(pool, project_id)
         .await
         .expect("protocol")
@@ -238,7 +261,7 @@ async fn decide(pool: &PgPool, project_id: Uuid, report_id: Uuid, decision: Scre
             protocol_version_id: ProtocolVersionId::new(protocol_id),
             expected_revision: revision,
             notes: None,
-            actor: person(),
+            actor,
         },
     )
     .await
@@ -420,8 +443,14 @@ async fn an_exposure_before_the_decision_excludes_the_pair() {
 }
 
 #[tokio::test]
-async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
+async fn an_exposure_after_the_decision_or_for_a_proven_distinct_person_does_not_exclude() {
     let Some(pool) = database().await else { return };
+    let current_user = UserId::new(Uuid::parse_str(person().id()).expect("current user ID"));
+    let other_user = UserId::new(
+        Uuid::parse_str("00000000-0000-0000-0000-000000000002").expect("other user ID"),
+    );
+    insert_user(&pool, current_user, "current reviewer").await;
+    insert_user(&pool, other_user, "other reviewer").await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
 
@@ -435,7 +464,14 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "include",
     )
     .await;
-    decide(&pool, project_id, decided_first, ScreeningDecision::Include).await;
+    decide_as(
+        &pool,
+        project_id,
+        decided_first,
+        ScreeningDecision::Include,
+        Actor::authenticated_user(current_user),
+    )
+    .await;
     record_exposure(
         &pool,
         &NewExposure::new(
@@ -457,11 +493,18 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "title_abstract",
         ExposureSource::WorkflowRunOutput,
     );
-    for_someone_else.audience = Some(Actor::new(ActorKind::User, "someone-else").expect("actor"));
+    for_someone_else.audience = Some(Actor::authenticated_user(other_user));
     record_exposure(&pool, &for_someone_else)
         .await
         .expect("exposure for someone else");
-    decide(&pool, project_id, other_person, ScreeningDecision::Include).await;
+    decide_as(
+        &pool,
+        project_id,
+        other_person,
+        ScreeningDecision::Include,
+        Actor::authenticated_user(current_user),
+    )
+    .await;
 
     // Shown to the person who decides, before the decision: exposed.
     let shown_to_person = report(&pool, project_id, "Shown to this person").await;
@@ -479,15 +522,16 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "title_abstract",
         ExposureSource::WorkflowRunOutput,
     );
-    for_this_person.audience = Some(Actor::new(ActorKind::User, "tester").expect("actor"));
+    for_this_person.audience = Some(Actor::authenticated_user(current_user));
     record_exposure(&pool, &for_this_person)
         .await
         .expect("exposure for this person");
-    decide(
+    decide_as(
         &pool,
         project_id,
         shown_to_person,
         ScreeningDecision::Include,
+        Actor::authenticated_user(current_user),
     )
     .await;
 
@@ -900,4 +944,58 @@ async fn an_automation_state_cannot_be_attributed_to_an_earlier_human_decision()
         "automation is not a human reference label"
     );
     assert_eq!(pairs.unverifiable_excluded, 1);
+}
+
+#[tokio::test]
+async fn an_unmapped_legacy_exposure_stays_ambiguous_after_operator_non_identity() {
+    let Some(pool) = database().await else { return };
+    let user_id = UserId::new(Uuid::parse_str(person().id()).expect("canonical fixture ID"));
+    let operator = UserId::new(Uuid::new_v4());
+    insert_user(&pool, user_id, "candidate").await;
+    insert_user(&pool, operator, "operator").await;
+    let project_id = project(&pool).await;
+    publish_protocol_for(&pool, project_id).await;
+    let record = report(&pool, project_id, "Legacy exposure audience").await;
+    ai_opinion(&pool, project_id, record, "title_abstract", "include").await;
+
+    let mut exposure = NewExposure::new(
+        project_id,
+        record,
+        "title_abstract",
+        ExposureSource::WorkflowRunOutput,
+    );
+    exposure.audience = Some(Actor::new(ActorKind::User, "legacy-exposure-label").unwrap());
+    record_exposure(&pool, &exposure)
+        .await
+        .expect("legacy exposure persists");
+    decide_as(
+        &pool,
+        project_id,
+        record,
+        ScreeningDecision::Include,
+        Actor::authenticated_user(user_id),
+    )
+    .await;
+
+    let conservative = independent_reviewer_pairs(&pool, project_id, None)
+        .await
+        .expect("pairs");
+    assert_eq!(conservative.independent.len(), 0);
+    assert_eq!(conservative.exposed_excluded, 1);
+
+    deepref_app::record_legacy_actor_non_identity(
+        &pool,
+        "user",
+        "legacy-exposure-label",
+        user_id,
+        operator,
+        "confirmed against the reviewer roster",
+    )
+    .await
+    .expect("operator denial is recorded");
+    let after = independent_reviewer_pairs(&pool, project_id, None)
+        .await
+        .expect("pairs after operator decision");
+    assert_eq!(after.exposed_excluded, 1);
+    assert_eq!(after.independent.len(), 0);
 }

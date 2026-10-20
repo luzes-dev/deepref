@@ -31,6 +31,7 @@ fn concrete(template: &str, project: Uuid) -> String {
         match name {
             "project_id" => out.push_str(&project.to_string()),
             "version" => out.push('1'),
+            "role" => out.push_str("primary_screener"),
             "recipe" | "export_kind" | "definition_id" => out.push('x'),
             _ => out.push_str(&Uuid::new_v4().to_string()),
         }
@@ -414,9 +415,21 @@ async fn every_method_on_every_project_path_is_denied_or_not_allowed() {
         for method in &methods {
             let foreign = concrete(path, t.a_project);
             let missing = foreign.replace(&t.a_project.to_string(), &Uuid::new_v4().to_string());
-            let (status, body) = t.h.send(&t.b, method.clone(), &foreign, None).await;
+            let request_body =
+                if *method == Method::POST && path.ends_with("/scientific-assignments") {
+                    Some(format!(
+                        r#"{{"user_id":"{}","role":"primary_screener"}}"#,
+                        t.b.user.as_uuid()
+                    ))
+                } else {
+                    None
+                };
+            let (status, body) =
+                t.h.send(&t.b, method.clone(), &foreign, request_body.as_deref())
+                    .await;
             let (missing_status, missing_body) =
-                t.h.send(&t.b, method.clone(), &missing, None).await;
+                t.h.send(&t.b, method.clone(), &missing, request_body.as_deref())
+                    .await;
             let lookup = if method == Method::HEAD {
                 "GET"
             } else {

@@ -25,8 +25,6 @@ use crate::{
     state::AppState,
 };
 
-pub(crate) use super::actor::extract_actor;
-
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct ScreeningQueueItemDto {
     pub report_id: Uuid,
@@ -231,10 +229,11 @@ pub(crate) async fn get_screening_queue(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(params): Query<ScreeningQueueParams>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
-    query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
+    query.reviewer_id = Some(request_actor.user_id);
     let queue = deepref_app::screening::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
@@ -265,10 +264,11 @@ pub(crate) async fn list_title_abstract_queue(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(params): Query<ScreeningQueueParams>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
-    query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
+    query.reviewer_id = Some(request_actor.user_id);
     let queue = deepref_app::screening::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
@@ -298,10 +298,11 @@ pub(crate) async fn get_next_screening_item(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(params): Query<ScreeningQueueParams>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<ScreeningQueueItemDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
-    query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
+    query.reviewer_id = Some(request_actor.user_id);
     let item = deepref_app::screening::get_next_screening_item(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
@@ -329,10 +330,11 @@ pub(crate) async fn get_next_screening_item(
 pub(crate) async fn screen_report(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<ScreenReportRequest>,
 ) -> Result<Json<ScreeningStateDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let command = ScreenReportCommand {
         project_id: project_id.into(),
         report_id: report_id.into(),
@@ -371,10 +373,11 @@ pub(crate) async fn screen_report(
 pub(crate) async fn undo_screening(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<UndoScreeningRequest>,
 ) -> Result<Json<ScreeningStateDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let command = UndoScreeningCommand {
         project_id: project_id.into(),
         report_id: report_id.into(),

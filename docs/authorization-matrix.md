@@ -10,12 +10,12 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 | Rule | Rows |
 | --- | --- |
 | Authenticated | 8 |
-| Handler | 1 |
+| Handler | 3 |
 | Open | 10 |
 | PlatformOperator | 1 |
-| Require | 142 |
+| Require | 143 |
 | RequireIfPresent | 1 |
-| **Total HTTP** | **163** |
+| **Total HTTP** | **166** |
 | **Non-HTTP paths** | **10** |
 
 ## HTTP routes
@@ -165,6 +165,9 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 | PUT | `/projects/{project_id}/review/protocol` | Require | `project:edit` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped mutation |
 | POST | `/projects/{project_id}/review/protocol/publish` | Require | `project:edit` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped mutation |
 | GET | `/projects/{project_id}/review/protocol/versions` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped read |
+| GET | `/projects/{project_id}/scientific-assignments` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | active methodology assignments for project viewers |
+| POST | `/projects/{project_id}/scientific-assignments` | Handler | `workspace:manage` | workspace (request body) | `authz_user_scoped::scientific_assignment_management_requires_workspace_manage` | methodology assignments are managed by workspace managers |
+| DELETE | `/projects/{project_id}/scientific-assignments/{user_id}/{role}` | Handler | `workspace:manage` | workspace (request body) | `authz_user_scoped::scientific_assignment_management_requires_workspace_manage` | methodology assignment revocation requires workspace managers |
 | GET | `/projects/{project_id}/screening` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped read |
 | GET | `/projects/{project_id}/screening/full-text` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped read |
 | GET | `/projects/{project_id}/screening/full-text/missing` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped read |

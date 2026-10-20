@@ -9,6 +9,7 @@ pub mod state;
 
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::future::Future;
+use uuid::Uuid;
 
 use crate::{config::ApiConfig, state::AppState};
 
@@ -35,6 +36,59 @@ pub async fn backfill_project_workspaces(config: &ApiConfig) -> anyhow::Result<(
     Ok(())
 }
 
+/// Apply a trusted operator mapping from a pre-canonical actor label to a
+/// DeepRef user. The app store commits the mapping and its audit row together.
+pub async fn legacy_actor_map(
+    config: &ApiConfig,
+    actor_kind: &str,
+    actor_id: &str,
+    user_id: Uuid,
+    operator_user_id: Uuid,
+    source: &str,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let decision = deepref_app::map_legacy_actor(
+        &pool,
+        actor_kind,
+        actor_id,
+        deepref_domain::UserId::new(user_id),
+        deepref_domain::UserId::new(operator_user_id),
+        source,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&decision)?)
+}
+
+/// Record a trusted operator confirmation that a legacy actor label does not
+/// belong to a particular user.
+pub async fn legacy_actor_deny(
+    config: &ApiConfig,
+    actor_kind: &str,
+    actor_id: &str,
+    user_id: Uuid,
+    operator_user_id: Uuid,
+    source: &str,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let decision = deepref_app::record_legacy_actor_non_identity(
+        &pool,
+        actor_kind,
+        actor_id,
+        deepref_domain::UserId::new(user_id),
+        deepref_domain::UserId::new(operator_user_id),
+        source,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&decision)?)
+}
+
+/// List all operator-confirmed mapping and non-identity decisions.
+pub async fn legacy_actor_list(config: &ApiConfig) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let decisions = deepref_app::list_legacy_actor_decisions(&pool).await?;
+    Ok(serde_json::to_string_pretty(&decisions)?)
+}
+
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
     serve_with_shutdown(config, shutdown_signal()).await
 }
@@ -46,6 +100,11 @@ pub async fn serve_with_shutdown(
     deepref_application::validate_shipped_appraisal_definitions()
         .map_err(|error| anyhow::anyhow!("invalid shipped appraisal definition: {error}"))?;
     let pool = database_pool(&config).await?;
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        config.runtime.development_principal_enabled(),
+    )
+    .await?;
 
     let document_store = deepref_documents::DocumentStore::from_config(&config.documents)?;
     anyhow::ensure!(

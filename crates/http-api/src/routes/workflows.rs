@@ -31,7 +31,6 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use super::actor::extract_actor;
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -738,7 +737,8 @@ pub(crate) async fn list_workflows(
 pub(crate) async fn create_workflow(
     State(state): State<AppState>,
     Path(project): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<CreateWorkflowRequest>,
 ) -> Result<(StatusCode, Json<WorkflowDto>), ApiError> {
     let project = project_id(project)?;
@@ -756,7 +756,7 @@ pub(crate) async fn create_workflow(
         &input.name,
         input.description.as_deref().unwrap_or_default(),
         graph,
-        &extract_actor(&headers)?,
+        &request_actor.actor,
         state.workflow.niche_nodes_enabled,
     )
     .await
@@ -780,7 +780,8 @@ pub(crate) async fn create_workflow(
 pub(crate) async fn create_workflow_from_template(
     State(state): State<AppState>,
     Path(project): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<FromTemplateRequest>,
 ) -> Result<(StatusCode, Json<WorkflowDto>), ApiError> {
     let project = project_id(project)?;
@@ -795,7 +796,7 @@ pub(crate) async fn create_workflow_from_template(
         &name,
         template.description,
         template.graph.clone(),
-        &extract_actor(&headers)?,
+        &request_actor.actor,
         state.workflow.niche_nodes_enabled,
     )
     .await
@@ -1025,7 +1026,8 @@ fn detail_kind_name(kind: wf::DetailKind) -> &'static str {
 pub(crate) async fn publish_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<PublishRequest>,
 ) -> Result<(StatusCode, Json<VersionDto>), ApiError> {
     ensure_draft_available(&state, project, workflow).await?;
@@ -1034,7 +1036,7 @@ pub(crate) async fn publish_workflow(
         project_id(project)?,
         workflow,
         input.note.as_deref(),
-        &extract_actor(&headers)?,
+        &request_actor.actor,
         state.smtp.is_configured(),
         state.workflow.niche_nodes_enabled,
     )
@@ -1254,6 +1256,7 @@ pub(crate) async fn start_workflow_run(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<RunRequest>,
 ) -> Result<(StatusCode, Json<RunStartedDto>), ApiError> {
     let project = project_id(project)?;
@@ -1264,7 +1267,7 @@ pub(crate) async fn start_workflow_run(
         .await
         .map_err(map_error)?;
     ensure_graph_available(&state, &graph)?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let trigger_data = input.trigger_data.unwrap_or_else(|| json!({}));
     let started = deepref_app::start_run(
         &state.pool,
@@ -1315,7 +1318,8 @@ pub(crate) async fn start_workflow_run(
 pub(crate) async fn start_test_run(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<TestRunRequest>,
 ) -> Result<Json<WorkflowRunDto>, ApiError> {
     let project = project_id(project)?;
@@ -1346,7 +1350,7 @@ pub(crate) async fn start_test_run(
     if !report.is_ok() {
         return Err(map_error(WorkflowError::Invalid(report)));
     }
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let sample = input.trigger_data.unwrap_or_else(|| json!({}));
     let started = deepref_app::start_run(
         &state.pool,

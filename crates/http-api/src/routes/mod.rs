@@ -18,6 +18,7 @@ mod projection;
 mod projects;
 mod protocol;
 mod review;
+mod scientific_assignments;
 mod settings;
 mod study;
 mod workflows;
@@ -58,6 +59,11 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(projection::get_projection))
         .routes(routes!(settings::get_settings, settings::update_settings))
         .routes(routes!(projects::list_projects, projects::create_project))
+        .routes(routes!(
+            scientific_assignments::list_scientific_assignments_route,
+            scientific_assignments::assign_scientific_role
+        ))
+        .routes(routes!(scientific_assignments::revoke_scientific_role))
         .routes(routes!(
             projects::get_project,
             projects::update_project,
@@ -311,6 +317,7 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             crate::auth::SessionGate {
                 enabled: config.runtime.auth_enabled,
+                development: config.runtime.development_principal_enabled(),
                 state: state.clone(),
             },
             crate::auth::authenticate_requests,

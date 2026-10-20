@@ -10,6 +10,8 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+const DEVELOPMENT_ACTOR_ID: &str = "00000000-0000-0000-0000-000000000003";
+
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
@@ -104,7 +106,7 @@ async fn reviewer_can_record_overwrite_and_clear_a_value_without_ai() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(saved["approved_by_actor_id"], "reviewer-http");
+    assert_eq!(saved["approved_by_actor_id"], DEVELOPMENT_ACTOR_ID);
     assert!(saved["source_block_id"].is_null());
 
     let (status, _) = call(

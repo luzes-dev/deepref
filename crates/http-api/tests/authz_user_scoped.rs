@@ -129,6 +129,47 @@ async fn create_project_needs_a_workspace_when_there_are_several_and_a_role_that
 }
 
 #[tokio::test]
+async fn scientific_assignment_management_requires_workspace_manage() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let owner = h
+        .sign_in("assignment_owner", "assignment-owner@example.org")
+        .await;
+    let member = h
+        .sign_in("assignment_member", "assignment-member@example.org")
+        .await;
+    let project = h.create_project(&owner, "Assignment authorization").await;
+    h.add_member(&owner, &member, WorkspaceRole::Member).await;
+    let base = format!("/projects/{project}/scientific-assignments");
+    let body = format!(
+        r#"{{"user_id":"{}","role":"fresh_ai_auditor"}}"#,
+        member.user.as_uuid()
+    );
+
+    let (status, _) = h.json(&owner, Method::POST, &base, &body).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, list) = h.get(&owner, &base).await;
+    assert_eq!(status, StatusCode::OK);
+    let assignments: Vec<serde_json::Value> = serde_json::from_slice(&list).unwrap();
+    assert_eq!(assignments.len(), 1);
+
+    let (status, _) = h.json(&member, Method::POST, &base, &body).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let revoke = format!("{base}/{}/fresh_ai_auditor", member.user.as_uuid());
+    let (status, _) = h.send(&member, Method::DELETE, &revoke, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM scientific_assignments WHERE project_id=$1 AND revoked_at IS NULL",
+    )
+    .bind(project)
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(active, 1, "denied requests do not mutate assignments");
+}
+
+#[tokio::test]
 async fn notifications_include_only_viewable_projects() {
     let Some(h) = Harness::new().await else {
         return;

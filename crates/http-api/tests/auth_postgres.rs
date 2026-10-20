@@ -1141,7 +1141,7 @@ fn scientific_write(
 }
 
 #[tokio::test]
-async fn scientific_writes_keep_the_header_label_as_legacy_attribution() {
+async fn scientific_writes_use_the_session_user_id_and_ignore_actor_headers() {
     let Some(h) = harness().await else { return };
     let session = sign_in(&h, "user_A", "a@example.org").await;
     let real = user_id(&h.pool, "user_A").await;
@@ -1180,7 +1180,8 @@ async fn scientific_writes_keep_the_header_label_as_legacy_attribution() {
         0
     );
 
-    // With a session the write records the header label, exactly as before 02.
+    // With a session, attribution uses its UserId even when the old browser
+    // sends a forged human label.
     let created = h
         .app
         .clone()
@@ -1210,10 +1211,9 @@ async fn scientific_writes_keep_the_header_label_as_legacy_attribution() {
         .unwrap();
     assert_eq!(saved.status(), StatusCode::OK);
     let saved = json(saved).await;
-    assert_eq!(saved["approved_by_actor_id"], "alice");
-    assert_ne!(saved["approved_by_actor_id"], real.to_string());
+    assert_eq!(saved["approved_by_actor_id"], real.to_string());
 
-    // No label: the legacy default, not the session UserId.
+    // Without a label, attribution still uses the session UserId.
     let unlabeled = h
         .app
         .clone()
@@ -1226,11 +1226,14 @@ async fn scientific_writes_keep_the_header_label_as_legacy_attribution() {
         ))
         .await
         .unwrap();
-    assert_eq!(json(unlabeled).await["approved_by_actor_id"], "local-user");
+    assert_eq!(
+        json(unlabeled).await["approved_by_actor_id"],
+        real.to_string()
+    );
 
-    // Client-supplied system and automation kinds stay rejected.
+    // Client-supplied system and automation kinds cannot change attribution.
     for kind in ["system", "automation"] {
-        let rejected = h
+        let response = h
             .app
             .clone()
             .oneshot(scientific_write(
@@ -1242,7 +1245,11 @@ async fn scientific_writes_keep_the_header_label_as_legacy_attribution() {
             ))
             .await
             .unwrap();
-        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST, "{kind}");
+        assert_eq!(response.status(), StatusCode::OK, "{kind}");
+        assert_eq!(
+            json(response).await["approved_by_actor_id"],
+            real.to_string()
+        );
     }
 
     // Identity is the session's UserId no matter what the label says, and the

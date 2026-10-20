@@ -23,6 +23,7 @@ mod extraction;
 mod graph;
 pub mod identity;
 mod jobs;
+mod legacy_actors;
 mod notifications;
 mod persistence;
 mod pmid_import;
@@ -34,6 +35,7 @@ mod review_completion;
 mod review_preparation;
 mod review_run_setup;
 mod review_runs;
+mod scientific_assignments;
 pub mod screening;
 mod second_review;
 mod study;
@@ -162,6 +164,10 @@ pub use jobs::{
     PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
     recover_expired_jobs, renew_job,
 };
+pub use legacy_actors::{
+    LegacyActorDecision, LegacyActorDecisionKind, LegacyActorError, LegacyActorKind,
+    list_legacy_actor_decisions, map_legacy_actor, record_legacy_actor_non_identity,
+};
 pub use notifications::{
     MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
     NotificationSeverity, NotificationUnreadSummary, list_notifications,
@@ -204,6 +210,10 @@ pub use review_runs::{
     begin_review_attempt, block_review_run, fail_review_attempt, fail_review_run, get_review_run,
     get_review_runs, load_leased_review_run, preview_review_identity, schedule_prepared_review_run,
     schedule_prepared_review_run_as,
+};
+pub use scientific_assignments::{
+    ScientificAssignment, ScientificAssignmentError, assign_scientific_reviewer,
+    list_scientific_assignments, revoke_scientific_assignment,
 };
 pub use second_review::{
     SECOND_REVIEW_BATCH, SecondReviewStatus, SecondReviewSweep, second_review_status,

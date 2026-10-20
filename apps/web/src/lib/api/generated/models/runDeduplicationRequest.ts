@@ -6,10 +6,6 @@
  */
 
 export interface RunDeduplicationRequest {
-	/** @nullable */
-	actor_id?: string | null;
-	/** @nullable */
-	actor_kind?: string | null;
 	/**
 	 * Number of unresolved source records to process, from 1 through 100.
 	 * @nullable
