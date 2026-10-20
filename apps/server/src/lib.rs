@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 pub mod command;
 
-pub use command::{Command, LegacyActorCommand};
+pub use command::{AccountsCommand, AuditCommand, Command, LegacyActorCommand};
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
@@ -54,6 +54,10 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
         }
 
         Command::LegacyActor(action) => run_legacy_actor(action).await,
+
+        Command::Audit(action) => run_audit(action).await,
+
+        Command::Accounts(action) => run_accounts(action).await,
 
         Command::PrintOpenApi => {
             println!(
@@ -108,6 +112,45 @@ async fn run_legacy_actor(action: LegacyActorCommand) -> anyhow::Result<()> {
             LegacyActorCommand::List => deepref_http_api::legacy_actor_list(&config).await?,
         };
         println!("{result}");
+        Ok(())
+    })
+    .await
+}
+
+async fn run_audit(action: AuditCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    with_telemetry(telemetry, async move {
+        match action {
+            AuditCommand::Purge { dry_run } => {
+                println!("{}", deepref_http_api::audit_purge(&config, dry_run).await?);
+            }
+            AuditCommand::Query(params) => {
+                let lines = deepref_http_api::audit_query(&config, params).await?;
+                for line in lines.lines() {
+                    println!("{line}");
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+async fn run_accounts(action: AccountsCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    with_telemetry(telemetry, async move {
+        match action {
+            AccountsCommand::CompleteDeletions => {
+                println!(
+                    "{}",
+                    deepref_http_api::complete_account_deletions(&config).await?
+                );
+            }
+        }
         Ok(())
     })
     .await

@@ -89,6 +89,77 @@ pub async fn legacy_actor_list(config: &ApiConfig) -> anyhow::Result<String> {
     Ok(serde_json::to_string_pretty(&decisions)?)
 }
 
+/// Filters for `deepref-server audit query` (11 Part B). All optional and
+/// combined with AND.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditQueryParams {
+    pub workspace_id: Option<Uuid>,
+    pub principal_user_id: Option<Uuid>,
+    pub target_user_id: Option<Uuid>,
+    pub event_type: Option<String>,
+    /// RFC 3339 lower bound, inclusive.
+    pub since: Option<String>,
+    /// RFC 3339 upper bound, inclusive.
+    pub until: Option<String>,
+    /// Maximum rows; zero means the default.
+    pub limit: i64,
+}
+
+fn parse_time(
+    name: &str,
+    value: Option<&str>,
+) -> anyhow::Result<Option<chrono::DateTime<chrono::Utc>>> {
+    value
+        .map(|value| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .map(|time| time.with_timezone(&chrono::Utc))
+                .map_err(|error| anyhow::anyhow!("invalid {name}: {error}"))
+        })
+        .transpose()
+}
+
+/// Incident-response query over the administrative audit, one JSON object per
+/// line.
+pub async fn audit_query(config: &ApiConfig, params: AuditQueryParams) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let query = deepref_app::audit_admin::AuditQuery {
+        workspace_id: params.workspace_id,
+        principal_user_id: params.principal_user_id,
+        target_user_id: params.target_user_id,
+        event_type: params.event_type,
+        since: parse_time("--since", params.since.as_deref())?,
+        until: parse_time("--until", params.until.as_deref())?,
+        limit: params.limit,
+    };
+    let rows = deepref_app::audit_admin::query_admin_audit(&pool, &query).await?;
+    let mut lines = Vec::with_capacity(rows.len());
+    for row in rows {
+        lines.push(serde_json::to_string(&row)?);
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Retention purge of the administrative audit: 6 months for administrative
+/// and security rows, 5 years for the deletion-proof completion record
+/// (BUSINESS_DECISIONS). With `dry_run` nothing is deleted.
+pub async fn audit_purge(config: &ApiConfig, dry_run: bool) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let report = deepref_app::audit_admin::purge_admin_audit(&pool, dry_run, None).await?;
+    Ok(serde_json::to_string_pretty(&report)?)
+}
+
+/// Completes every account deletion whose 30-day window has passed, and
+/// re-applies deletions a restore undid (11, BUSINESS_DECISIONS).
+pub async fn complete_account_deletions(config: &ApiConfig) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let report = deepref_app::account_deletion::complete_account_deletions(
+        &pool,
+        deepref_app::identity::AuditRequest::default(),
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&report)?)
+}
+
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
     serve_with_shutdown(config, shutdown_signal()).await
 }
