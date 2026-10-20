@@ -280,3 +280,23 @@ Migration 0101 asserts the index is valid, ready and unique and refuses to
 continue otherwise, so a skipped or half-built index can never be accepted. The
 two migrations are unreleased; once released they are immutable and any repair
 is a new migration.
+
+Migrations 0113–0115 build the `auth.rejected` window index and the two
+incident-response query indexes the same way (`CREATE INDEX CONCURRENTLY`,
+`-- no-transaction`, no `IF NOT EXISTS`), and migration 0116 refuses to
+continue unless all three exist and are valid and ready. Recovery is the same
+one: `DROP INDEX CONCURRENTLY IF EXISTS <name>;` by hand, then rerun.
+
+## Audit retention and purge (handoff 11)
+
+The administrative/security audit (`admin_audit_events`) is retained 6 months
+and the proof that a deletion request was fulfilled (`account.deletion_completed`
+and `fulfilled_account_deletions`) 5 years without content, per
+BUSINESS_DECISIONS. Retention is enforced by the append-only trigger
+(migration 0112): only `deepref-server audit purge`, running with the
+transaction-local `deepref.audit_purge` key, can delete, and only rows already
+past their cutoff. The purge runs **daily** (cron or the platform scheduler),
+deletes in bounded batches, is safe to interrupt and rerun, and records each
+real run as `audit.purged`. Details, the incident-response query
+(`deepref-server audit query`) and the account-deletion restore step are in
+[security.md](security.md).
