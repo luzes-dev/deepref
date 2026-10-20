@@ -441,6 +441,10 @@ jobs:
       # runner disk (lld dies with SIGBUS); the lane never reads debuginfo.
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: Start Postgres for integration tests
         run: |
           docker run -d --name postgres \
