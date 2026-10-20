@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_events\n           SET delivery_state = 'delivered',\n               delivered_at = now(),\n               lease_owner = NULL,\n               lease_expires_at = NULL,\n               next_attempt_at = now()\n           WHERE event_id = $1\n             AND delivery_state = 'pending'\n             AND lease_owner = $2 AND claim_generation = $3\n             AND lease_expires_at > clock_timestamp()\n             AND NOT EXISTS (\n               SELECT 1 FROM unnest(outbox_events.expected_consumers) AS expected(consumer)\n               WHERE NOT EXISTS (\n                 SELECT 1 FROM outbox_receipts r\n                 WHERE r.event_id = outbox_events.event_id\n                   AND r.consumer = expected.consumer\n                   AND r.state = 'delivered'))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "465a64fd83a45ae21f58604f5b6567817c4a23523ef2563c56f317e95e5a8a8a"
+}

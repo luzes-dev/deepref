@@ -7,6 +7,33 @@ DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a 
 PostgreSQL owns projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, domain events, durable jobs, graph status, and metric snapshots. The v2 evidence workspace is layered alongside the citation-ingestion model: records, reports, studies, screening events/state, review events, documents, audit rows, and leased jobs are all PostgreSQL tables.
 
 Authoritative state changes and their follow-up jobs are committed in one transaction. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, owns a lease with expiry renewal, retries failures with persisted attempts, marks terminal failures dead, and reclaims expired work. Stable dedupe keys prevent duplicate logical jobs. Ingestion preserves cached/fetched facts, discovered children, citations, events, and completion in the same transaction boundary; reconciliation repairs already-committed rows without silently dropping work.
+
+The generic transactional outbox (`outbox_events` with `outbox_receipts`) and
+the provider integration inbox (`integration_inbox_events`, migration `0083`)
+carry asynchronous publication and inbound WorkOS/Polar webhooks without a
+broker. Outbox rows are inserted in the same transaction as the authoritative
+change they describe and stay broker-independent: an in-process dispatcher in
+the worker claims bounded batches with lease expiry renewal and delivers to the
+typed handlers registered per message type and version, and a row is
+`delivered` only when every expected consumer's receipt — written in the
+consumer's own transaction, with its effect — has committed. Claiming or
+leasing never delivers; per-consumer retries back off and quarantine after
+their attempt budget, and quarantined rows are replayed explicitly with the
+same stable event identity. The inbox verifies provider signatures before any
+insert, deduplicates on `(provider, provider_event_id)`, acknowledges only
+after the insert commits, and moves events through
+`received -> processing -> processed | failed -> quarantined` with the same
+retry and replay discipline. The domain-specific `ai_autonomy_outbox` is
+deliberately kept separate from this generic outbox and is not consolidated
+into it; a later migration would need its own explicit decision and
+delivery/idempotency plan.
+
+Provider handlers treat duplicate and out-of-order webhook events as normal:
+they reload authoritative provider state or compare provider versions where
+available. Provider-specific reconciliation hooks run from the worker's
+existing periodic reconciler; WorkOS and Polar adapters register their hooks
+when those integrations land.
+
 Automation, compiled-review and workflow consumers read lifecycle status and
 timestamps from `durable_runs`, `durable_steps` and `durable_attempts`.
 Recipe, workflow graph and review provenance remain in their typed domain
@@ -80,6 +107,38 @@ Other contexts temporarily retain their existing app-root interfaces.
 `cargo xtask boundaries` rejects SQLx and direct query entry points in migrated
 review and assistant-plan transports; unmigrated contexts and dev-test targets
 are intentionally outside that source rule.
+
+### Acceptance status
+
+Handoff 04a is foundation-only until 02/08 wire real WorkOS/Polar verifiers,
+handlers, and reconciliation. Acceptance still needs provider fixtures for real
+signatures, out-of-order projection updates, missed-event reconciliation, and
+commit-before-ack behavior. Production registries are empty; metrics recompute
+continues to enqueue jobs directly. Dispatcher effects are synthetic test
+fixtures until the production pilot in 04b.
+
+Heartbeat ownership checks are polled before ready handler work where possible.
+Database effects must commit with the generation-fenced receipt or inbox
+completion; an inbox preflight check takes no row lock, and completion is the
+final write before commit so long effect transactions do not block renewal.
+Cancellation cannot retract an external request or COMMIT already submitted.
+External effects need downstream idempotency keys (outbox event ID + consumer,
+or inbox provider + provider event ID), and downstream fencing where supported.
+
+Inbox receipt rejects missing, empty, or whitespace-padded `event_type` with a
+typed error. Provider adapters must supply the verified event's explicit type;
+04a does not accept a provider contract that omits it.
+
+Each due outbox consumer reserves one attempt per claim generation. Failure
+bookkeeping and abandoned-claim recovery settle that reservation without
+charging it again; consumers in backoff reserve nothing. Unsupported frozen
+consumers are parked for five minutes with a diagnostic, and claims exclude
+incompatible sets even beyond the bounded parking batch.
+
+Inbox receipt accepts bodies up to 256 KiB. Processed payloads expire after
+30 days; the explicit `purge_processed_inbox_payloads` app operation replaces
+expired payloads with NULL while retaining `(provider, provider_event_id)` and
+processing evidence for deduplication. No purge scheduler is installed.
 
 ## AI foundation and evidence grounding
 

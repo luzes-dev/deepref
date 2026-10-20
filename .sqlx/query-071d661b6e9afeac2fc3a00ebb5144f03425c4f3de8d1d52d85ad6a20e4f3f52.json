@@ -1,0 +1,116 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH candidate AS (\n             SELECT id FROM integration_inbox_events\n             WHERE next_attempt_at <= clock_timestamp()\n               AND processing_state IN ('received','failed') AND lease_owner IS NULL\n               AND (provider,event_type) IN (SELECT * FROM unnest($4::text[],$5::text[]))\n             ORDER BY received_at,id FOR UPDATE SKIP LOCKED LIMIT $3\n           )\n           UPDATE integration_inbox_events i\n           SET processing_state='processing',lease_owner=$1,\n               lease_expires_at=clock_timestamp()+($2::double precision*interval '1 millisecond'),\n               attempts=i.attempts+1,claim_generation=i.claim_generation+1\n           FROM candidate WHERE i.id=candidate.id\n           RETURNING i.id,i.provider,i.provider_event_id,i.event_type,i.payload AS \"payload!\",\n                     i.attempts,i.max_attempts,i.claim_generation",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "provider",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "provider"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "provider_event_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "provider_event_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "event_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "payload!",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "payload"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "max_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "max_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "claim_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "claim_generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Int8",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "071d661b6e9afeac2fc3a00ebb5144f03425c4f3de8d1d52d85ad6a20e4f3f52"
+}
