@@ -1,0 +1,95 @@
+name: Set up Rust
+description: Install the pinned Rust toolchain and restore the Cargo/sccache caches used by DeepRef CI.
+
+inputs:
+  toolchain:
+    description: Rust toolchain to install and select.
+    required: false
+    default: "1.95.0"
+  components:
+    description: Comma-separated rustup components (for example rustfmt,clippy).
+    required: false
+    default: ""
+  cargo-cache:
+    description: "Cargo cache ownership: none, restore (read-only), or save (restore and update)."
+    required: false
+    default: restore
+  cargo-cache-key-prefix:
+    description: Optional key segment before the Cargo.lock hash.
+    required: false
+    default: ""
+  sccache:
+    description: "sccache mode: none, local-bundle (restore the shared bundle), or gha (GitHub Actions backend)."
+    required: false
+    default: none
+  sccache-version:
+    description: sccache release to install when sccache is enabled.
+    required: false
+    default: v0.17.0
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        COMPONENTS: ${{ inputs.components }}
+      run: |
+        args=(--profile minimal)
+        IFS=',' read -r -a requested_components <<< "$COMPONENTS"
+        for component in "${requested_components[@]}"; do
+          component="${component//[[:space:]]/}"
+          if [[ -n "$component" ]]; then
+            args+=(--component "$component")
+          fi
+        done
+        rustup toolchain install "$TOOLCHAIN" "${args[@]}"
+        rustup override set "$TOOLCHAIN"
+
+    - name: Restore shared Cargo cache
+      if: ${{ inputs.cargo-cache == 'restore' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: cargo-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cargo-cache-key-prefix }}${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cargo-cache-key-prefix }}
+
+    - name: Restore and update shared Cargo cache
+      if: ${{ inputs.cargo-cache == 'save' }}
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: cargo-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cargo-cache-key-prefix }}${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cargo-cache-key-prefix }}
+
+    - name: Restore sccache bundle
+      if: ${{ inputs.sccache == 'local-bundle' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/sccache
+        key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+        restore-keys: |
+          sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
+          sccache-bundle-${{ runner.os }}-rust-
+
+    - name: Set up sccache
+      if: ${{ inputs.sccache != 'none' }}
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: ${{ inputs.sccache-version }}
+
+    - name: Enable sccache compiler wrapper
+      if: ${{ inputs.sccache != 'none' }}
+      shell: bash
+      env:
+        SCCACHE_MODE: ${{ inputs.sccache }}
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        if [[ "$SCCACHE_MODE" == "gha" ]]; then
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        fi

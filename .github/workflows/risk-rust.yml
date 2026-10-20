@@ -57,11 +57,12 @@ jobs:
         run: |
           test "$(cat coverage/rust/revision.txt)" = "$(git rev-parse HEAD)"
           test -s coverage/rust/lcov.info
-      - name: Install pinned Cargo metadata toolchain
+      - name: Set up Cargo metadata toolchain
         if: steps.coverage.outputs.found == 'true'
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup override set 1.95.0
+        uses: ./.github/actions/setup-rust
+        with:
+          cargo-cache: none
+          sccache: none
       - name: Install pinned risk analyzer
         if: steps.coverage.outputs.found == 'true'
         run: |

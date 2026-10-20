@@ -1,0 +1,73 @@
+name: CI / Web
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+      - name: Restore web lint caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apps/web/.cache/eslint
+            apps/web/.cache/prettier
+          key: web-lint-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/web/.prettierrc', 'apps/web/eslint.config.*') }}-${{ github.sha }}
+          restore-keys: web-lint-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/web/.prettierrc', 'apps/web/eslint.config.*') }}-
+      - name: Lint
+        run: pnpm run lint
+      - name: Type-check
+        run: pnpm run check
+      - name: Run web coverage
+        run: pnpm --filter @deepref/web test:coverage
+      - name: Run UI package tests
+        run: pnpm --filter @deepref/ui test
+      - name: Upload web coverage artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-coverage-${{ github.sha }}
+          path: apps/web/coverage/
+          retention-days: 14
+      - name: Build
+        run: pnpm run build
+
+  # Fallow consumes the web coverage artifact and only runs on pull requests,
+  # matching the required Fallow status check.
+  fallow:
+    name: TypeScript quality
+    if: github.event_name == 'pull_request'
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted source with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+      - name: Download web coverage artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-coverage-${{ github.sha }}
+          path: apps/web/coverage
+      - name: Gate new TypeScript quality issues
+        env:
+          FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}
+          FALLOW_COVERAGE: apps/web/coverage/coverage-final.json
+        run: pnpm run quality:ts:audit
+      - name: Scan TypeScript security candidates
+        run: pnpm run quality:ts:security

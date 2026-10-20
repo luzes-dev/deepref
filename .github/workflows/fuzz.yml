@@ -31,10 +31,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install nightly Rust toolchain for libFuzzer
-        run: |
-          rustup toolchain install nightly --profile minimal
-          rustup override set nightly
+      - name: Set up nightly Rust for libFuzzer
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly
+          cargo-cache: none
+          sccache: none
 
       - name: Install pinned cargo-fuzz
         run: |

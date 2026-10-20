@@ -1,0 +1,127 @@
+name: CI / Rust
+
+on:
+  workflow_call:
+    inputs:
+      run-coverage:
+        description: Run the main-branch coverage lane.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  checks:
+    name: ${{ matrix.command }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [fmt, clippy, test, doctest]
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          components: ${{ matrix.command == 'fmt' && 'rustfmt' || matrix.command == 'clippy' && 'clippy' || '' }}
+          cargo-cache: ${{ matrix.command == 'test' && 'save' || 'restore' }}
+          sccache: ${{ matrix.command != 'fmt' && 'local-bundle' || 'none' }}
+      - name: Install pinned cargo-nextest
+        if: matrix.command == 'test'
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest@0.9.143
+          checksum: true
+          fallback: none
+      - name: Validate Cargo workspace architecture
+        if: matrix.command == 'fmt'
+        run: |
+          cargo xtask boundaries
+          cargo test -p xtask --locked
+      - name: Run check
+        env:
+          COMMAND: ${{ matrix.command }}
+          SQLX_OFFLINE: "true"
+        run: |
+          case "$COMMAND" in
+            fmt) cargo fmt --all -- --check ;;
+            clippy) cargo clippy --workspace --lib --bins --tests --examples --locked -- -D warnings ;;
+            test) cargo nextest run --workspace --lib --bins --examples --locked ;;
+            doctest) cargo test --doc --workspace --locked ;;
+          esac
+      # sccache runs against local disk storage shipped as ONE cache bundle per
+      # run: the ghac backend stores one GitHub cache entry per compiled object,
+      # blows past GitHub's save rate limit, and every concurrent writer loses
+      # (observed 577/577 cache_write_errors with 0 stored objects). Only the
+      # test lane persists the bundle because its lib/bins/examples coverage
+      # warms every other rustc lane; clippy-driver and instrumented objects are
+      # lane-local and stay cold.
+      - name: Save sccache bundle
+        if: always() && matrix.command == 'test'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+      - name: Show sccache statistics
+        if: always() && matrix.command != 'fmt'
+        run: |
+          {
+            echo '```'
+            "${SCCACHE_PATH:-sccache}" --show-stats
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  coverage:
+    name: Coverage
+    if: inputs.run-coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          components: llvm-tools-preview
+          cargo-cache: restore
+          sccache: none
+      - name: Install pinned coverage tools
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-llvm-cov@0.9.0,cargo-nextest@0.9.143
+          checksum: true
+          fallback: none
+      # llvm-cov compiles with instrumentation, so every object is unique to
+      # this lane: the shared bundle cannot warm it, and a compiler wrapper
+      # would only cache objects that nothing else ever consumes.
+      - name: Run Rust test coverage
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          mkdir -p target/llvm-cov
+          cargo llvm-cov nextest --lcov --output-path target/llvm-cov/lcov.info --locked
+          cargo llvm-cov report --summary-only
+      - name: Retain coverage artifact for main risk analysis
+        run: |
+          mkdir -p coverage/rust
+          cp target/llvm-cov/lcov.info coverage/rust/lcov.info
+          git rev-parse HEAD > coverage/rust/revision.txt
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-coverage-${{ github.sha }}
+          path: coverage/rust/
+          retention-days: 14

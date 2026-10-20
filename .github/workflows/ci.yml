@@ -17,11 +17,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  CARGO_INCREMENTAL: "0"
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: "1"
-
 jobs:
   changes:
     name: Detect changed paths
@@ -33,6 +28,8 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
+      codegen: ${{ steps.filter.outputs.codegen }}
+      integration: ${{ steps.filter.outputs.integration }}
       containers-pr: ${{ steps.filter.outputs.containers-pr }}
     steps:
       - name: Checkout trusted source
@@ -56,6 +53,9 @@ jobs:
               - '.sqlx/**'
               - 'compose.yaml'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/ci-rust.yml'
+              - '.github/workflows/ci-integration.yml'
+              - '.github/actions/setup-rust/**'
             web:
               - 'apps/web/**'
               - 'packages/**'
@@ -63,6 +63,44 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/ci-web.yml'
+              - '.github/workflows/ci-e2e.yml'
+              - '.github/actions/setup-node/**'
+            codegen:
+              - 'crates/**'
+              - 'services/**'
+              - 'tools/**'
+              - 'review-definitions/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.sqlx/**'
+              - 'apps/web/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'docs/openapi.json'
+              - 'scripts/check-api-codegen.sh'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/ci-codegen.yml'
+              - '.github/actions/setup-rust/**'
+              - '.github/actions/setup-node/**'
+            integration:
+              - 'crates/**'
+              - 'services/**'
+              - 'tools/**'
+              - 'review-definitions/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.sqlx/**'
+              - 'compose.yaml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/ci-integration.yml'
+              - '.github/actions/setup-rust/**'
             containers-pr:
               - 'docker/**'
               - 'docker-bake.hcl'
@@ -75,6 +113,7 @@ jobs:
               - '.sqlx/**'
               - '.github/actions/reproducible-container-build/**'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/ci-containers.yml'
 
   docs:
     name: Documentation contracts
@@ -88,630 +127,147 @@ jobs:
       - name: Validate operations, acceptance, and links
         run: bash scripts/check-docs.sh
 
-  rust:
-    name: Rust / ${{ matrix.command }}
+  rust-checks:
+    name: Rust checks
     needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        command: [fmt, clippy, test, doctest]
-    steps:
-      - name: Skip check (no Rust changes)
-        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
-        run: echo "No Rust changes detected in PR; skipping check."
-      - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust toolchain
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        env:
-          COMMAND: ${{ matrix.command }}
-        run: |
-          case "$COMMAND" in
-            fmt) rustup toolchain install 1.95.0 --profile minimal --component rustfmt ;;
-            clippy) rustup toolchain install 1.95.0 --profile minimal --component clippy ;;
-            doctest) rustup toolchain install 1.95.0 --profile minimal ;;
-            test) rustup toolchain install 1.95.0 --profile minimal ;;
-          esac
-          rustup override set 1.95.0
-      - name: Install pinned cargo-nextest
-        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'test'
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-nextest@0.9.143
-          checksum: true
-          fallback: none
-      - name: Restore shared Cargo cache
-        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'test'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-1.95.0-
-      - name: Restore and update shared Cargo cache
-        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'test'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-1.95.0-
-      # sccache runs against local disk storage shipped as ONE cache bundle per
-      # run: the ghac backend stores one GitHub cache entry per compiled object,
-      # blows past GitHub's save rate limit, and every concurrent writer loses
-      # (observed 577/577 cache_write_errors with 0 stored objects). Only the
-      # test lane persists the bundle (save step below) because its
-      # lib/bins/examples coverage warms every other rustc lane; clippy-driver
-      # and instrumented objects are lane-local and stay cold.
-      - name: Restore sccache bundle
-        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
-            sccache-bundle-${{ runner.os }}-rust-
-      - name: Set up sccache for compile-heavy checks
-        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Enable sccache compiler wrapper
-        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-      - name: Validate Cargo workspace architecture
-        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'fmt'
-        run: |
-          cargo xtask boundaries
-          cargo test -p xtask --locked
-      - name: Run check
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        env:
-          COMMAND: ${{ matrix.command }}
-          SQLX_OFFLINE: "true"
-        run: |
-          case "$COMMAND" in
-            fmt) cargo fmt --all -- --check ;;
-            clippy) cargo clippy --workspace --lib --bins --tests --examples --locked -- -D warnings ;;
-            test) cargo nextest run --workspace --lib --bins --examples --locked ;;
-            doctest) cargo test --doc --workspace --locked ;;
-          esac
-      - name: Save sccache bundle
-        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'test'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
-      - name: Show sccache statistics
-        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
-        run: |
-          {
-            echo '```'
-            "${SCCACHE_PATH:-sccache}" --show-stats
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      run-coverage: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true' }}
 
-  coverage:
-    name: Coverage / Rust
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true'
+  web-checks:
+    name: Web checks
     needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout trusted source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust toolchain
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal --component llvm-tools-preview
-          rustup override set 1.95.0
-      - name: Install pinned tools
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-llvm-cov@0.9.0,cargo-nextest@0.9.143
-          checksum: true
-          fallback: none
-      - name: Restore shared Cargo cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-1.95.0-
-      # llvm-cov compiles with instrumentation, so every object is unique to
-      # this lane: the shared bundle cannot warm it, and a compiler wrapper
-      # would only cache objects that nothing else ever consumes.
-      - name: Run Rust test coverage
-        env:
-          SQLX_OFFLINE: "true"
-        run: |
-          mkdir -p target/llvm-cov
-          cargo llvm-cov nextest --lcov --output-path target/llvm-cov/lcov.info --locked
-          cargo llvm-cov report --summary-only
-      - name: Retain coverage artifact for main risk analysis
-        run: |
-          mkdir -p coverage/rust
-          cp target/llvm-cov/lcov.info coverage/rust/lcov.info
-          git rev-parse HEAD > coverage/rust/revision.txt
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rust-coverage-${{ github.sha }}
-          path: coverage/rust/
-          retention-days: 14
+    if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+    uses: ./.github/workflows/ci-web.yml
 
-  web:
-    name: Web
+  codegen-checks:
+    name: Codegen check
     needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - name: Skip check (no Web changes)
-        if: github.event_name != 'push' && needs.changes.outputs.web != 'true'
-        run: echo "No Web changes detected in PR; skipping check."
-      - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up pnpm
-        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.3.0
-      - name: Set up Node.js
-        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        run: pnpm install --frozen-lockfile
-      - name: Restore web lint caches
-        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            apps/web/.cache/eslint
-            apps/web/.cache/prettier
-          key: web-lint-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/web/.prettierrc', 'apps/web/eslint.config.*') }}-${{ github.sha }}
-          restore-keys: web-lint-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/web/.prettierrc', 'apps/web/eslint.config.*') }}-
-      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        run: pnpm run lint
-      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        run: pnpm run check
-      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        run: pnpm --filter @deepref/web test:coverage
-      - name: Run UI package tests
-        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        run: pnpm --filter @deepref/ui test
-      - name: Upload web coverage artifact
-        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-coverage-${{ github.sha }}
-          path: apps/web/coverage/
-          retention-days: 14
-      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
-        run: pnpm run build
+    if: github.event_name == 'push' || needs.changes.outputs.codegen == 'true'
+    uses: ./.github/workflows/ci-codegen.yml
 
-  fallow:
-    name: Fallow
-    if: github.event_name == 'pull_request'
-    needs: [changes, web]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Skip check (no Web changes)
-        if: needs.changes.outputs.web != 'true'
-        run: echo "No Web changes detected in PR; skipping check."
-      - name: Checkout trusted source with history
-        if: needs.changes.outputs.web == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Set up pnpm
-        if: needs.changes.outputs.web == 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.3.0
-      - name: Set up Node.js
-        if: needs.changes.outputs.web == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-      - if: needs.changes.outputs.web == 'true'
-        run: pnpm install --frozen-lockfile
-      - name: Download web coverage artifact
-        if: needs.changes.outputs.web == 'true'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-coverage-${{ github.sha }}
-          path: apps/web/coverage
-      - name: Gate new TypeScript quality issues
-        if: needs.changes.outputs.web == 'true'
-        env:
-          FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}
-          FALLOW_COVERAGE: apps/web/coverage/coverage-final.json
-        run: pnpm run quality:ts:audit
-      - name: Scan TypeScript security candidates
-        if: needs.changes.outputs.web == 'true'
-        run: pnpm run quality:ts:security
-
-  codegen:
-    name: OpenAPI and Orval drift
+  integration-checks:
+    name: Integration checks
     needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Skip check (no Rust or Web changes)
-        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true' && needs.changes.outputs.web != 'true'
-        run: echo "No Rust or Web changes detected in PR; skipping check."
-      - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust toolchain
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup override set 1.95.0
-      - name: Restore shared Cargo cache
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-1.95.0-
-      - name: Restore sccache bundle
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
-            sccache-bundle-${{ runner.os }}-rust-
-      - name: Set up sccache
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Enable sccache compiler wrapper
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-      - name: Set up pnpm
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.3.0
-      - name: Set up Node.js
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        run: pnpm install --frozen-lockfile
-      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        run: pnpm run generate:api:check
-        env:
-          SQLX_OFFLINE: "true"
-      - name: Prove drift check left the tree clean
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        run: git diff --exit-code
-      - name: Show sccache statistics
-        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true')
-        run: |
-          {
-            echo '```'
-            "${SCCACHE_PATH:-sccache}" --show-stats
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+    if: github.event_name == 'push' || needs.changes.outputs.integration == 'true'
+    uses: ./.github/workflows/ci-integration.yml
 
-  full-stack:
-    name: Full-stack integration
+  e2e-checks:
+    name: Browser checks
     needs: changes
-    if: >-
-      always() &&
-      (github.event_name == 'push' || needs.changes.outputs.rust == 'true') &&
-      needs.changes.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-      DEEPREF_REQUIRE_DATABASE: "1"
-      # Linking every integration-test binary with full debuginfo exhausts the
-      # runner disk (lld dies with SIGBUS); the lane never reads debuginfo.
-      CARGO_PROFILE_DEV_DEBUG: "0"
-    steps:
-      - name: Free runner disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
-      - name: Start Postgres for integration tests
-        run: |
-          docker run -d --name postgres \
-            -e POSTGRES_USER=postgres \
-            -e POSTGRES_PASSWORD=postgres \
-            -e POSTGRES_DB=deepref \
-            -p 127.0.0.1:5432:5432 \
-            pgvector/pgvector:0.8.7-pg17-bookworm \
-            postgres -c max_connections=300
-          for _ in $(seq 1 45); do
-            if docker exec postgres pg_isready --username postgres --dbname deepref >/dev/null 2>&1; then
-              echo "Postgres is ready"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "Postgres did not become ready in time" >&2
-          exit 1
-      - name: Checkout trusted source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust toolchain
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup override set 1.95.0
-      - name: Install pinned cargo-nextest
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-nextest@0.9.143
-          checksum: true
-          fallback: none
-      - name: Install pinned cargo-binstall
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-binstall@1.22.0
-          checksum: true
-          fallback: none
-      # cargo-binstall occasionally falls back to compiling sqlx-cli from
-      # source when the release download flakes (observed 177 s). Install once
-      # per runner OS and reuse afterwards. sqlx-cli ships two binaries: the
-      # standalone `sqlx` and the `cargo-sqlx` dispatch wrapper required by
-      # `cargo sqlx migrate run`; cache BOTH and verify BOTH by file presence
-      # rather than trusting cache-hit — restoring `sqlx` alone passes the
-      # existence check while cargo cannot dispatch `cargo sqlx` without the
-      # wrapper (observed "no such command: sqlx"), so the -r3 key supersedes
-      # the wrapper-less -r2 archive and the earlier wildcard entry. Cache
-      # paths must be exact files, not globs: actions/cache stores wildcard
-      # matches relative to the pattern base, so restoring them re-roots under
-      # the repo directory instead of ~/.cargo/bin.
-      - name: Restore sqlx-cli
-        id: sqlx-cli
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/bin/sqlx
-            ~/.cargo/bin/cargo-sqlx
-          key: sqlx-cli-0.9.0-${{ runner.os }}-r3
-      - name: Install pinned sqlx-cli
-        id: install-sqlx
-        run: |
-          if test -x "$HOME/.cargo/bin/sqlx" && test -x "$HOME/.cargo/bin/cargo-sqlx"; then
-            echo "sqlx already present"
-          else
-            cargo binstall --no-confirm sqlx-cli@0.9.0
-            echo "installed=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Save sqlx-cli
-        if: steps.install-sqlx.outputs.installed == 'true'
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/bin/sqlx
-            ~/.cargo/bin/cargo-sqlx
-          key: sqlx-cli-0.9.0-${{ runner.os }}-r3
-      - name: Restore shared Cargo cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-1.95.0-
-      - name: Restore sccache bundle
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
-            sccache-bundle-${{ runner.os }}-rust-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Enable sccache compiler wrapper
-        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-      # Note: an overlap experiment (nextest build holding cargo's target-dir
-      # build lock while the check compiled) was measured on run 38975468142
-      # and returned ~zero: the lane is compile/link/database bound on one
-      # shared 4-core runner, and a single runner cannot interleave CPU-heavy
-      # link work underneath an already CPU-heavy build+test tail. Serial
-      # steps are kept because they stream nextest progress in the job UI.
-      - name: Apply database migrations
-        env:
-          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-        run: |
-          cargo sqlx migrate run \
-            --source crates/app/migrations \
-            --database-url "$DATABASE_URL" \
-            --no-dotenv
-      - name: Verify SQLx offline query metadata against live database
-        env:
-          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-        run: cargo xtask sqlx check
-      - name: Run integration tests
-        run: cargo nextest run --workspace --tests --locked --profile ci
-      - name: Show sccache statistics
-        if: always()
-        run: |
-          {
-            echo '```'
-            "${SCCACHE_PATH:-sccache}" --show-stats
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+    if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+    uses: ./.github/workflows/ci-e2e.yml
 
-  browser-e2e:
-    name: Browser E2E
+  containers-checks:
+    name: Container checks
     needs: changes
-    if: >-
-      always() &&
-      (github.event_name == 'push' || needs.changes.outputs.web == 'true') &&
-      needs.changes.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      E2E_SKIP_WEB_BUILD: "1"
-    steps:
-      - name: Checkout trusted source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.3.0
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # actions/cache's implicit post-save lost its reservation whenever cache
-      # traffic peaked ("another job may be creating this cache"). Restore and
-      # save are split explicitly, and save only runs when the lockfile key
-      # missed, i.e. once per Playwright version bump.
-      - name: Restore Playwright browsers
-        id: playwright-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
-            playwright-${{ runner.os }}-
-      - name: Install Chromium
-        run: pnpm --filter @deepref/web exec playwright install --with-deps chromium
-      - name: Save Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Build web preview bundle
-        run: pnpm --filter @deepref/web exec vite build
-      - name: Run browser tests
-        run: pnpm --filter @deepref/web test:e2e
+    if: github.event_name == 'push' || needs.changes.outputs.containers-pr == 'true'
+    uses: ./.github/workflows/ci-containers.yml
 
-  containers:
-    name: Reproducible container build
-    needs: changes
-    if: >-
-      always() &&
-      (github.event_name == 'push' || needs.changes.outputs.containers-pr == 'true') &&
-      needs.changes.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    steps:
-      - name: Checkout trusted source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Validate release images on native amd64
-        uses: ./.github/actions/reproducible-container-build
-        with:
-          platform: linux/amd64
-          cache-arch: amd64
-
-  containers-arm64:
-    name: Reproducible container build / arm64
-    if: github.event_name == 'push'
-    needs: changes
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 35
-    steps:
-      - name: Checkout trusted source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Validate release images on native arm64
-        uses: ./.github/actions/reproducible-container-build
-        with:
-          platform: linux/arm64
-          cache-arch: arm64
-
+  # Required status checks are the repository's external interface. These
+  # gates keep their names stable even though the implementation lives in
+  # reusable workflows. Path-filtered lanes may be skipped on pull requests and
+  # merge-group runs; push-to-main is always strict.
   rust-required:
     name: Rust
     if: always()
-    needs: rust
+    needs: [changes, rust-checks]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify Rust checks
         env:
-          RESULT: ${{ needs.rust.result }}
-        run: test "$RESULT" = "success"
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUST_RESULT: ${{ needs.rust-checks.result }}
+        run: bash scripts/ci/check-required-results.sh Rust "changed paths=$CHANGES_RESULT" "Rust checks=$RUST_RESULT"
+
+  web-required:
+    name: Web
+    if: always()
+    needs: [changes, web-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify Web checks
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          WEB_RESULT: ${{ needs.web-checks.result }}
+        run: bash scripts/ci/check-required-results.sh Web "changed paths=$CHANGES_RESULT" "Web checks=$WEB_RESULT"
+
+  fallow-required:
+    name: Fallow
+    if: always()
+    needs: [changes, web-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify Fallow
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          WEB_RESULT: ${{ needs.web-checks.result }}
+        run: bash scripts/ci/check-required-results.sh Fallow "changed paths=$CHANGES_RESULT" "Web checks=$WEB_RESULT"
+
+  codegen-required:
+    name: OpenAPI and Orval drift
+    if: always()
+    needs: [changes, codegen-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify codegen drift
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODEGEN_RESULT: ${{ needs.codegen-checks.result }}
+        run: bash scripts/ci/check-required-results.sh "OpenAPI and Orval drift" "changed paths=$CHANGES_RESULT" "Codegen check=$CODEGEN_RESULT"
 
   e2e-required:
     name: E2E
     if: always()
-    needs: [full-stack, browser-e2e]
+    needs: [changes, integration-checks, e2e-checks]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify E2E checks
         env:
-          INTEGRATION_RESULT: ${{ needs.full-stack.result }}
-          BROWSER_RESULT: ${{ needs.browser-e2e.result }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
-            # Path-filtered lanes legitimately skip on PRs and queued merge
-            # commits; keep push strict.
-            test "$INTEGRATION_RESULT" = "success" || test "$INTEGRATION_RESULT" = "skipped"
-            test "$BROWSER_RESULT" = "success" || test "$BROWSER_RESULT" = "skipped"
-          else
-            test "$INTEGRATION_RESULT" = "success"
-            test "$BROWSER_RESULT" = "success"
-          fi
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          INTEGRATION_RESULT: ${{ needs.integration-checks.result }}
+          BROWSER_RESULT: ${{ needs.e2e-checks.result }}
+        run: bash scripts/ci/check-required-results.sh E2E "changed paths=$CHANGES_RESULT" "Integration tests=$INTEGRATION_RESULT" "Browser tests=$BROWSER_RESULT"
 
   docker-required:
     name: Docker
     if: always()
-    needs: [containers, containers-arm64]
+    needs: [changes, containers-checks]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify container builds
         env:
-          AMD64_RESULT: ${{ needs.containers.result }}
-          ARM64_RESULT: ${{ needs.containers-arm64.result }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
-            # PR image builds are path-filtered, and queued merge commits reuse
-            # the same acceptance; push-to-main always builds both arches.
-            test "$AMD64_RESULT" = "success" || test "$AMD64_RESULT" = "skipped"
-          else
-            test "$AMD64_RESULT" = "success"
-            test "$ARM64_RESULT" = "success"
-          fi
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CONTAINERS_RESULT: ${{ needs.containers-checks.result }}
+        run: bash scripts/ci/check-required-results.sh Docker "changed paths=$CHANGES_RESULT" "Container builds=$CONTAINERS_RESULT"
