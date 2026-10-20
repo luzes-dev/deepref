@@ -9,14 +9,17 @@
 //! per-workspace deletion, and a cancellation racing a completion, are
 //! reproduced exactly instead of hoped for.
 
+use std::time::Duration;
+
 use deepref_app::account_deletion::{
     AccountDeletionError, DeletionCancellationOutcome, DeletionRequestOutcome, FORMER_MEMBER_LABEL,
     PII_METADATA_KEYS, REDACTED, WorkspaceOutcome, cancel_account_deletion,
     complete_account_deletions, complete_workspace, request_account_deletion, workos_tombstone,
     workspace_candidates,
 };
-use deepref_app::identity::AuditRequest;
+use deepref_app::identity::{AuditRequest, record_logout};
 use deepref_app::workspaces::MIGRATION_WORKSPACE_ID;
+use deepref_app::{map_legacy_actor, record_legacy_actor_non_identity};
 use deepref_domain::{UserId, WorkspaceId};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -28,6 +31,36 @@ const AUDIT: AuditRequest<'_> = AuditRequest {
 
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+}
+
+async fn wait_for_lock_wait(pool: &PgPool, query_fragments: &[&str]) {
+    let patterns: Vec<String> = query_fragments
+        .iter()
+        .map(|fragment| format!("%{fragment}%"))
+        .collect();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                   SELECT 1 FROM pg_stat_activity
+                   WHERE datname = current_database()
+                     AND pid <> pg_backend_pid()
+                     AND wait_event_type = 'Lock'
+                     AND query ILIKE ANY($1)
+                 )",
+            )
+            .bind(&patterns)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the concurrent statement reaches its expected lock wait");
 }
 
 async fn make_user(pool: &PgPool, id: Uuid, email: &str, name: &str) -> UserId {
@@ -193,7 +226,8 @@ async fn personal_data_leaks(pool: &PgPool, needles: &[&str]) -> Vec<String> {
     let columns: Vec<(String, String)> = sqlx::query_as(
         "SELECT table_name, column_name FROM information_schema.columns
          WHERE table_schema = 'public'
-           AND data_type IN ('text', 'character varying', 'character', 'jsonb', 'json')
+           AND (data_type IN ('text', 'character varying', 'character', 'jsonb', 'json')
+                OR (data_type = 'ARRAY' AND udt_name IN ('_text', '_varchar', '_bpchar')))
          ORDER BY table_name, column_name",
     )
     .fetch_all(pool)
@@ -520,14 +554,22 @@ async fn completion_erases_the_personal_data_and_keeps_history() {
     .unwrap();
     assert_eq!(deactivated, "account_deletion");
 
-    // The fulfillment log holds no content.
+    // The fulfillment log keeps only identifiers, the time and a one-way
+    // normalized-address digest; it never stores plaintext email.
     let logged = sqlx::query("SELECT * FROM fulfilled_account_deletions WHERE user_id = $1")
         .bind(user.as_uuid())
         .fetch_optional(&pool)
         .await
         .unwrap();
     let logged = logged.expect("fulfillment logged");
-    assert_eq!(logged.columns().len(), 2);
+    assert_eq!(logged.columns().len(), 3);
+    let email_sha256: Vec<String> = logged.get("email_sha256");
+    let expected_digest: String =
+        sqlx::query_scalar("SELECT encode(digest('gone@example.org', 'sha256'), 'hex')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(email_sha256, vec![expected_digest]);
 
     // Nothing anywhere still carries the email, the name or the WorkOS id.
     let leaks = personal_data_leaks(
@@ -547,34 +589,43 @@ async fn no_row_anywhere_holds_the_personal_data_after_completion() {
     let Some(pool) = database().await else {
         return;
     };
-    let user = make_user(&pool, Uuid::new_v4(), "erased@example.org", "Erased Person").await;
+    let user = make_user(&pool, Uuid::new_v4(), "Gone@Example.org", "Erased Person").await;
     let other = make_user(&pool, Uuid::new_v4(), "other@example.org", "Other Person").await;
+    let operator = make_user(&pool, Uuid::new_v4(), "operator@example.org", "Operator").await;
     let shared = make_workspace(&pool, Uuid::new_v4(), "shared-workspace").await;
     add_member(&pool, shared, user, "owner").await;
     add_member(&pool, shared, other, "member").await;
     make_session(
         &pool,
         user,
-        "sealed payload Erased Person erased@example.org erased workos id",
+        "sealed payload Erased Person Gone@Example.org erased workos id",
     )
     .await;
-    make_invitation(&pool, shared, "erased@example.org", "pending").await;
-    make_invitation(&pool, shared, "erased@example.org", "accepted").await;
-    make_invitation(&pool, shared, "erased@example.org", "expired").await;
-    make_invitation(&pool, shared, "erased@example.org", "revoked").await;
-    sqlx::query(
-        "INSERT INTO admin_audit_events
-           (id, event_type, principal_kind, principal_user_id, target_user_id, metadata)
-         VALUES ($1, 'legacy_actor.non_identity_recorded', 'user', $2, $3,
-                 jsonb_build_object(
-                   'legacy_actor_kind', 'user',
-                   'legacy_actor_id', 'Erased Person erased@example.org',
-                   'source', 'legacy spreadsheet naming Erased Person'))",
+    make_invitation(&pool, shared, "gone@example.org", "pending").await;
+    make_invitation(&pool, shared, "gone@example.org", "accepted").await;
+    make_invitation(&pool, shared, "gone@example.org", "expired").await;
+    make_invitation(&pool, shared, "gone@example.org", "revoked").await;
+    let workos_id = format!("user_{}", user.as_uuid());
+    let mapped_actor_id = format!("legacy-map-{}", Uuid::new_v4());
+    let non_identity_actor_id = format!("legacy-not-{}", Uuid::new_v4());
+    map_legacy_actor(
+        &pool,
+        "user",
+        &mapped_actor_id,
+        user,
+        operator,
+        &format!("archive confirms Erased Person, Gone@Example.org, {workos_id}"),
     )
-    .bind(Uuid::new_v4())
-    .bind(other.as_uuid())
-    .bind(user.as_uuid())
-    .execute(&pool)
+    .await
+    .unwrap();
+    record_legacy_actor_non_identity(
+        &pool,
+        "user",
+        &non_identity_actor_id,
+        user,
+        operator,
+        &format!("review note for Erased Person, gone@example.org, {workos_id}"),
+    )
     .await
     .unwrap();
 
@@ -582,8 +633,57 @@ async fn no_row_anywhere_holds_the_personal_data_after_completion() {
     age_request(&pool, user, 31).await;
     complete_account_deletions(&pool, AUDIT).await.unwrap();
 
-    let leaks = personal_data_leaks(&pool, &["erased@example.org", "Erased Person"]).await;
+    let leaks = personal_data_leaks(
+        &pool,
+        &[
+            "Gone@Example.org",
+            "gone@example.org",
+            "Erased Person",
+            &workos_id,
+        ],
+    )
+    .await;
     assert!(leaks.is_empty(), "personal data survived: {leaks:#?}");
+    let mapping = sqlx::query(
+        "SELECT legacy_actor_id, user_id, confirmed_by, confirmed_at, source
+         FROM legacy_actor_mappings WHERE legacy_actor_id = $1",
+    )
+    .bind(&mapped_actor_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(mapping.get::<String, _>("legacy_actor_id"), mapped_actor_id);
+    assert_eq!(mapping.get::<Uuid, _>("user_id"), user.as_uuid());
+    assert_eq!(mapping.get::<Uuid, _>("confirmed_by"), operator.as_uuid());
+    assert!(
+        mapping
+            .get::<Option<chrono::DateTime<chrono::Utc>>, _>("confirmed_at")
+            .is_some()
+    );
+    assert_eq!(mapping.get::<String, _>("source"), REDACTED);
+    let non_identity = sqlx::query(
+        "SELECT legacy_actor_id, user_id, recorded_by, recorded_at, source
+         FROM legacy_actor_non_identities WHERE legacy_actor_id = $1",
+    )
+    .bind(&non_identity_actor_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        non_identity.get::<String, _>("legacy_actor_id"),
+        non_identity_actor_id
+    );
+    assert_eq!(non_identity.get::<Uuid, _>("user_id"), user.as_uuid());
+    assert_eq!(
+        non_identity.get::<Uuid, _>("recorded_by"),
+        operator.as_uuid()
+    );
+    assert!(
+        non_identity
+            .get::<Option<chrono::DateTime<chrono::Utc>>, _>("recorded_at")
+            .is_some()
+    );
+    assert_eq!(non_identity.get::<String, _>("source"), REDACTED);
     // The colleague's data is untouched by the erasure.
     let untouched = personal_data_leaks(&pool, &["other@example.org", "Other Person"]).await;
     assert!(
@@ -907,7 +1007,7 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
     let Some(pool) = database().await else {
         return;
     };
-    let user = make_user(&pool, Uuid::new_v4(), "back@example.org", "Back Person").await;
+    let user = make_user(&pool, Uuid::new_v4(), "Gone@Example.org", "Back Person").await;
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
 
@@ -949,6 +1049,7 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
         .execute(&pool)
         .await
         .unwrap();
+    let colleague = make_user(&pool, Uuid::new_v4(), "colleague@example.org", "Colleague").await;
     let restored_workspace = make_workspace(&pool, Uuid::new_v4(), "restored-workspace").await;
     add_member(&pool, restored_workspace, user, "owner").await;
     make_session(
@@ -957,8 +1058,10 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
         "sealed payload Restored Person restored@example.org",
     )
     .await;
+    let invitation_workspace = make_workspace(&pool, Uuid::new_v4(), "invite-workspace").await;
+    add_member(&pool, invitation_workspace, colleague, "owner").await;
     let restored_invitation =
-        make_invitation(&pool, restored_workspace, "restored@example.org", "pending").await;
+        make_invitation(&pool, invitation_workspace, "gone@example.org", "pending").await;
 
     let third = complete_account_deletions(&pool, AUDIT).await.unwrap();
     assert_eq!(third.completed, 0);
@@ -978,8 +1081,15 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
         .await
         .unwrap(),
         0,
-        "the restored session and invitation go again"
+        "the restored session and original-address invitation go again"
     );
+    let restored_email: String =
+        sqlx::query_scalar("SELECT primary_email FROM users WHERE id = $1")
+            .bind(user.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(restored_email, FORMER_MEMBER_LABEL);
     // Re-applying is not a second deletion: the completion record stands once.
     assert_eq!(events(&pool, "account.deletion_completed").await, 1);
 }
@@ -1066,6 +1176,76 @@ async fn completion_waits_the_full_grace_period() {
 }
 
 #[tokio::test]
+async fn logout_and_finalization_serialize_without_a_deadlock() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let user = make_user(
+        &pool,
+        Uuid::new_v4(),
+        "logout-race@example.org",
+        "Logout Race",
+    )
+    .await;
+    let mut token_hash = [0u8; 32];
+    token_hash[..16].copy_from_slice(&Uuid::new_v4().to_bytes_le());
+    sqlx::query(
+        "INSERT INTO user_sessions
+           (id, user_id, session_token_hash, sealed_provider_session, session_ref, expires_at)
+         VALUES ($1, $2, $3, 'sealed provider payload', $3, now() + interval '1 hour')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user.as_uuid())
+    .bind(&token_hash[..])
+    .execute(&pool)
+    .await
+    .unwrap();
+    request_account_deletion(&pool, user, AUDIT).await.unwrap();
+    age_request(&pool, user, 31).await;
+
+    // Hold the session row while logout starts. Once logout is queued on that
+    // row, finalization reaches its user/session lock path. Releasing this
+    // holder reproduces the former session-then-user deadlock deterministically.
+    let mut session_holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM user_sessions WHERE session_token_hash = $1 FOR UPDATE")
+        .bind(&token_hash[..])
+        .fetch_one(&mut *session_holder)
+        .await
+        .unwrap();
+    let logout_pool = pool.clone();
+    let logout_hash = token_hash;
+    let logout =
+        tokio::spawn(async move { record_logout(&logout_pool, &logout_hash[..], AUDIT).await });
+    wait_for_lock_wait(&pool, &["UPDATE user_sessions"]).await;
+
+    let completion_pool = pool.clone();
+    let completion =
+        tokio::spawn(async move { complete_account_deletions(&completion_pool, AUDIT).await });
+    wait_for_lock_wait(
+        &pool,
+        &[
+            "SELECT id FROM users WHERE id = $1 FOR UPDATE",
+            "DELETE FROM user_sessions WHERE user_id = $1",
+        ],
+    )
+    .await;
+    session_holder.commit().await.unwrap();
+
+    let (logout_result, completion_result) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(logout, completion)
+    })
+    .await
+    .expect("logout and finalization finish after lock release");
+    assert!(
+        logout_result.unwrap().is_ok(),
+        "logout completed without deadlock"
+    );
+    let report = completion_result.unwrap().unwrap();
+    assert_eq!(report.completed, 1);
+    assert_eq!(events(&pool, "account.deletion_completed").await, 1);
+}
+
+#[tokio::test]
 async fn the_audit_redaction_gate_is_narrow_and_scoped_to_one_user() {
     let Some(pool) = database().await else {
         return;
@@ -1073,23 +1253,33 @@ async fn the_audit_redaction_gate_is_narrow_and_scoped_to_one_user() {
     let user = make_user(&pool, Uuid::new_v4(), "labelled@example.org", "Labelled").await;
     let other = make_user(&pool, Uuid::new_v4(), "other@example.org", "Other").await;
     let event = Uuid::new_v4();
+    let other_event = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO admin_audit_events
            (id, event_type, principal_kind, principal_user_id, target_user_id, metadata)
          VALUES ($1, 'legacy_actor.mapped', 'user', $2, $3,
                  jsonb_build_object(
                    'legacy_actor_kind', 'user',
-                   'legacy_actor_id', 'Labelled labelled@example.org',
-                   'source', 'legacy spreadsheet'))",
+                   'legacy_actor_id', 'legacy-label',
+                   'source', 'legacy spreadsheet for Labelled')),
+               ($4, 'legacy_actor.mapped', 'user', $5, $6,
+                 jsonb_build_object(
+                   'legacy_actor_kind', 'user',
+                   'legacy_actor_id', 'other-label',
+                   'source', 'legacy spreadsheet for Other'))",
     )
     .bind(event)
     .bind(other.as_uuid())
     .bind(user.as_uuid())
+    .bind(other_event)
+    .bind(user.as_uuid())
+    .bind(other.as_uuid())
     .execute(&pool)
     .await
     .unwrap();
 
-    // Without the gate every UPDATE is still refused.
+    // A direct UPDATE remains refused, and the SECURITY DEFINER function
+    // refuses to authorize redaction for an active account.
     let refused = sqlx::query(
         "UPDATE admin_audit_events
          SET metadata = jsonb_build_object(
@@ -1101,68 +1291,32 @@ async fn the_audit_redaction_gate_is_narrow_and_scoped_to_one_user() {
     .await
     .unwrap_err();
     assert!(refused.to_string().contains("append-only"), "{refused}");
+    let refused = sqlx::query("SELECT redact_deleted_user_audit($1)")
+        .bind(user.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("requires a deleted user"),
+        "{refused}"
+    );
 
-    // The gate names one user; another user's rows stay closed.
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT set_config('deepref.audit_redact', $1, true)")
-        .bind(other.as_uuid().to_string())
-        .execute(&mut *tx)
+    // This fixture now represents a deletion that has crossed the durable
+    // marker. The function can redact its row, while it leaves another user's
+    // audit metadata and all event identifiers untouched.
+    sqlx::query("UPDATE users SET status = 'deactivated', deleted_at = now() WHERE id = $1")
+        .bind(user.as_uuid())
+        .execute(&pool)
         .await
         .unwrap();
-    let refused = sqlx::query(
-        "UPDATE admin_audit_events
-         SET metadata = metadata || jsonb_build_object(
-               'legacy_actor_id', 'redacted', 'source', 'redacted')
-         WHERE id = $1",
-    )
-    .bind(event)
-    .execute(&mut *tx)
-    .await
-    .unwrap_err();
-    assert!(refused.to_string().contains("append-only"), "{refused}");
-    tx.rollback().await.unwrap();
-
-    // Even for the right user, only the named keys may move: an identifier
-    // change is refused.
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT set_config('deepref.audit_redact', $1, true)")
-        .bind(user.as_uuid().to_string())
-        .execute(&mut *tx)
+    let changed: i64 = sqlx::query_scalar("SELECT redact_deleted_user_audit($1)")
+        .bind(user.as_uuid())
+        .fetch_one(&pool)
         .await
         .unwrap();
-    let refused = sqlx::query(
-        "UPDATE admin_audit_events
-         SET metadata = jsonb_build_object(
-               'legacy_actor_kind', 'user', 'legacy_actor_id', 'redacted', 'source', 'redacted'),
-             target_user_id = NULL
-         WHERE id = $1",
-    )
-    .bind(event)
-    .execute(&mut *tx)
-    .await
-    .unwrap_err();
-    assert!(refused.to_string().contains("append-only"), "{refused}");
-    tx.rollback().await.unwrap();
-    // The narrow redaction itself is allowed.
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query("SELECT set_config('deepref.audit_redact', $1, true)")
-        .bind(user.as_uuid().to_string())
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::query(
-        "UPDATE admin_audit_events
-         SET metadata = metadata || jsonb_build_object(
-               'legacy_actor_id', 'redacted', 'source', 'redacted')
-         WHERE id = $1",
-    )
-    .bind(event)
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
+    assert_eq!(changed, 1);
 
-    // And the gate does not outlive its transaction.
+    // The function's SET LOCAL gate does not escape its transaction.
     let refused = sqlx::query(
         "UPDATE admin_audit_events
          SET metadata = metadata || jsonb_build_object(
@@ -1196,6 +1350,16 @@ async fn the_audit_redaction_gate_is_narrow_and_scoped_to_one_user() {
         Some(REDACTED)
     );
     assert_eq!(metadata.get("legacy_actor_kind").unwrap(), "user");
+    let untouched: serde_json::Value =
+        sqlx::query_scalar("SELECT metadata FROM admin_audit_events WHERE id = $1")
+            .bind(other_event)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        untouched.get("source").unwrap(),
+        "legacy spreadsheet for Other"
+    );
 }
 
 /// The WorkOS link tombstone is what makes a later sign-in a NEW account: no

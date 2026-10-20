@@ -18,10 +18,11 @@
 -- N-1 sign-in SQL and restores at the database boundary, independently of the
 -- compliance log below (which is purged after five years).
 --
--- `fulfilled_account_deletions` is the log of completed deletions: user id and
--- completion time only, no content, kept five years per BUSINESS_DECISIONS.
--- Restores replay it so a restored backup never brings deleted personal data
--- back (docs/security.md, "Restore step").
+-- `fulfilled_account_deletions` is the log of completed deletions: user id,
+-- completion time, and (in 0117) normalized-email SHA-256 digests, never
+-- plaintext addresses. It is kept five years per BUSINESS_DECISIONS. Restores
+-- replay it so a restored backup never brings deleted personal data back
+-- (docs/security.md, "Restore step").
 CREATE TABLE account_deletion_requests (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES users (id),

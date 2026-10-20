@@ -658,13 +658,37 @@ pub async fn record_logout(
     audit: AuditRequest<'_>,
 ) -> Result<Option<RevokedSession>, IdentityStoreError> {
     let mut tx = pool.begin().await?;
+    // Finalization locks the user before deleting that user's sessions. Take
+    // the same order here so logout cannot hold a session row while waiting on
+    // the user's foreign-key lock from its audit insert.
+    let user_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM user_sessions
+         WHERE session_token_hash = $1 AND revoked_at IS NULL",
+    )
+    .bind(token_hash)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(user_id) = user_id else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let locked_user: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if locked_user.is_none() {
+        tx.commit().await?;
+        return Ok(None);
+    }
     let row = sqlx::query(
         "UPDATE user_sessions
          SET revoked_at = now()
-         WHERE session_token_hash = $1 AND revoked_at IS NULL
+         WHERE session_token_hash = $1 AND user_id = $2 AND revoked_at IS NULL
          RETURNING user_id, session_ref, sealed_provider_session",
     )
     .bind(token_hash)
+    .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {

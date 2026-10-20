@@ -239,8 +239,8 @@ pub async fn purge_admin_audit(
     Ok(report)
 }
 
-/// The fulfilled-deletion log is a compliance record with no content; after
-/// five years (BUSINESS_DECISIONS) its rows go the same way.
+/// The fulfilled-deletion log contains no plaintext content; its address
+/// digests are also removed after five years (BUSINESS_DECISIONS).
 async fn count_purgeable_fulfilled_rows(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let pending: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM fulfilled_account_deletions

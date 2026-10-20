@@ -2,7 +2,10 @@
 //! Workspaces, onboarding, reconciliation, membership removal and the
 //! administrative audit of tenancy changes (03a).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 
 use deepref_app::identity::{
     AuditRequest, Deactivation, NewBrowserSession, SignIn, deactivate_user,
@@ -30,6 +33,33 @@ use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+}
+
+async fn wait_for_activity_lock(pool: &PgPool, query_fragment: &str) {
+    let pattern = format!("%{query_fragment}%");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                   SELECT 1 FROM pg_stat_activity
+                   WHERE datname = current_database()
+                     AND pid <> pg_backend_pid()
+                     AND wait_event_type = 'Lock'
+                     AND query ILIKE $1
+                 )",
+            )
+            .bind(&pattern)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the concurrent statement reaches its expected lock wait");
 }
 
 fn external(id: &str) -> ExternalUserId {
@@ -955,6 +985,70 @@ async fn the_reconciliation_entry_point_walks_every_organization() {
     };
     let failed = reconcile_organizations(&pool, &unavailable, AuditRequest::default()).await;
     assert!(matches!(failed, Err(WorkspaceError::Directory(_))));
+}
+
+#[tokio::test]
+async fn reconciliation_serializes_with_workspace_deletion_in_lock_order() {
+    let Some(pool) = database().await else { return };
+    let user = sign_in_user(&pool, "lock-order-user").await;
+    let workspace = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO workspaces (id, kind, name, slug, workos_organization_id)
+         VALUES ($1, 'organization', 'Lock order org', 'lock-order-org', 'org_lock_order')",
+    )
+    .bind(workspace)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workspace_memberships
+           (id, workspace_id, user_id, role, status, grant_source)
+         VALUES ($1, $2, $3, 'owner', 'active', 'local')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(workspace)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Hold the workspace lock as deletion does, then start WorkOS
+    // reconciliation. It must wait on the workspace before touching any
+    // membership row, so deletion can finish without a lock cycle.
+    let mut deletion = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE")
+        .bind(workspace)
+        .fetch_one(&mut *deletion)
+        .await
+        .unwrap();
+    let reconcile_pool = pool.clone();
+    let reconcile = tokio::spawn(async move {
+        apply_organization_snapshot(
+            &reconcile_pool,
+            &snapshot("org_lock_order", "Lock order org", &[]),
+            AuditRequest::default(),
+        )
+        .await
+    });
+    wait_for_activity_lock(&pool, "SELECT id FROM workspaces WHERE id = $1 FOR UPDATE").await;
+
+    sqlx::query("DELETE FROM workspace_memberships WHERE workspace_id = $1")
+        .bind(workspace)
+        .execute(&mut *deletion)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM workspaces WHERE id = $1")
+        .bind(workspace)
+        .execute(&mut *deletion)
+        .await
+        .unwrap();
+    deletion.commit().await.unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(5), reconcile)
+        .await
+        .expect("reconciliation exits after deletion releases the workspace lock")
+        .unwrap();
+    assert!(matches!(result, Err(WorkspaceError::UnknownWorkspace)));
 }
 
 fn at(snapshot: OrganizationSnapshot, minutes_ago: i64) -> OrganizationSnapshot {

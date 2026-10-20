@@ -151,7 +151,7 @@ BUSINESS_DECISIONS fixes retention:
 | --- | --- |
 | Administrative and security audit (`admin_audit_events`) | 6 months |
 | `account.deletion_completed` (proof a deletion request was fulfilled) | 5 years, no content |
-| `fulfilled_account_deletions` (user id + completion time) | 5 years, no content |
+| `fulfilled_account_deletions` (user id, completion time, normalized-email SHA-256 digests) | 5 years; no plaintext email |
 
 Archival is not needed: the rows are the record, and the purge removes them
 when their retention ends.
@@ -250,13 +250,18 @@ Per BUSINESS_DECISIONS and handoff 11:
      the operator recovery flow (as with 03a's global deactivation) and is
      listed in `workspaces_left_ownerless` in the command output. A sole
      non-owner membership never deletes a workspace;
+   - **workspace lock order**: reconciliation and deletion lock the workspace
+     row before locking any membership rows. Reconciliation releases that row
+     at transaction end; deletion never holds request or user locks while it
+     processes workspaces;
    - **finalize** (one transaction, request lock then user lock): anonymize
      the user (email and display name `Former member`, `verified_email`
      cleared, WorkOS link tombstoned as `deleted:<user uuid>`, `deleted_at`
      set), delete every session row (they hold the sealed provider payload),
-     delete pending invitations addressed to the user and rewrite the address
-     of the other invitation rows to `deleted-<invitation id>@invalid`,
-     redact the PII in audit metadata (below), log
+     delete pending invitations addressed to the user's normalized-address
+     digests and rewrite the address of the other matching invitation rows to
+     `deleted-<invitation id>@invalid`, redact native legacy-decision sources
+     and the PII in audit metadata (below), log
      `fulfilled_account_deletions`, move the request to `completed`, and
      write `user.deactivated` (`source: account_deletion`),
      `auth.session_revoked` (`user_deactivated`) and the deletion-proof
@@ -278,6 +283,12 @@ never while holding either). Completion is due only from `requested` past 30
 days, or resuming `completing`; `completed` is never due, whatever happens to
 the five-year proof row.
 
+Membership writers, WorkOS reconciliation, and account-deletion workspace
+cleanup use **workspace row, then membership rows**. Reconciliation acquires
+`lock_workspace` before its `FOR UPDATE` membership scan. This makes its lock
+order match deletion, so neither transaction holds memberships while waiting
+for the workspace.
+
 #### PII erasure
 
 - `users`: see finalize above. The durable marker is `users.deleted_at`, set at
@@ -289,9 +300,22 @@ the five-year proof row.
 - Audit metadata that can hold a name is the `legacy_actor_id` and `source`
   keys of `legacy_actor.mapped` / `legacy_actor.non_identity_recorded` rows
   about the user. Completion replaces them with `redacted` through
-  `SET LOCAL deepref.audit_redact = '<user uuid>'`; the append-only trigger
-  (migration 0112) accepts only that one user's rows, only those two keys and
-  only that value, with every other column unchanged.
+  `redact_deleted_user_audit(user_id)`, a SECURITY DEFINER function that
+  refuses unless the user is already marked deleted or the deletion request is
+  `completing`. It sets the transaction-local gate internally. The append-only
+  trigger (migration 0117) accepts only that user's rows, only those two keys
+  and only that value, with every other column unchanged. Public execution is
+  revoked; a separate `deepref_app` role receives only this function when that
+  role exists. A database superuser can still set the custom GUC directly;
+  the trigger also checks the target user and deletion state, and only a
+  superuser can bypass those database controls.
+- Native `legacy_actor_mappings` and `legacy_actor_non_identities` keep their
+  actor ids, user ids, operator ids and confirmation timestamps. Completion
+  redacts their free-text `source` fields to `redacted`.
+- The fulfillment log stores lowercase hex SHA-256 digests of the normalized
+  primary and verified email addresses, never plaintext. Replays hash each
+  invitation's normalized address and compare the digest, even when a restore
+  has replaced the users row with an unrelated profile.
 - Sessions are also purged 30 days after expiry or revocation
   (`deepref-server audit purge`, `session_rows_purged`).
 
@@ -304,7 +328,7 @@ is fulfilled for the first time.
 
 Backups roll over 35 days; a restore can bring deleted personal data back.
 `fulfilled_account_deletions` is the standing log that prevents it (keep a
-copy in the ops records, it is two columns and no content):
+copy in the ops records, including the address digests and no plaintext):
 
 1. Restore the backup as usual.
 2. Make sure the restore carries the `fulfilled_account_deletions` log
@@ -312,7 +336,8 @@ copy in the ops records, it is two columns and no content):
 3. Run `deepref-server accounts complete-deletions`.
 
 Every logged deletion is replayed on every run, regardless of the profile
-fields: sessions and invitation addresses are cleaned again, solely-owned
+fields: sessions and invitation addresses are cleaned again from the stored
+email digests, solely-owned
 workspaces recreated since (restore or WorkOS reconciliation) are deleted
 again, and the users row is anonymized again (and held there by the trigger
 if `deleted_at` survived). Restored `requested`/`completing` requests of a

@@ -11,8 +11,13 @@
 //! absence at the provider deactivates `workos_mirrored` grants and nothing
 //! else, `local` grants are preserved, and every disagreement is returned as
 //! a [`ReconciliationFinding`] instead of being resolved silently.
+//!
+//! Membership transactions take locks in this order: workspace row first,
+//! then membership rows. WorkOS reconciliation and account deletion use the
+//! same order, so neither can hold membership rows while waiting for the
+//! workspace row.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use deepref_application::workspaces::{
     DirectoryError, DirectoryMembership, DirectoryMembershipStatus, DirectoryOrganization,
@@ -997,23 +1002,31 @@ pub(crate) async fn remove_membership_in_transaction(
 /// Account-deletion PII erasure for invitations (11 Part B): a pending
 /// invitation addressed to the account is revoked (audited) and deleted, and
 /// every other invitation row that carries the address keeps its history under
-/// the tombstone `deleted-<invitation id>@invalid`. Returns how many rows
-/// changed. The addresses are matched with the normalization invitations use.
+/// the tombstone `deleted-<invitation id>@invalid`. The parameter contains
+/// only SHA-256 digests of normalized account addresses, so replay does not
+/// depend on the restored profile. Returns how many rows changed.
 pub(crate) async fn scrub_user_invitations(
     tx: &mut Transaction<'_, Postgres>,
     actor: UserId,
-    emails: &[String],
+    email_sha256: &[String],
     audit: AuditRequest<'_>,
 ) -> Result<u64, WorkspaceError> {
-    if emails.is_empty() {
+    let digests: Vec<String> = email_sha256
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if digests.is_empty() {
         return Ok(0);
     }
     let pending = sqlx::query(
         "SELECT id, workspace_id, role FROM workspace_invitations
-         WHERE status = 'pending' AND lower(btrim(email)) = ANY($1)
+         WHERE status = 'pending'
+           AND encode(digest(lower(btrim(email)), 'sha256'), 'hex') = ANY($1)
          ORDER BY created_at, id",
     )
-    .bind(emails)
+    .bind(&digests)
     .fetch_all(&mut **tx)
     .await?;
     for row in &pending {
@@ -1034,22 +1047,36 @@ pub(crate) async fn scrub_user_invitations(
     }
     let deleted = sqlx::query(
         "DELETE FROM workspace_invitations
-         WHERE status = 'pending' AND lower(btrim(email)) = ANY($1)",
+         WHERE status = 'pending'
+           AND encode(digest(lower(btrim(email)), 'sha256'), 'hex') = ANY($1)",
     )
-    .bind(emails)
+    .bind(&digests)
     .execute(&mut **tx)
     .await?
     .rows_affected();
     let rewritten = sqlx::query(
         "UPDATE workspace_invitations
          SET email = 'deleted-' || id || '@invalid', updated_at = now()
-         WHERE status <> 'pending' AND lower(btrim(email)) = ANY($1)",
+         WHERE status <> 'pending'
+           AND encode(digest(lower(btrim(email)), 'sha256'), 'hex') = ANY($1)",
     )
-    .bind(emails)
+    .bind(&digests)
     .execute(&mut **tx)
     .await?
     .rows_affected();
     Ok(deleted + rewritten)
+}
+
+/// Normalizes and deduplicates addresses before they cross the SQL boundary.
+/// The result is used only to derive SHA-256 digests for deletion replay; the
+/// original addresses are never persisted in the fulfillment log.
+pub(crate) fn normalize_invitation_emails(emails: &[String]) -> Vec<String> {
+    emails
+        .iter()
+        .filter_map(|email| normalize_invitation_email(email))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Applies one WorkOS Organization snapshot to local projections, in one
@@ -1080,12 +1107,6 @@ pub async fn apply_organization_snapshot(
         ))
         .execute(&mut *tx)
         .await?;
-    let watermark: Option<Option<chrono::DateTime<chrono::Utc>>> = sqlx::query_scalar(
-        "SELECT workos_reconciled_through FROM workspaces WHERE workos_organization_id = $1",
-    )
-    .bind(snapshot.organization.external_organization_id.as_str())
-    .fetch_optional(&mut *tx)
-    .await?;
     let workspace = match find_workspace_by_organization(
         &mut tx,
         &snapshot.organization.external_organization_id,
@@ -1115,6 +1136,15 @@ pub async fn apply_organization_snapshot(
             workspace
         }
     };
+    // All membership writers and account deletion take the workspace row
+    // before locking membership rows. Acquire it before the snapshot read too,
+    // or deletion can form a lock cycle with this reconciliation.
+    lock_workspace(&mut tx, workspace.id).await?;
+    let watermark: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT workos_reconciled_through FROM workspaces WHERE id = $1")
+            .bind(workspace.id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await?;
     let mut report = ReconciliationReport {
         workspace_id: workspace.id,
         created: 0,
@@ -1122,7 +1152,7 @@ pub async fn apply_organization_snapshot(
         status_changes: 0,
         findings: Vec::new(),
     };
-    if let Some(Some(through)) = watermark
+    if let Some(through) = watermark
         && snapshot.fetch_started_at < through
     {
         // Newer state is already applied. Applying this snapshot could restore

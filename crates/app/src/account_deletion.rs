@@ -11,10 +11,12 @@
 //!   the other ones and only withdraws this account's membership from them;
 //! * keeps every scientific provenance reference and the whole audit history;
 //! * deletes the session rows (they hold the sealed provider payload),
-//!   scrubs the invitation addresses, and redacts the PII in audit metadata;
+//!   scrubs invitation addresses from persisted digests, redacts native
+//!   legacy-decision sources, and redacts the PII in audit metadata;
 //! * writes the audit rows and the deletion-proof `account.deletion_completed`
-//!   row, logs the fulfillment in `fulfilled_account_deletions` (user id and
-//!   time only), and moves the request to its terminal `completed` state.
+//!   row, logs the fulfillment in `fulfilled_account_deletions` (user id, time,
+//!   and normalized-address SHA-256 digests, never plaintext email), and moves
+//!   the request to its terminal `completed` state.
 //!
 //! # State machine and locking
 //!
@@ -59,7 +61,7 @@ use crate::project_audit::record_project_deleted;
 use crate::project_deletion::delete_project_in_transaction;
 use crate::workspaces::{
     MIGRATION_WORKSPACE_ID, WorkspaceError, delete_workspace_rows, lock_workspace,
-    remove_membership_in_transaction, scrub_user_invitations,
+    normalize_invitation_emails, remove_membership_in_transaction, scrub_user_invitations,
 };
 
 /// What the anonymized account keeps showing where a name is due
@@ -640,14 +642,51 @@ async fn finalize_account(
         }
         addresses
     };
-    let newly_fulfilled = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO fulfilled_account_deletions (user_id) VALUES ($1)
-         ON CONFLICT (user_id) DO NOTHING RETURNING user_id",
+    // A replay uses the first completion's digests, not whichever profile is
+    // present after a restore. Normalize and deduplicate before binding the
+    // addresses; only their hashes are persisted in the fulfillment log.
+    let stored_email_sha256: Option<Vec<String>> = sqlx::query_scalar(
+        "SELECT email_sha256 FROM fulfilled_account_deletions WHERE user_id = $1",
     )
     .bind(user.as_uuid())
     .fetch_optional(&mut *tx)
-    .await?
-    .is_some();
+    .await?;
+    let (newly_fulfilled, email_sha256) = if let Some(digests) = stored_email_sha256 {
+        (false, digests)
+    } else {
+        let normalized_addresses = normalize_invitation_emails(&addresses);
+        let digests: Vec<String> = sqlx::query_scalar(
+            "SELECT COALESCE(
+               array_agg(DISTINCT encode(digest(email, 'sha256'), 'hex')),
+               ARRAY[]::text[])
+             FROM unnest($1::text[]) AS normalized(email)",
+        )
+        .bind(&normalized_addresses)
+        .fetch_one(&mut *tx)
+        .await?;
+        let inserted: Option<Vec<String>> = sqlx::query_scalar(
+            "INSERT INTO fulfilled_account_deletions (user_id, email_sha256)
+             VALUES ($1, $2)
+             ON CONFLICT (user_id) DO NOTHING
+             RETURNING email_sha256",
+        )
+        .bind(user.as_uuid())
+        .bind(&digests)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match inserted {
+            Some(stored) => (true, stored),
+            None => {
+                let stored: Vec<String> = sqlx::query_scalar(
+                    "SELECT email_sha256 FROM fulfilled_account_deletions WHERE user_id = $1",
+                )
+                .bind(user.as_uuid())
+                .fetch_one(&mut *tx)
+                .await?;
+                (false, stored)
+            }
+        }
+    };
 
     // The PII goes; the user id and everything that references it stays.
     // `deleted_at` is the durable marker the trigger of migration 0111 keeps,
@@ -696,28 +735,36 @@ async fn finalize_account(
 
     // Invitation addresses: the pending ones are revoked (audited) and
     // deleted, the historical rows keep their history under the tombstone
-    // `deleted-<invitation id>@invalid`.
-    let invitations_scrubbed = scrub_user_invitations(&mut tx, user, &addresses, audit).await?;
+    // `deleted-<invitation id>@invalid`. Replays match normalized invitation
+    // addresses against the durable digests, never the anonymized profile.
+    let invitations_scrubbed = scrub_user_invitations(&mut tx, user, &email_sha256, audit).await?;
 
-    // Audit metadata that can hold a name is redacted through the same narrow
-    // transaction-local gate the purge uses (migration 0112): only the named
-    // PII keys of this account's rows move to the tombstone.
-    sqlx::query("SELECT set_config('deepref.audit_redact', $1, true)")
-        .bind(user.as_uuid().to_string())
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE admin_audit_events
-         SET metadata = metadata || jsonb_build_object(
-               'legacy_actor_id', 'redacted', 'source', 'redacted')
-         WHERE target_user_id = $1
-           AND event_type IN ('legacy_actor.mapped', 'legacy_actor.non_identity_recorded')
-           AND (metadata->>'legacy_actor_id' IS DISTINCT FROM 'redacted'
-                OR metadata->>'source' IS DISTINCT FROM 'redacted')",
+    // The native 0103 confirmation rows keep their ids, user references, and
+    // confirmation facts; only free-text sources are redacted. Audit metadata
+    // is redacted by the SECURITY DEFINER gate in 0117, which authorizes only
+    // deleted users or requests already in `completing`.
+    let legacy_mappings_scrubbed = sqlx::query(
+        "UPDATE legacy_actor_mappings SET source = $2
+         WHERE user_id = $1 AND source IS DISTINCT FROM $2",
     )
     .bind(user.as_uuid())
+    .bind(REDACTED)
     .execute(&mut *tx)
-    .await?;
+    .await?
+    .rows_affected();
+    let legacy_non_identities_scrubbed = sqlx::query(
+        "UPDATE legacy_actor_non_identities SET source = $2
+         WHERE user_id = $1 AND source IS DISTINCT FROM $2",
+    )
+    .bind(user.as_uuid())
+    .bind(REDACTED)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let audit_metadata_scrubbed: i64 = sqlx::query_scalar("SELECT redact_deleted_user_audit($1)")
+        .bind(user.as_uuid())
+        .fetch_one(&mut *tx)
+        .await?;
 
     // The request reaches its terminal state in the same transaction as the
     // fulfillment, so it is never due again.
@@ -783,6 +830,9 @@ async fn finalize_account(
         changed: users_changed > 0
             || sessions_deleted > 0
             || invitations_scrubbed > 0
+            || legacy_mappings_scrubbed > 0
+            || legacy_non_identities_scrubbed > 0
+            || audit_metadata_scrubbed > 0
             || request_completed,
     })
 }
