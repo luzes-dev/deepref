@@ -1133,6 +1133,7 @@ dependencies = [
  "deepref-worker",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

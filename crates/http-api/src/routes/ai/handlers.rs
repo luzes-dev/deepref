@@ -113,7 +113,8 @@ pub(crate) async fn get_ai_proposal(
 pub(crate) async fn decide_ai_proposal(
     State(state): State<AppState>,
     Path((project_id, proposal_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<DecideAiProposalRequest>,
 ) -> Result<Json<AiProposalDecisionDto>, ApiError> {
     if input.reason.trim().is_empty() || input.reason.len() > 2_000 {
@@ -121,7 +122,7 @@ pub(crate) async fn decide_ai_proposal(
             "reason must be between 1 and 2000 characters".to_owned(),
         ));
     }
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let decision = match input.decision {
         AiProposalDecisionInput::Accept => AiProposalDecision::Accept,
         AiProposalDecisionInput::Reject => AiProposalDecision::Reject,

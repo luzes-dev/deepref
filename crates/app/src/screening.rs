@@ -464,7 +464,7 @@ pub async fn get_screening_queue(
         project_id,
         status,
         search,
-        query.reviewer_id.as_deref(),
+        query.reviewer_id.map(deepref_domain::UserId::as_uuid),
     )
     .await?;
     let progress = queue_progress(pool, project_id).await?;
@@ -876,7 +876,7 @@ async fn queue_rows(
         ) doi ON true
         LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id
         WHERE pr.project_id=$1
-          AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($11,'local-user')))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($11,'local-user')))
+          AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible_v2(pr.project_id,pr.report_id,$11))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v2(pr.project_id,pr.report_id,$11))
           AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')
           AND (
             NOT $4::boolean
@@ -912,7 +912,7 @@ async fn queue_rows(
     .bind(cursor_title)
     .bind(cursor_year)
     .bind(limit)
-    .bind(query.reviewer_id.as_deref())
+    .bind(query.reviewer_id.map(deepref_domain::UserId::as_uuid))
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -934,7 +934,7 @@ async fn validate_cursor(
         JOIN reports r ON r.id = pr.report_id
         LEFT JOIN screening_state ss ON ss.project_id = pr.project_id AND ss.report_id = pr.report_id
         WHERE pr.project_id = $1 AND pr.report_id = $2
-          AND ($3='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$3 AND ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($5,'local-user')))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($5,'local-user')))
+          AND ($3='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$3 AND ai_first_queue_visible_v2(pr.project_id,pr.report_id,$5))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v2(pr.project_id,pr.report_id,$5))
           AND ($4::text IS NULL OR lower(coalesce(r.title, '') || ' ' || coalesce(r.abstract_text, '')) LIKE '%' || lower($4) || '%')
         "#,
     )
@@ -942,7 +942,7 @@ async fn validate_cursor(
     .bind(cursor.report_id)
     .bind(status)
     .bind(search)
-    .bind(query.reviewer_id.as_deref())
+    .bind(query.reviewer_id.map(deepref_domain::UserId::as_uuid))
     .fetch_optional(pool)
     .await?
     .ok_or(ScreeningError::InvalidCursor)?;
@@ -961,10 +961,10 @@ async fn queue_total(
     project_id: Uuid,
     status: &str,
     search: Option<&str>,
-    reviewer: Option<&str>,
+    reviewer: Option<uuid::Uuid>,
 ) -> Result<i64, ScreeningError> {
     Ok(sqlx::query_scalar(
-        "SELECT count(*)::bigint FROM project_reports pr JOIN reports r ON r.id=pr.report_id LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id WHERE pr.project_id=$1 AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($4,'local-user')))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($4,'local-user'))) AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')",
+        "SELECT count(*)::bigint FROM project_reports pr JOIN reports r ON r.id=pr.report_id LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id WHERE pr.project_id=$1 AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible_v2(pr.project_id,pr.report_id,$4))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v2(pr.project_id,pr.report_id,$4)) AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')",
     )
     .bind(project_id)
     .bind(status)

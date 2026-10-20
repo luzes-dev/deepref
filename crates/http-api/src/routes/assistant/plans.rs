@@ -21,7 +21,6 @@ use uuid::Uuid;
 use super::{AssistantFailure, execute_proposal};
 use crate::{
     error::{ApiError, ErrorResponse},
-    routes::actor::extract_actor,
     state::AppState,
 };
 
@@ -272,9 +271,10 @@ pub(crate) async fn get_plan(
 pub(crate) async fn reject_plan(
     State(state): State<AppState>,
     Path((project_id, plan_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<AssistantPlanDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     load_plan(&state, project_id, plan_id).await?;
     let record = deepref_app::claim_assistant_plan(
         &state.pool,
@@ -312,11 +312,12 @@ pub(crate) async fn confirm_plan(
     State(state): State<AppState>,
     session: Option<crate::auth::CurrentSession>,
     Path((project_id, plan_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     body: Option<Json<ConfirmAssistantPlanRequestDto>>,
 ) -> Result<Json<AssistantPlanDto>, ApiError> {
     let principal = session.map(|session| session.0.principal);
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let request = body.map(|Json(request)| request).unwrap_or_default();
     let pending = load_plan(&state, project_id, plan_id).await?;
     let deselection = Deselection::checked(&parse_actions(&pending.actions), &request)?;

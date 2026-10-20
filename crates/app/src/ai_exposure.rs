@@ -296,7 +296,7 @@ pub async fn independent_reviewer_pairs(
                   WHERE o.project_id=t.project_id AND o.report_id=t.report_id AND o.stage=t.stage
                     AND o.exposure_possible_at <= t.human_at
                     AND (o.audience_actor_id IS NULL OR t.actor_id IS NULL
-                         OR (o.audience_actor_kind=t.actor_kind AND o.audience_actor_id=t.actor_id))
+                         OR same_human_actor_identity(o.audience_actor_kind,o.audience_actor_id,t.actor_kind,t.actor_id))
                 ) AS exposed,
                 t.human_at IS NULL AS unverifiable
          FROM (

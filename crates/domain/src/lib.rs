@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod protocol;
 mod provider;
 mod reference;
+pub mod scientific_assignment;
 mod work;
 pub mod workspace;
 
@@ -25,6 +26,7 @@ pub use ingestion::{IngestionItemStatus, IngestionStatus};
 pub use jobs::{InvalidJobKind, JobKind};
 pub use provider::{InvalidProviderKind, ProviderKind};
 pub use reference::Reference;
+pub use scientific_assignment::ScientificAssignmentRole;
 pub use work::{FetchStatus, Work, WorkWithReferences};
 pub use workspace::{
     ExternalOrganizationId, ExternalOrganizationIdError, GrantSource, MembershipStatus,

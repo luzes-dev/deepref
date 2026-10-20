@@ -10,7 +10,7 @@ use deepref_application::{
 };
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
-    ScreeningStage, ScreeningStatus,
+    ScreeningStage, ScreeningStatus, UserId,
 };
 use deepref_review::ai_first::AiFirstCeiling;
 use deepref_review::{
@@ -38,7 +38,28 @@ async fn insert_fixture_route(pool: &PgPool) {
 }
 
 fn actor(id: &str) -> Actor {
-    Actor::new(ActorKind::User, id).unwrap()
+    let value = id.as_bytes().iter().fold(0_u128, |hash, byte| {
+        hash.wrapping_mul(257).wrapping_add(u128::from(*byte))
+    });
+    Actor::new(ActorKind::User, Uuid::from_u128(value).to_string()).unwrap()
+}
+
+fn user_id(id: &str) -> UserId {
+    UserId::new(Uuid::parse_str(actor(id).id()).unwrap())
+}
+
+async fn add_user(pool: &PgPool, id: &str) {
+    let user_id = user_id(id);
+    sqlx::query(
+        "INSERT INTO users(id,workos_user_id,primary_email,status) \
+         VALUES($1,$2,$3,'active') ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(user_id.as_uuid())
+    .bind(format!("ai-first-{id}"))
+    .bind(format!("{id}@example.test"))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 6).await
@@ -59,6 +80,9 @@ impl Fixture {
             .execute(&pool)
             .await
             .unwrap();
+        for id in ["owner", "reviewer-a", "reviewer-b"] {
+            add_user(&pool, id).await;
+        }
         insert_fixture_route(&pool).await;
         let protocol = Self::publish(&pool, project).await;
         let mut x = Vec::new();
@@ -83,6 +107,18 @@ impl Fixture {
         let cohort = start_ai_first_cohort(&pool, project, 95, allow_finalization, &actor("owner"))
             .await
             .unwrap();
+        for id in ["reviewer-a", "reviewer-b"] {
+            sqlx::query(
+                "INSERT INTO scientific_assignments(project_id,user_id,role,assigned_by) \
+                 VALUES($1,$2,'fresh_ai_auditor',$3)",
+            )
+            .bind(project)
+            .bind(user_id(id).as_uuid())
+            .bind(user_id("owner").as_uuid())
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
         // Seed validated exclusions through trusted storage fixtures. Routing itself
         // is exercised by compiled-worker tests; these tests isolate the audit lifecycle.
         for id in &x {
@@ -298,7 +334,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
     let queue = get_screening_queue(
         &f.pool,
         GetScreeningQueueQuery {
-            reviewer_id: Some("reviewer-a".into()),
+            reviewer_id: Some(user_id("reviewer-a")),
             project_id: f.project.into(),
             status: ScreeningQueueStatus::Unscreened,
             search: None,
@@ -360,7 +396,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
         .is_err()
     );
     let mut filtered = GetScreeningQueueQuery {
-        reviewer_id: Some("reviewer-a".into()),
+        reviewer_id: Some(user_id("reviewer-a")),
         project_id: f.project.into(),
         status: ScreeningQueueStatus::Include,
         search: None,
@@ -383,7 +419,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
             .total,
         queue.total
     );
-    filtered.reviewer_id = Some("reviewer-initial".into());
+    filtered.reviewer_id = Some(user_id("reviewer-initial"));
     assert!(
         get_screening_queue(&f.pool, filtered)
             .await
@@ -399,7 +435,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
         "default queue must use frozen mixed order"
     );
     let mut page_query = GetScreeningQueueQuery {
-        reviewer_id: Some("reviewer-a".into()),
+        reviewer_id: Some(user_id("reviewer-a")),
         project_id: f.project.into(),
         status: ScreeningQueueStatus::Unscreened,
         search: None,

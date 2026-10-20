@@ -25,7 +25,7 @@ use deepref_app::identity::{
 use deepref_application::identity::{
     IdentityError, OpaqueSecret, ProviderSession, RefreshOutcome, SessionStatus,
 };
-use deepref_domain::Principal;
+use deepref_domain::{Principal, UserId};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -122,8 +122,15 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedPrincipal {
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
         parts
             .extensions
-            .get::<SessionContext>()
-            .map(|session| Self(session.principal))
+            .get::<Principal>()
+            .copied()
+            .map(Self)
+            .or_else(|| {
+                parts
+                    .extensions
+                    .get::<SessionContext>()
+                    .map(|session| Self(session.principal))
+            })
             .ok_or(ApiError::Auth(AuthFailure::Unauthenticated))
     }
 }
@@ -152,6 +159,7 @@ impl<S: Send + Sync> OptionalFromRequestParts<S> for CurrentSession {
 #[derive(Clone)]
 pub(crate) struct SessionGate {
     pub(crate) enabled: bool,
+    pub(crate) development: bool,
     pub(crate) state: AppState,
 }
 
@@ -167,11 +175,15 @@ pub(crate) async fn authenticate_requests(
     next: Next,
 ) -> Response {
     if !gate.enabled {
+        if gate.development {
+            request
+                .extensions_mut()
+                .insert(Principal::user(UserId::new(Uuid::from_u128(3))));
+        }
         return next.run(request).await;
     }
-    // `x-actor-*` headers are legacy scientific attribution only (read by
-    // `extract_actor` until 03c). Nothing here reads them, and they are left
-    // untouched: identity is the session's `UserId`, carried as an extension.
+    // N-1 browsers may still send `x-actor-*`; attribution comes only from the
+    // active session principal carried as a request extension.
     let access = access_for(request.uri().path());
     if access == Access::Open {
         return next.run(request).await;
@@ -184,6 +196,7 @@ pub(crate) async fn authenticate_requests(
         .filter(|value| !value.is_empty());
     match resolve(&auth, &gate.state.pool, cookie_token).await {
         Ok(Resolution::Authenticated(session)) => {
+            request.extensions_mut().insert(session.principal);
             request.extensions_mut().insert(*session);
             next.run(request).await
         }

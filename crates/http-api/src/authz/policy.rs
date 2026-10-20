@@ -178,6 +178,30 @@ pub static ROUTES: &[RouteRule] = &[
         Permission::ProjectView,
         "project-scoped job backlog and failures",
     ),
+    project(
+        Verb::Get,
+        "/projects/{project_id}/scientific-assignments",
+        Permission::ProjectView,
+        "active methodology assignments for project viewers",
+    ),
+    tested(
+        handler(
+            Verb::Post,
+            "/projects/{project_id}/scientific-assignments",
+            Permission::WorkspaceManage,
+            "methodology assignments are managed by workspace managers",
+        ),
+        "authz_user_scoped::scientific_assignment_management_requires_workspace_manage",
+    ),
+    tested(
+        handler(
+            Verb::Delete,
+            "/projects/{project_id}/scientific-assignments/{user_id}/{role}",
+            Permission::WorkspaceManage,
+            "methodology assignment revocation requires workspace managers",
+        ),
+        "authz_user_scoped::scientific_assignment_management_requires_workspace_manage",
+    ),
     project_query(
         Verb::Get,
         "/ai/status",

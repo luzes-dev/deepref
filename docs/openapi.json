@@ -6106,7 +6106,7 @@
             }
           },
           "400": {
-            "description": "Invalid run bounds or actor",
+            "description": "Invalid run bounds",
             "content": {
               "application/json": {
                 "schema": {
@@ -9503,6 +9503,212 @@
           },
           "404": {
             "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/scientific-assignments": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "listScientificAssignments",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active scientific assignments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScientificAssignmentDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "assignScientificRole",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignScientificRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Scientific assignment created or already active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScientificAssignmentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scientific role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or user not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/scientific-assignments/{user_id}/{role}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "revokeScientificRole",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Assigned user",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "description": "Scientific role",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked scientific assignment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScientificAssignmentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scientific role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or active assignment not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -13868,6 +14074,22 @@
           },
           "requires_evidence": {
             "type": "boolean"
+          }
+        }
+      },
+      "AssignScientificRoleRequest": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -18874,18 +19096,6 @@
           "reason"
         ],
         "properties": {
-          "actor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "actor_kind": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "decision": {
             "$ref": "#/components/schemas/ProposalDecisionInput"
           },
@@ -19206,18 +19416,6 @@
         "properties": {
           "action": {
             "$ref": "#/components/schemas/RecordResolutionActionInput"
-          },
-          "actor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "actor_kind": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "proposal_id": {
             "type": [
@@ -19656,18 +19854,6 @@
       "RunDeduplicationRequest": {
         "type": "object",
         "properties": {
-          "actor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "actor_kind": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "limit": {
             "type": [
               "integer",
@@ -19742,6 +19928,44 @@
           },
           "question": {
             "type": "string"
+          }
+        }
+      },
+      "ScientificAssignmentDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "user_id",
+          "role",
+          "assigned_by",
+          "created_at"
+        ],
+        "properties": {
+          "assigned_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

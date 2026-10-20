@@ -1,7 +1,7 @@
 use deepref_domain::{
     Actor, CurrentScreeningState, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId,
     ScreenReportTransitionCommand, ScreeningDecision, ScreeningStage, ScreeningTransition,
-    ScreeningUndoValidationError, ScreeningValidationError, UndoScreeningTransitionCommand,
+    ScreeningUndoValidationError, ScreeningValidationError, UndoScreeningTransitionCommand, UserId,
     transition, undo_transition,
 };
 
@@ -151,7 +151,7 @@ impl ScreeningQueueSort {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetScreeningQueueQuery {
-    pub reviewer_id: Option<String>,
+    pub reviewer_id: Option<UserId>,
     pub project_id: ProjectId,
     pub status: ScreeningQueueStatus,
     pub search: Option<String>,

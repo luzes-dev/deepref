@@ -61,6 +61,14 @@ pub(crate) fn user(actor: &Actor) -> Result<(), AiFirstError> {
             "a human actor must approve this action".into(),
         ));
     }
+    let parsed = Uuid::parse_str(actor.id()).map_err(|_| {
+        AiFirstError::Invalid("a human actor must use the canonical user UUID".into())
+    })?;
+    if parsed.to_string() != actor.id() {
+        return Err(AiFirstError::Invalid(
+            "a human actor must use the canonical user UUID".into(),
+        ));
+    }
     Ok(())
 }
 pub(crate) async fn ledger(

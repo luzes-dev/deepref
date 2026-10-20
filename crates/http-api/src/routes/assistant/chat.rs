@@ -40,7 +40,6 @@ use super::{
 };
 use crate::{
     error::{ApiError, ErrorResponse},
-    routes::actor::extract_actor,
     state::AppState,
 };
 const MAX_BLOCK_TEXT_CHARS: usize = 2_000;
@@ -359,11 +358,12 @@ pub(crate) async fn list_tools(
 pub(crate) async fn execute_tool(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<Value>,
 ) -> Result<Json<AssistantToolResponse>, ApiError> {
     validate_project_id(project_id)?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
@@ -1148,12 +1148,13 @@ pub(crate) async fn chat(
     State(state): State<AppState>,
     session: Option<crate::auth::CurrentSession>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<AssistantChatRequestDto>,
 ) -> Result<Response, ApiError> {
     let principal = session.map(|session| session.0.principal);
     validate_project_id(project_id)?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }

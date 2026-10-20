@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 pub mod command;
 
-pub use command::Command;
+pub use command::{Command, LegacyActorCommand};
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
@@ -53,6 +53,8 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
 
+        Command::LegacyActor(action) => run_legacy_actor(action).await,
+
         Command::PrintOpenApi => {
             println!(
                 "{}",
@@ -61,6 +63,54 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+async fn run_legacy_actor(action: LegacyActorCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    with_telemetry(telemetry, async move {
+        let result = match action {
+            LegacyActorCommand::Map {
+                kind,
+                legacy_id,
+                user_id,
+                operator_user_id,
+                source,
+            } => {
+                deepref_http_api::legacy_actor_map(
+                    &config,
+                    &kind,
+                    &legacy_id,
+                    user_id,
+                    operator_user_id,
+                    &source,
+                )
+                .await?
+            }
+            LegacyActorCommand::Deny {
+                kind,
+                legacy_id,
+                user_id,
+                operator_user_id,
+                source,
+            } => {
+                deepref_http_api::legacy_actor_deny(
+                    &config,
+                    &kind,
+                    &legacy_id,
+                    user_id,
+                    operator_user_id,
+                    &source,
+                )
+                .await?
+            }
+            LegacyActorCommand::List => deepref_http_api::legacy_actor_list(&config).await?,
+        };
+        println!("{result}");
+        Ok(())
+    })
+    .await
 }
 
 async fn with_telemetry<F>(

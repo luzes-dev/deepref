@@ -167,7 +167,7 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
             .unwrap();
         reports.push(id);
     }
-    let owner = Actor::new(ActorKind::User, "owner").unwrap();
+    let owner = Actor::new(ActorKind::User, Uuid::new_v4().to_string()).unwrap();
     let cohort = start_ai_first_cohort(&pool, project, 95, false, &owner)
         .await
         .unwrap();

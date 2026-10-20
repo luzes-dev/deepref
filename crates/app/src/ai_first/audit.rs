@@ -265,6 +265,9 @@ pub(crate) async fn record_audit_label(
         return Ok(AuditLabelOutcome::NotAudit);
     }
     user(&command.actor)?;
+    let user_id = Uuid::parse_str(command.actor.id()).map_err(|_| {
+        AiFirstError::Invalid("a human actor must use the canonical user UUID".into())
+    })?;
     if command.expected_revision != 0 {
         return Err(AiFirstError::Refused(
             "blind labels require the displayed revision".into(),
@@ -273,20 +276,20 @@ pub(crate) async fn record_audit_label(
     let exposed: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM ai_opinion_exposures WHERE project_id=$1
       AND report_id=$2 AND stage='title_abstract' AND exposure_possible_at<=clock_timestamp()
-      AND (audience_actor_id IS NULL OR (audience_actor_kind='user' AND audience_actor_id=$3)))",
+      AND (audience_actor_id IS NULL OR (audience_actor_kind='user' AND legacy_human_actor_matches_user(audience_actor_kind,audience_actor_id,$3))))",
     )
     .bind(project)
     .bind(report)
-    .bind(command.actor.id())
+    .bind(user_id)
     .fetch_one(&mut **tx)
     .await?;
     if exposed {
         invalidate_in_transaction(tx, project, cohort, "audit_label_exposed", true).await?;
         return Ok(AuditLabelOutcome::Pending);
     }
-    let fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
+    let fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor_v2($1,$2)")
         .bind(cohort)
-        .bind(command.actor.id())
+        .bind(user_id)
         .fetch_one(&mut **tx)
         .await?;
     if !fresh {
@@ -552,7 +555,7 @@ pub(crate) async fn frozen_evidence_current(
     let contaminated: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_audit_labels l JOIN ai_opinion_exposures e
        ON e.project_id=l.project_id AND e.report_id=l.report_id
        WHERE l.cohort_id=$1 AND e.exposure_possible_at<=l.created_at
-       AND (e.audience_actor_id IS NULL OR (e.audience_actor_kind='user' AND e.audience_actor_id=l.actor_id)))")
+       AND (e.audience_actor_id IS NULL OR same_human_actor_identity('user',e.audience_actor_id,'user',l.actor_id)))")
         .bind(cohort).fetch_one(&mut **tx).await?;
     if contaminated {
         return Ok(false);

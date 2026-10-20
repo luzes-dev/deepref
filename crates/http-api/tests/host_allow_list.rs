@@ -37,7 +37,6 @@ fn app() -> axum::Router {
     };
     router(AppState::core(pool), &config)
 }
-
 async fn status_for(path: &str, host: Option<&str>) -> StatusCode {
     let mut request = Request::builder().uri(path);
     if let Some(host) = host {
@@ -105,21 +104,4 @@ async fn liveness_probe_rejects_unknown_host() {
         status_for("/health/live", Some("127.0.0.1:8080")).await,
         StatusCode::OK
     );
-}
-
-#[tokio::test]
-async fn client_automation_and_system_actors_are_rejected_before_database_access() {
-    for kind in ["automation", "system"] {
-        let request = Request::builder()
-            .uri("/projects/00000000-0000-0000-0000-000000000001/screening")
-            .header(header::HOST, "localhost:8080")
-            .header("x-actor-kind", kind)
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            app().oneshot(request).await.unwrap().status(),
-            StatusCode::BAD_REQUEST,
-            "{kind} must be rejected"
-        );
-    }
 }

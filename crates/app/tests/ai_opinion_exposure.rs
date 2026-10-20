@@ -21,7 +21,7 @@ use deepref_application::{
 };
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
-    ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage,
+    ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage, UserId,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -32,7 +32,20 @@ async fn database() -> Option<PgPool> {
 }
 
 fn person() -> Actor {
-    Actor::new(ActorKind::User, "tester").expect("actor")
+    Actor::new(ActorKind::User, "00000000-0000-0000-0000-000000000001").expect("actor")
+}
+
+async fn insert_user(pool: &PgPool, user_id: UserId, label: &str) {
+    sqlx::query(
+        "INSERT INTO users(id,workos_user_id,primary_email,status) \
+         VALUES($1,$2,$3,'active')",
+    )
+    .bind(user_id.as_uuid())
+    .bind(format!("exposure-{label}-{}", Uuid::new_v4()))
+    .bind(format!("exposure-{label}-{}@example.test", Uuid::new_v4()))
+    .execute(pool)
+    .await
+    .expect("identity fixture");
 }
 
 async fn project(pool: &PgPool) -> Uuid {
@@ -457,7 +470,8 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "title_abstract",
         ExposureSource::WorkflowRunOutput,
     );
-    for_someone_else.audience = Some(Actor::new(ActorKind::User, "someone-else").expect("actor"));
+    for_someone_else.audience =
+        Some(Actor::new(ActorKind::User, "00000000-0000-0000-0000-000000000002").expect("actor"));
     record_exposure(&pool, &for_someone_else)
         .await
         .expect("exposure for someone else");
@@ -479,7 +493,7 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "title_abstract",
         ExposureSource::WorkflowRunOutput,
     );
-    for_this_person.audience = Some(Actor::new(ActorKind::User, "tester").expect("actor"));
+    for_this_person.audience = Some(person());
     record_exposure(&pool, &for_this_person)
         .await
         .expect("exposure for this person");
@@ -900,4 +914,52 @@ async fn an_automation_state_cannot_be_attributed_to_an_earlier_human_decision()
         "automation is not a human reference label"
     );
     assert_eq!(pairs.unverifiable_excluded, 1);
+}
+
+#[tokio::test]
+async fn an_unmapped_legacy_exposure_excludes_until_operator_non_identity() {
+    let Some(pool) = database().await else { return };
+    let user_id = UserId::new(Uuid::parse_str(person().id()).expect("canonical fixture ID"));
+    let operator = UserId::new(Uuid::new_v4());
+    insert_user(&pool, user_id, "candidate").await;
+    insert_user(&pool, operator, "operator").await;
+    let project_id = project(&pool).await;
+    publish_protocol_for(&pool, project_id).await;
+    let record = report(&pool, project_id, "Legacy exposure audience").await;
+    ai_opinion(&pool, project_id, record, "title_abstract", "include").await;
+
+    let mut exposure = NewExposure::new(
+        project_id,
+        record,
+        "title_abstract",
+        ExposureSource::WorkflowRunOutput,
+    );
+    exposure.audience = Some(Actor::new(ActorKind::User, "legacy-exposure-label").unwrap());
+    record_exposure(&pool, &exposure)
+        .await
+        .expect("legacy exposure persists");
+    decide(&pool, project_id, record, ScreeningDecision::Include).await;
+
+    let conservative = independent_reviewer_pairs(&pool, project_id, None)
+        .await
+        .expect("pairs");
+    assert_eq!(conservative.independent.len(), 0);
+    assert_eq!(conservative.exposed_excluded, 1);
+
+    deepref_app::record_legacy_actor_non_identity(
+        &pool,
+        "user",
+        "legacy-exposure-label",
+        user_id,
+        operator,
+        "confirmed against the reviewer roster",
+    )
+    .await
+    .expect("operator denial is recorded");
+    let after = independent_reviewer_pairs(&pool, project_id, None)
+        .await
+        .expect("pairs after operator decision");
+    assert_eq!(after.exposed_excluded, 0);
+    assert_eq!(after.independent.len(), 1);
+    assert_eq!(after.independent[0].report_id, record);
 }

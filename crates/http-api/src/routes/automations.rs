@@ -15,7 +15,6 @@ use sqlx::PgPool;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use super::actor::extract_actor;
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -222,7 +221,8 @@ pub(crate) async fn list_definitions(
 pub(crate) async fn configure_definition(
     State(state): State<AppState>,
     Path((project_id, recipe)): Path<(Uuid, String)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<ConfigureAutomationRequest>,
 ) -> Result<Json<AutomationDefinitionDto>, ApiError> {
     let project_id = validated_project_id(project_id)?;
@@ -245,7 +245,7 @@ pub(crate) async fn configure_definition(
         input.trigger.into(),
         recipe,
         input.status.into(),
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let definition = deepref_app::configure_automation_definition(&state.pool, &command)
@@ -277,6 +277,7 @@ pub(crate) async fn trigger_manually(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<StartAutomationRequest>,
 ) -> Result<(StatusCode, Json<StartAutomationResponse>), ApiError> {
     let project_id = validated_project_id(project_id)?;
@@ -285,7 +286,7 @@ pub(crate) async fn trigger_manually(
         project_id,
         input.definition_id,
         required_idempotency_key(&headers)?,
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let result = deepref_app::start_automation_manually(&state.pool, &request)
@@ -332,6 +333,7 @@ pub(crate) async fn run_recipe_once(
     State(state): State<AppState>,
     Path((project_id, recipe)): Path<(Uuid, String)>,
     headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<(StatusCode, Json<StartAutomationResponse>), ApiError> {
     let project_id = validated_project_id(project_id)?;
     ensure_project(&state.pool, project_id).await?;
@@ -344,7 +346,7 @@ pub(crate) async fn run_recipe_once(
         ));
     }
     let idempotency_key = required_idempotency_key(&headers)?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let configure = ConfigureAutomationDefinition::new(
         project_id,
         format!("{ONE_OFF_DEFINITION_PREFIX}{}", recipe.id()),
