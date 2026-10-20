@@ -12,20 +12,24 @@ With auth disabled in `APP_ENV=development`, the session gate supplies one fixed
 
 ## Identity continuity
 
-`legacy_actor_mappings` trusts an operator-confirmed `(kind, label) -> UserId`; `legacy_actor_non_identities` records that a specific user is not a label. Both tables accept only `user` labels, and the only application writer is the `deepref-server legacy-actor map|deny|list` operator command. Each mutating command writes its corresponding `admin_audit_events` row in the same transaction. Repeating the same decision is idempotent. A conflicting mapping, or mapping a label already denied for that user, is refused.
+`legacy_actor_mappings` trusts an operator-confirmed `(kind, label) -> UserId`; `legacy_actor_non_identities` records that a specific user is not a label. Mapping keys are byte-exact: no case folding, trimming, or UUID parsing is applied. Both tables accept only `user` labels, and the only application writer is the `deepref-server legacy-actor map|deny|list` operator command. Each mutating command writes its corresponding `admin_audit_events` row in the same transaction. Repeating the same decision is idempotent. A conflicting mapping, or mapping a label already denied for that user, is refused.
 
-The v2 matcher considers a history string a user's identity only when it equals the canonical UUID string or an operator mapped it to that user. A mapped label for another user does not match. An unmapped human label in the affected scope conservatively exposes every user without a non-identity decision for that label. The same conservative rule is used in AI-first fresh eligibility, blind queue visibility, frozen-evidence checks and second-reviewer independence. New AI-first callers pass `UserId`; the old 0054/0055 functions remain untouched for N-1 binaries using legacy labels.
+Canonical identity comes from trusted provenance. Migration 0107 adds nullable `actor_user_id` foreign keys to `screening_events`, `ai_opinion_exposures` audience, `ai_screening_audit_labels`, project authority approval, and cohort approval/finalization columns. New authenticated writes store the authenticated `UserId` there alongside the existing text label. N-1 writes and historical rows keep NULL; no label is backfilled or inferred from its shape. A history row counts as user U only if its provenance is U or its exact text label maps to U. If provenance is NULL and the label is unmapped, it conservatively excludes U until an operator maps the label to someone else or records a non-identity decision for U. Thus a lowercase UUID string stays an unresolved label until the same operator process resolves it.
 
-Migrations `0103` through `0106` add assignments and decision tables, expand then validate the audit constraint for the two new event types, and add the continuity SQL functions. None rewrites `screening_events`, `ai_opinion_exposures`, `ai_screening_audit_labels` or cohort approval history.
+Audit labels are part of freshness and queue checks for that report. An unresolved label hides that report from every user without a matching non-identity decision. This report scope lets a reviewer continue to label other records while preventing a second submission on the same report. The locked label write checks identity through provenance and mappings before insert; a partial unique index also prevents duplicate canonical user IDs. Evaluation and finalization each require exactly two labels that resolve to two distinct users, and finalization checks again in case mappings changed after evaluation.
+
+Migration 0107 replaces the old `ai_first_fresh_auditor(uuid,text)` and `ai_first_queue_visible(uuid,uuid,text)` signatures so N-1 binaries keep calling known functions. Both compare the caller label to canonical provenance and exact legacy mappings with the same conservative identity rule as N. An unmapped caller can be considered distinct only when an operator has recorded the needed non-identity decisions; any unresolved row that could be that caller blocks freshness or visibility. Because the old freshness signature has no report argument, it checks audit labels across the whole cohort. That is stricter than N's report-scoped rule, but prevents an old direct write from repeating a reviewer on any report. The old queue signature still checks labels for its report. The old two-argument v2 helpers fail closed because they lack report context; current N callers use the report-scoped v3 helpers. Unknown identity is never evidence that a caller is fresh.
+
+Migrations `0103` through `0107` add assignments and decision tables, expand then validate the audit constraint for the new event types, add continuity helpers, and add nullable actor provenance. They do not rewrite `screening_events`, `ai_opinion_exposures`, `ai_screening_audit_labels` or cohort approval history.
 
 ## Baseline `crates/app` inventory
 
-The inventory below is the committed pre-change baseline from `git grep -n 'actor_id\|audience_actor_id\|approved_by' HEAD -- crates/app`: 333 matching source lines. Each entry carries the original path, line number and complete matching line. `storage` includes schema constraints and persistence writes; `display` includes reads, exports, test fixtures/assertions and presentation. The eight lines that compare human identity are linked to behavior tests; the 0054 queue comparison was superseded by 0055 before the live rollout boundary.
+The inventory below is the committed pre-change baseline from `git grep -n 'actor_id\|audience_actor_id\|approved_by' HEAD -- crates/app`: 333 matching source lines. Each entry carries the original path, line number and complete matching line. `storage` includes schema constraints and persistence writes; `display` includes reads, exports, test fixtures/assertions and presentation. The nine identity comparisons include the 0054 textual audit-label uniqueness rule, the 0054 queue comparison, the 0055 freshness and queue comparisons, and the application exposure and frozen-evidence comparisons. They are linked to behavior tests.
 
 | Classification | Lines |
 | --- | ---: |
-| identity comparison | 8 |
-| storage | 153 |
+| identity comparison | 9 |
+| storage | 152 |
 | display | 172 |
 | **Total** | **333** |
 
@@ -45,7 +49,7 @@ The inventory below is the committed pre-change baseline from `git grep -n 'acto
 | `crates/app/migrations/0028_workflow_engine.sql` | 0 | 1 | 0 | 1 |
 | `crates/app/migrations/0029_ai_autonomy_and_activity.sql` | 0 | 2 | 0 | 2 |
 | `crates/app/migrations/0049_ai_opinion_exposures.sql` | 0 | 5 | 0 | 5 |
-| `crates/app/migrations/0054_ai_first_cohorts.sql` | 1 | 4 | 0 | 5 |
+| `crates/app/migrations/0054_ai_first_cohorts.sql` | 2 | 3 | 0 | 5 |
 | `crates/app/migrations/0055_ai_first_blind_controls.sql` | 4 | 0 | 0 | 4 |
 | `crates/app/migrations/0057_assistant_agent_runs.sql` | 0 | 1 | 0 | 1 |
 | `crates/app/migrations/0073_durable_runs.sql` | 0 | 3 | 0 | 3 |
@@ -147,7 +151,7 @@ storage | crates/app/migrations/0049_ai_opinion_exposures.sql:72 | test=— |   
 storage | crates/app/migrations/0054_ai_first_cohorts.sql:7 | test=— |  approved_by text NOT NULL,
 storage | crates/app/migrations/0054_ai_first_cohorts.sql:26 | test=— |  approved_by text NOT NULL, final_approval_id uuid, finalized_by text,
 storage | crates/app/migrations/0054_ai_first_cohorts.sql:70 | test=— |  cohort_id uuid NOT NULL, report_id uuid NOT NULL, actor_id text NOT NULL,
-storage | crates/app/migrations/0054_ai_first_cohorts.sql:73 | test=— |  UNIQUE(cohort_id,report_id,actor_id),
+identity comparison | crates/app/migrations/0054_ai_first_cohorts.sql:73 | test=mapped_legacy_audit_label_blocks_direct_duplicate_screening_post |  UNIQUE(cohort_id,report_id,actor_id),
 identity comparison | crates/app/migrations/0054_ai_first_cohorts.sql:143 | test=the_0054_queue_comparison_is_enumerated_and_superseded_by_0055; the_n_minus_one_queue_still_matches_legacy_audit_labels |          WHERE l.cohort_id=c.id AND l.report_id=report AND l.actor_id=actor)))))
 identity comparison | crates/app/migrations/0055_ai_first_blind_controls.sql:13 | test=n_minus_one_approval_identity_comparison_stays_text_based |  c.approved_by=actor OR EXISTS(SELECT 1 FROM ai_screening_cohort_members m JOIN screening_events e
 identity comparison | crates/app/migrations/0055_ai_first_blind_controls.sql:15 | test=n_minus_one_screening_event_identity_comparison_stays_text_based |  WHERE m.cohort_id=c.id AND e.actor_kind='user' AND e.actor_id=actor)
@@ -431,4 +435,4 @@ display | crates/app/tests/workflow_review_counts.rs:58 | test=— |            
 
 ## Verification and limitations
 
-The DB tests verify old-function compatibility, all eight inventoried identity comparisons, two-user HTTP blinding, header/body forgery resistance, audited mapping/denial, historical row equality across reapplication of migration 0106 and subsequent writes, and provenance after account deactivation. Their current results are reported in the implementation handoff.
+The DB tests verify old-function compatibility and rollback safety, all nine inventoried identity comparisons, two-user HTTP blinding, header/body forgery resistance, audited mapping/denial, UUID-shaped unresolved labels, byte-exact case/whitespace labels, mapping-aware reviewer distinctness at write/evaluate/finalize, unchanged legacy rows with provenance on new rows, and provenance after account deactivation. Development initialization also provisions the fixed auth-off principal only when the shared development gate is enabled, and its assignment write is covered.

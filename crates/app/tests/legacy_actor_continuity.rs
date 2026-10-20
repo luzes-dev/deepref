@@ -6,7 +6,7 @@ use deepref_app::{
     list_legacy_actor_decisions, map_legacy_actor, record_legacy_actor_non_identity,
 };
 use deepref_domain::{ExternalUserId, UserId};
-use sqlx::{AssertSqlSafe, PgPool};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
@@ -120,9 +120,10 @@ impl Fixture {
         }
     }
 
-    async fn fresh_v2(&self, user_id: UserId) -> bool {
-        sqlx::query_scalar("SELECT ai_first_fresh_auditor_v2($1,$2)")
+    async fn fresh_v3(&self, user_id: UserId) -> bool {
+        sqlx::query_scalar("SELECT ai_first_fresh_auditor_v3($1,$2,$3)")
             .bind(self.cohort_id)
+            .bind(self.report_id)
             .bind(user_id.as_uuid())
             .fetch_one(&self.pool)
             .await
@@ -140,6 +141,16 @@ impl Fixture {
         .execute(&self.pool)
         .await
         .unwrap();
+    }
+
+    async fn set_approver(&self, user_id: UserId) {
+        sqlx::query("UPDATE ai_screening_cohorts SET approved_by=$2,approved_by_actor_user_id=$3 WHERE id=$1")
+            .bind(self.cohort_id)
+            .bind(user_id.as_uuid().to_string())
+            .bind(user_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .unwrap();
     }
 
     async fn insert_event(&self, actor_id: &str) -> Uuid {
@@ -200,19 +211,22 @@ impl Fixture {
 async fn mapped_exposed_legacy_label_makes_candidate_ineligible_and_is_audited() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, "cohort-owner").await;
-    sqlx::query("UPDATE ai_screening_cohorts SET approved_by=$2 WHERE id=$1")
-        .bind(f.cohort_id)
-        .bind(f.owner.as_uuid().to_string())
-        .execute(&f.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE ai_screening_cohorts SET approved_by=$2,approved_by_actor_user_id=$3 WHERE id=$1",
+    )
+    .bind(f.cohort_id)
+    .bind(f.owner.as_uuid().to_string())
+    .bind(f.owner.as_uuid())
+    .execute(&f.pool)
+    .await
+    .unwrap();
     f.assign_fresh_auditor(f.owner).await;
     let label = "legacy-reviewer-42";
     f.insert_audience_exposure(label).await;
     let (unexposed_user, _) = create_user(&f.pool, "unexposed").await;
     f.assign_fresh_auditor(unexposed_user).await;
 
-    let before = f.fresh_v2(f.candidate).await;
+    let before = f.fresh_v3(f.candidate).await;
     assert!(
         !before,
         "unmapped exposure conservatively excludes every user"
@@ -229,11 +243,11 @@ async fn mapped_exposed_legacy_label_makes_candidate_ineligible_and_is_audited()
     .unwrap();
     assert_eq!(decision.user_id, f.candidate);
     assert!(
-        !f.fresh_v2(f.candidate).await,
+        !f.fresh_v3(f.candidate).await,
         "mapped exposure excludes its user"
     );
     assert!(
-        f.fresh_v2(unexposed_user).await,
+        f.fresh_v3(unexposed_user).await,
         "mapping to another user is not exposure"
     );
 
@@ -280,7 +294,7 @@ async fn non_identity_decision_lifts_only_that_users_unknown_label_exclusion() {
     let label = "reviewer-from-an-old-tab";
     let f = Fixture::new(pool, label).await;
     f.assign_fresh_auditor(f.owner).await;
-    let active: bool = f.fresh_v2(f.candidate).await;
+    let active: bool = f.fresh_v3(f.candidate).await;
     assert!(!active, "the unmapped approval label blocks all candidates");
 
     let decision = record_legacy_actor_non_identity(
@@ -294,9 +308,9 @@ async fn non_identity_decision_lifts_only_that_users_unknown_label_exclusion() {
     .await
     .unwrap();
     assert_eq!(decision.user_id, f.candidate);
-    assert!(f.fresh_v2(f.candidate).await);
+    assert!(f.fresh_v3(f.candidate).await);
     assert!(
-        !f.fresh_v2(f.owner).await,
+        !f.fresh_v3(f.owner).await,
         "other users remain conservatively exposed"
     );
 
@@ -334,50 +348,325 @@ async fn mapped_labels_for_someone_else_do_not_exclude_the_candidate() {
     )
     .await
     .unwrap();
-    assert!(f.fresh_v2(f.candidate).await);
-    assert!(!f.fresh_v2(other_user).await);
+    assert!(f.fresh_v3(f.candidate).await);
+    assert!(!f.fresh_v3(other_user).await);
 }
 
 #[tokio::test]
-async fn n_minus_one_approval_identity_comparison_stays_text_based() {
+async fn uuid_shaped_legacy_label_stays_unknown_until_operator_decision() {
     let Some(pool) = database().await else { return };
-    let (candidate, _) = create_user(&pool, "candidate").await;
-    let f = Fixture::new(pool, "legacy-approved-by").await;
-    let approved_match: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
-        .bind(f.cohort_id)
-        .bind("legacy-approved-by")
-        .fetch_one(&f.pool)
-        .await
-        .unwrap();
-    assert!(!approved_match, "0055 approved_by compares the legacy text");
-    let fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
-        .bind(f.cohort_id)
-        .bind(candidate.as_uuid().to_string())
-        .fetch_one(&f.pool)
-        .await
-        .unwrap();
-    assert!(fresh);
+    let (uuid_label_owner, _) = create_user(&pool, "uuid-label-owner").await;
+    let uuid_label = uuid_label_owner.as_uuid().to_string();
+    let f = Fixture::new(pool, uuid_label.clone()).await;
+    f.assign_fresh_auditor(uuid_label_owner).await;
+
+    assert!(!f.fresh_v3(f.candidate).await);
+    assert!(
+        !f.fresh_v3(uuid_label_owner).await,
+        "a UUID-shaped label has no implicit owner"
+    );
+
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        &uuid_label,
+        f.candidate,
+        f.operator,
+        "operator matched the historical reviewer log",
+    )
+    .await
+    .unwrap();
+    assert!(
+        !f.fresh_v3(f.candidate).await,
+        "an explicit mapping counts as history"
+    );
+    assert!(
+        f.fresh_v3(uuid_label_owner).await,
+        "the mapping is checked before the UUID text can resemble another user's ID"
+    );
+
+    let unresolved_uuid_label = Uuid::new_v4().to_string();
+    let second = Fixture::new(f.pool.clone(), unresolved_uuid_label.clone()).await;
+    assert!(!second.fresh_v3(second.candidate).await);
+    record_legacy_actor_non_identity(
+        &second.pool,
+        "user",
+        &unresolved_uuid_label,
+        second.candidate,
+        second.operator,
+        "operator confirmed the UUID-shaped label belongs to someone else",
+    )
+    .await
+    .unwrap();
+    assert!(second.fresh_v3(second.candidate).await);
 }
 
 #[tokio::test]
-async fn n_minus_one_screening_event_identity_comparison_stays_text_based() {
+async fn byte_distinct_case_and_whitespace_labels_are_resolved_independently() {
     let Some(pool) = database().await else { return };
-    let f = Fixture::new(pool, "cohort-approver").await;
-    f.insert_event("legacy-screening-actor").await;
-    let screening_match: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
-        .bind(f.cohort_id)
-        .bind("legacy-screening-actor")
+    let f = Fixture::new(pool, "Reviewer-A ").await;
+    f.insert_label("Reviewer-A ").await;
+    f.insert_label("reviewer-a").await;
+    assert!(!f.fresh_v3(f.candidate).await);
+
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "Reviewer-A ",
+        f.owner,
+        f.operator,
+        "exact label including trailing space",
+    )
+    .await
+    .unwrap();
+    assert!(
+        !f.fresh_v3(f.candidate).await,
+        "the lowercase label is still independently unresolved"
+    );
+
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "reviewer-a",
+        f.owner,
+        f.operator,
+        "exact lowercase label",
+    )
+    .await
+    .unwrap();
+    assert!(f.fresh_v3(f.candidate).await);
+}
+
+#[tokio::test]
+async fn an_unmapped_audit_label_hides_its_report_from_every_unresolved_user() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, "temporary-owner-label").await;
+    f.set_approver(f.owner).await;
+    f.insert_label("reviewer-a").await;
+
+    assert!(!f.fresh_v3(f.candidate).await);
+    let visible: bool = sqlx::query_scalar("SELECT ai_first_queue_visible_v3($1,$2,$3)")
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind(f.candidate.as_uuid())
         .fetch_one(&f.pool)
         .await
         .unwrap();
     assert!(
-        !screening_match,
-        "0055 screening actor comparison is unchanged"
+        !visible,
+        "the report cannot return to the same unresolved person"
+    );
+
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "reviewer-a",
+        f.candidate,
+        f.operator,
+        "confirmed audit label ownership",
+    )
+    .await
+    .unwrap();
+    assert!(!f.fresh_v3(f.candidate).await);
+    let still_hidden: bool = sqlx::query_scalar("SELECT ai_first_queue_visible_v3($1,$2,$3)")
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind(f.candidate.as_uuid())
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(!still_hidden);
+}
+
+#[tokio::test]
+async fn n_minus_one_functions_resolve_mapped_callers_against_canonical_rows() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, "unused-owner-label").await;
+    sqlx::query(
+        "UPDATE ai_screening_cohorts SET approved_by=$2,approved_by_actor_user_id=$3 WHERE id=$1",
+    )
+    .bind(f.cohort_id)
+    .bind(f.candidate.as_uuid().to_string())
+    .bind(f.candidate.as_uuid())
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "reviewer-a",
+        f.candidate,
+        f.operator,
+        "N-1 label maps to the N identity",
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+        VALUES($1,$2,$3,$4,$5,'include')")
+        .bind(f.project_id)
+        .bind(f.cohort_id)
+        .bind(f.report_id)
+        .bind(f.candidate.as_uuid().to_string())
+        .bind(f.candidate.as_uuid())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+
+    let same_person_fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
+        .bind(f.cohort_id)
+        .bind("reviewer-a")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(
+        !same_person_fresh,
+        "mapped N-1 identity matches N provenance"
+    );
+    let same_person_visible: bool = sqlx::query_scalar("SELECT ai_first_queue_visible($1,$2,$3)")
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind("reviewer-a")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(
+        !same_person_visible,
+        "the N-written label stays hidden from its reviewer"
+    );
+
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "reviewer-b",
+        f.owner,
+        f.operator,
+        "separate N-1 reviewer",
+    )
+    .await
+    .unwrap();
+    let other_person_fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
+        .bind(f.cohort_id)
+        .bind("reviewer-b")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let other_person_visible: bool = sqlx::query_scalar("SELECT ai_first_queue_visible($1,$2,$3)")
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind("reviewer-b")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(other_person_fresh);
+    assert!(other_person_visible);
+}
+
+#[tokio::test]
+async fn n_minus_one_freshness_checks_canonical_audit_labels() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, "cohort-approver").await;
+    f.set_approver(f.owner).await;
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "reviewer-a",
+        f.candidate,
+        f.operator,
+        "N-1 label maps to the reviewer identity",
+    )
+    .await
+    .unwrap();
+
+    let fresh_before_label: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
+        .bind(f.cohort_id)
+        .bind("reviewer-a")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(fresh_before_label);
+
+    sqlx::query("INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+        VALUES($1,$2,$3,$4,$5,'include')")
+        .bind(f.project_id)
+        .bind(f.cohort_id)
+        .bind(f.report_id)
+        .bind(f.candidate.as_uuid().to_string())
+        .bind(f.candidate.as_uuid())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+
+    let fresh_after_label: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
+        .bind(f.cohort_id)
+        .bind("reviewer-a")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let visible_after_label: bool = sqlx::query_scalar("SELECT ai_first_queue_visible($1,$2,$3)")
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind("reviewer-a")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(
+        !fresh_after_label,
+        "old direct writes see canonical audit identity"
+    );
+    assert!(
+        !visible_after_label,
+        "old queue hides the reviewer's own label"
     );
 }
 
 #[tokio::test]
-async fn n_minus_one_exposure_audience_identity_comparison_stays_text_based() {
+async fn n_minus_one_unmapped_caller_fails_closed_after_canonical_write() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, "cohort-approver").await;
+    f.set_approver(f.owner).await;
+    record_legacy_actor_non_identity(
+        &f.pool,
+        "user",
+        "unmapped-rollback-caller",
+        f.owner,
+        f.operator,
+        "rollback caller is distinct from the canonical approver",
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO screening_events(id,project_id,report_id,stage,decision,protocol_version_id,actor_kind,actor_id,actor_user_id)
+        VALUES($1,$2,$3,'title_abstract','include',$4,'user',$5,$6)")
+        .bind(Uuid::new_v4())
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind(f.protocol_id)
+        .bind(f.candidate.as_uuid().to_string())
+        .bind(f.candidate.as_uuid())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let legacy_fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor($1,$2)")
+        .bind(f.cohort_id)
+        .bind("unmapped-rollback-caller")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let legacy_visible: bool = sqlx::query_scalar("SELECT ai_first_queue_visible($1,$2,$3)")
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind("unmapped-rollback-caller")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(!legacy_fresh, "N-1 cannot attribute an N-written identity");
+    assert!(
+        !legacy_visible,
+        "rollback workers cannot reopen the canonical row"
+    );
+}
+
+#[tokio::test]
+async fn n_minus_one_resolves_legacy_exposure_labels_conservatively() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, "cohort-approver").await;
     f.insert_audience_exposure("legacy-exposure-audience").await;
@@ -387,13 +676,26 @@ async fn n_minus_one_exposure_audience_identity_comparison_stays_text_based() {
         .fetch_one(&f.pool)
         .await
         .unwrap();
-    assert!(!exposure_match, "0055 audience comparison is unchanged");
+    assert!(
+        !exposure_match,
+        "the old signature still excludes an exposed label"
+    );
 }
 
 #[tokio::test]
 async fn the_n_minus_one_queue_still_matches_legacy_audit_labels() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, "cohort-approver").await;
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "cohort-approver",
+        f.owner,
+        f.operator,
+        "known cohort owner",
+    )
+    .await
+    .unwrap();
     f.insert_label("legacy-auditor").await;
     let same_label: bool = sqlx::query_scalar("SELECT ai_first_queue_visible($1,$2,$3)")
         .bind(f.project_id)
@@ -413,11 +715,14 @@ async fn the_n_minus_one_queue_still_matches_legacy_audit_labels() {
         !same_label,
         "0055 queue comparison still hides an existing label"
     );
-    assert!(another_label, "the next N-1 reviewer remains eligible");
+    assert!(
+        !another_label,
+        "an unmapped label conservatively blocks an unmapped N-1 caller"
+    );
 }
 
 #[tokio::test]
-async fn audit_label_precheck_matches_canonical_and_operator_mapped_users() {
+async fn identity_resolution_uses_provenance_or_exact_operator_mapping_only() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, "cohort-approver").await;
     let label = "legacy-audience-label";
@@ -437,15 +742,26 @@ async fn audit_label_precheck_matches_canonical_and_operator_mapped_users() {
         .fetch_one(&f.pool)
         .await
         .unwrap();
-    let canonical: bool =
+    let uuid_text_mapping: bool =
         sqlx::query_scalar("SELECT legacy_human_actor_matches_user('user',$1,$2)")
             .bind(f.candidate.as_uuid().to_string())
             .bind(f.candidate.as_uuid())
             .fetch_one(&f.pool)
             .await
             .unwrap();
+    let canonical_provenance: bool =
+        sqlx::query_scalar("SELECT actor_identity_may_be_user('user',$1,$2,$2)")
+            .bind(f.candidate.as_uuid().to_string())
+            .bind(f.candidate.as_uuid())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
     assert!(mapped);
-    assert!(canonical);
+    assert!(!uuid_text_mapping, "UUID text alone is not a mapping");
+    assert!(
+        canonical_provenance,
+        "trusted actor_user_id identifies the user"
+    );
 }
 
 #[tokio::test]
@@ -464,16 +780,18 @@ async fn frozen_evidence_comparison_respects_mappings_and_non_identity_records()
     .await
     .unwrap();
     let mapped_match: bool =
-        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,'user',$2)")
+        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,NULL,'user',$2,$3)")
             .bind(label)
             .bind(f.candidate.as_uuid().to_string())
+            .bind(f.candidate.as_uuid())
             .fetch_one(&f.pool)
             .await
             .unwrap();
     let other_match: bool =
-        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,'user',$2)")
+        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,NULL,'user',$2,$3)")
             .bind(label)
             .bind(f.owner.as_uuid().to_string())
+            .bind(f.owner.as_uuid())
             .fetch_one(&f.pool)
             .await
             .unwrap();
@@ -482,9 +800,10 @@ async fn frozen_evidence_comparison_respects_mappings_and_non_identity_records()
 
     let unknown = "unmapped-frozen-label";
     let conservative_match: bool =
-        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,'user',$2)")
+        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,NULL,'user',$2,$3)")
             .bind(unknown)
             .bind(f.candidate.as_uuid().to_string())
+            .bind(f.candidate.as_uuid())
             .fetch_one(&f.pool)
             .await
             .unwrap();
@@ -500,25 +819,69 @@ async fn frozen_evidence_comparison_respects_mappings_and_non_identity_records()
     .await
     .unwrap();
     let denied_match: bool =
-        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,'user',$2)")
+        sqlx::query_scalar("SELECT same_human_actor_identity('user',$1,NULL,'user',$2,$3)")
             .bind(unknown)
             .bind(f.candidate.as_uuid().to_string())
+            .bind(f.candidate.as_uuid())
             .fetch_one(&f.pool)
             .await
             .unwrap();
     assert!(!denied_match);
 }
 
+#[tokio::test]
+async fn automation_audience_does_not_contaminate_human_frozen_evidence() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, "known-owner").await;
+    f.set_approver(f.owner).await;
+    sqlx::query("INSERT INTO ai_opinion_exposures(project_id,report_id,stage,exposure_source,audience_actor_kind,audience_actor_id,exposure_possible_at)
+        VALUES($1,$2,'title_abstract','workflow_run_output','automation','automation-7',now())")
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+        VALUES($1,$2,$3,$4,$5,'include')")
+        .bind(f.project_id)
+        .bind(f.cohort_id)
+        .bind(f.report_id)
+        .bind(f.candidate.as_uuid().to_string())
+        .bind(f.candidate.as_uuid())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+
+    let contaminated: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_screening_audit_labels l
+         JOIN ai_opinion_exposures e ON e.project_id=l.project_id AND e.report_id=l.report_id
+         WHERE l.cohort_id=$1
+           AND (e.audience_actor_id IS NULL OR same_human_actor_identity(
+             e.audience_actor_kind,e.audience_actor_id,e.audience_actor_user_id,
+             'user',l.actor_id,l.actor_user_id)))",
+    )
+    .bind(f.cohort_id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert!(!contaminated, "automation exposure is not human exposure");
+}
+
 #[test]
-fn the_0054_queue_comparison_is_enumerated_and_superseded_by_0055() {
+fn textual_uniqueness_and_legacy_comparisons_are_identity_checks() {
     let original = include_str!("../migrations/0054_ai_first_cohorts.sql");
     assert!(original.contains("l.actor_id=actor"));
     let replacement = include_str!("../migrations/0055_ai_first_blind_controls.sql");
     assert!(replacement.contains("l.actor_id=actor"));
+    assert!(original.contains("UNIQUE(cohort_id,report_id,actor_id)"));
+    let provenance = include_str!("../migrations/0107_trusted_actor_provenance.sql");
+    assert!(provenance.contains("actor_identity_may_be_user"));
+    assert!(provenance.contains("CREATE OR REPLACE FUNCTION ai_first_fresh_auditor("));
+    assert!(provenance.contains("CREATE OR REPLACE FUNCTION ai_first_queue_visible("));
 }
 
 #[tokio::test]
-async fn actor_history_is_byte_identical_across_0106_and_after_new_writes() {
+async fn legacy_history_stays_unmodified_and_new_writes_can_add_provenance() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, "historical-approved-by").await;
     let screening_id = f.insert_event("legacy-screening-label").await;
@@ -526,43 +889,81 @@ async fn actor_history_is_byte_identical_across_0106_and_after_new_writes() {
     let label_id = f.insert_label("legacy-audit-label").await;
     let before = historical_rows(&f, screening_id, exposure_id, label_id).await;
 
-    // Reapply the real 0106 migration after removing only its functions and
-    // migration ledger row. The historical fixture rows remain in place.
-    for (name, signature) in [
-        ("ai_first_queue_visible_v2", "uuid,uuid,uuid"),
-        ("ai_first_fresh_auditor_v2", "uuid,uuid"),
-        ("same_human_actor_identity", "text,text,text,text"),
-        ("legacy_human_actor_is_unmapped", "text,text"),
-        ("legacy_human_actor_user_id", "text,text"),
-        ("legacy_human_actor_matches_user", "text,text,uuid"),
-    ] {
-        sqlx::query(AssertSqlSafe(format!("DROP FUNCTION {name}({signature})")))
-            .execute(&f.pool)
-            .await
-            .unwrap();
-    }
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=106")
+    let legacy_provenance: (Option<Uuid>, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT
+           (SELECT actor_user_id FROM screening_events WHERE id=$1),
+           (SELECT audience_actor_user_id FROM ai_opinion_exposures WHERE id=$2),
+           (SELECT actor_user_id FROM ai_screening_audit_labels WHERE id=$3)",
+    )
+    .bind(screening_id)
+    .bind(exposure_id)
+    .bind(label_id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(legacy_provenance, (None, None, None));
+
+    let canonical_actor_id = f.candidate.as_uuid().to_string();
+    let new_screening_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO screening_events(id,project_id,report_id,stage,decision,protocol_version_id,actor_kind,actor_id,actor_user_id)
+        VALUES($1,$2,$3,'title_abstract','include',$4,'user',$5,$6)")
+        .bind(new_screening_id)
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind(f.protocol_id)
+        .bind(&canonical_actor_id)
+        .bind(f.candidate.as_uuid())
         .execute(&f.pool)
         .await
         .unwrap();
-    deepref_app::migrate(&f.pool).await.unwrap();
-
-    let after_migration = historical_rows(&f, screening_id, exposure_id, label_id).await;
-    assert_eq!(
-        after_migration, before,
-        "0106 leaves every history row unchanged"
-    );
-
-    let new_screening_id = f.insert_event(&f.candidate.as_uuid().to_string()).await;
-    let new_exposure_id = f
-        .insert_audience_exposure(&f.candidate.as_uuid().to_string())
-        .await;
-    let new_label_id = f.insert_label(&f.candidate.as_uuid().to_string()).await;
+    let new_exposure_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO ai_opinion_exposures(id,project_id,report_id,stage,exposure_source,audience_actor_kind,audience_actor_id,audience_actor_user_id,exposure_possible_at)
+        VALUES($1,$2,$3,'title_abstract','workflow_run_output','user',$4,$5,now())")
+        .bind(new_exposure_id)
+        .bind(f.project_id)
+        .bind(f.report_id)
+        .bind(&canonical_actor_id)
+        .bind(f.candidate.as_uuid())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let new_label_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO ai_screening_audit_labels(id,project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+        VALUES($1,$2,$3,$4,$5,$6,'include')")
+        .bind(new_label_id)
+        .bind(f.project_id)
+        .bind(f.cohort_id)
+        .bind(f.report_id)
+        .bind(&canonical_actor_id)
+        .bind(f.candidate.as_uuid())
+        .execute(&f.pool)
+        .await
+        .unwrap();
     assert_ne!(new_screening_id, screening_id);
     assert_ne!(new_exposure_id, exposure_id);
     assert_ne!(new_label_id, label_id);
     let after_new_write = historical_rows(&f, screening_id, exposure_id, label_id).await;
     assert_eq!(after_new_write, before, "new writes do not rewrite history");
+    let new_provenance: (Option<Uuid>, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT
+           (SELECT actor_user_id FROM screening_events WHERE id=$1),
+           (SELECT audience_actor_user_id FROM ai_opinion_exposures WHERE id=$2),
+           (SELECT actor_user_id FROM ai_screening_audit_labels WHERE id=$3)",
+    )
+    .bind(new_screening_id)
+    .bind(new_exposure_id)
+    .bind(new_label_id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        new_provenance,
+        (
+            Some(f.candidate.as_uuid()),
+            Some(f.candidate.as_uuid()),
+            Some(f.candidate.as_uuid())
+        )
+    );
 }
 
 async fn historical_rows(
@@ -603,12 +1004,15 @@ async fn historical_rows(
 async fn deactivation_preserves_historical_actor_and_exposure() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, "cohort-owner").await;
-    sqlx::query("UPDATE ai_screening_cohorts SET approved_by=$2 WHERE id=$1")
-        .bind(f.cohort_id)
-        .bind(f.owner.as_uuid().to_string())
-        .execute(&f.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE ai_screening_cohorts SET approved_by=$2,approved_by_actor_user_id=$3 WHERE id=$1",
+    )
+    .bind(f.cohort_id)
+    .bind(f.owner.as_uuid().to_string())
+    .bind(f.owner.as_uuid())
+    .execute(&f.pool)
+    .await
+    .unwrap();
     let (_, external_id) = create_user(&f.pool, "deactivated-candidate").await;
     let deactivated_user: UserId =
         sqlx::query_scalar("SELECT id FROM users WHERE workos_user_id=$1")
@@ -646,7 +1050,7 @@ async fn deactivation_preserves_historical_actor_and_exposure() {
     .await
     .unwrap();
     assert_eq!(stored, deactivated_user.as_uuid().to_string());
-    let counted = f.fresh_v2(deactivated_user).await;
+    let counted = f.fresh_v3(deactivated_user).await;
     assert!(!counted, "the deactivated person's provenance still counts");
     let deactivated: bool =
         sqlx::query_scalar("SELECT status='deactivated' FROM users WHERE id=$1")

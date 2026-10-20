@@ -559,12 +559,12 @@ async fn persist_event_and_state(
         r#"
         INSERT INTO screening_events (
           id,project_id,report_id,event_kind,stage,decision,exclusion_reason_id,notes,
-          protocol_version_id,actor_kind,actor_id,supersedes_event_id,undoes_event_id,
+          protocol_version_id,actor_kind,actor_id,actor_user_id,supersedes_event_id,undoes_event_id,
           previous_title_abstract_status,previous_full_text_status,
           previous_full_text_exclusion_reason_id,previous_final_status,
           result_title_abstract_status,result_full_text_status,
           result_full_text_exclusion_reason_id,result_final_status,origin
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
         "#,
     )
     .bind(write.event_id)
@@ -578,6 +578,7 @@ async fn persist_event_and_state(
     .bind(write.protocol_version_id)
     .bind(write.actor.kind().as_str())
     .bind(write.actor.id())
+    .bind(write.actor.user_id().map(|id| id.as_uuid()))
     .bind(write.supersedes_event_id)
     .bind(write.undoes_event_id)
     .bind(write.previous.title_abstract_status.as_str())
@@ -876,7 +877,7 @@ async fn queue_rows(
         ) doi ON true
         LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id
         WHERE pr.project_id=$1
-          AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible_v2(pr.project_id,pr.report_id,$11))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v2(pr.project_id,pr.report_id,$11))
+          AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible_v3(pr.project_id,pr.report_id,$11))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v3(pr.project_id,pr.report_id,$11))
           AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')
           AND (
             NOT $4::boolean
@@ -934,7 +935,7 @@ async fn validate_cursor(
         JOIN reports r ON r.id = pr.report_id
         LEFT JOIN screening_state ss ON ss.project_id = pr.project_id AND ss.report_id = pr.report_id
         WHERE pr.project_id = $1 AND pr.report_id = $2
-          AND ($3='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$3 AND ai_first_queue_visible_v2(pr.project_id,pr.report_id,$5))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v2(pr.project_id,pr.report_id,$5))
+          AND ($3='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$3 AND ai_first_queue_visible_v3(pr.project_id,pr.report_id,$5))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v3(pr.project_id,pr.report_id,$5))
           AND ($4::text IS NULL OR lower(coalesce(r.title, '') || ' ' || coalesce(r.abstract_text, '')) LIKE '%' || lower($4) || '%')
         "#,
     )
@@ -964,7 +965,7 @@ async fn queue_total(
     reviewer: Option<uuid::Uuid>,
 ) -> Result<i64, ScreeningError> {
     Ok(sqlx::query_scalar(
-        "SELECT count(*)::bigint FROM project_reports pr JOIN reports r ON r.id=pr.report_id LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id WHERE pr.project_id=$1 AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible_v2(pr.project_id,pr.report_id,$4))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v2(pr.project_id,pr.report_id,$4)) AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')",
+        "SELECT count(*)::bigint FROM project_reports pr JOIN reports r ON r.id=pr.report_id LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id WHERE pr.project_id=$1 AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible_v3(pr.project_id,pr.report_id,$4))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible_v3(pr.project_id,pr.report_id,$4)) AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')",
     )
     .bind(project_id)
     .bind(status)

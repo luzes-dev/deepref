@@ -6,6 +6,7 @@ use deepref_application::{
 };
 use deepref_domain::{
     Actor, ActorKind, ProjectId, ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage,
+    UserId,
 };
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -265,9 +266,11 @@ pub(crate) async fn record_audit_label(
         return Ok(AuditLabelOutcome::NotAudit);
     }
     user(&command.actor)?;
-    let user_id = Uuid::parse_str(command.actor.id()).map_err(|_| {
-        AiFirstError::Invalid("a human actor must use the canonical user UUID".into())
-    })?;
+    let user_id = command
+        .actor
+        .user_id()
+        .ok_or_else(|| AiFirstError::Invalid("a human actor must be authenticated".into()))?
+        .as_uuid();
     if command.expected_revision != 0 {
         return Err(AiFirstError::Refused(
             "blind labels require the displayed revision".into(),
@@ -276,7 +279,7 @@ pub(crate) async fn record_audit_label(
     let exposed: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM ai_opinion_exposures WHERE project_id=$1
       AND report_id=$2 AND stage='title_abstract' AND exposure_possible_at<=clock_timestamp()
-      AND (audience_actor_id IS NULL OR (audience_actor_kind='user' AND legacy_human_actor_matches_user(audience_actor_kind,audience_actor_id,$3))))",
+      AND (audience_actor_id IS NULL OR actor_identity_may_be_user(audience_actor_kind,audience_actor_id,audience_actor_user_id,$3)))",
     )
     .bind(project)
     .bind(report)
@@ -287,8 +290,24 @@ pub(crate) async fn record_audit_label(
         invalidate_in_transaction(tx, project, cohort, "audit_label_exposed", true).await?;
         return Ok(AuditLabelOutcome::Pending);
     }
-    let fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor_v2($1,$2)")
+    let already_labeled: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_screening_audit_labels l
+         WHERE l.cohort_id=$1 AND l.report_id=$2
+           AND actor_identity_may_be_user('user',l.actor_id,l.actor_user_id,$3))",
+    )
+    .bind(cohort)
+    .bind(report)
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if already_labeled {
+        return Err(AiFirstError::Refused(
+            "this reviewer already supplied a reference label; another reviewer must decide independently".into(),
+        ));
+    }
+    let fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor_v3($1,$2,$3)")
         .bind(cohort)
+        .bind(report)
         .bind(user_id)
         .fetch_one(&mut **tx)
         .await?;
@@ -315,13 +334,14 @@ pub(crate) async fn record_audit_label(
         ScreeningDecision::Exclude => "exclude",
     };
     let changed = sqlx::query(
-        "INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,decision)
-      VALUES($1,$2,$3,$4,$5) ON CONFLICT(cohort_id,report_id,actor_id) DO NOTHING",
+        "INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+      VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
     )
     .bind(project)
     .bind(cohort)
     .bind(report)
     .bind(command.actor.id())
+    .bind(Some(user_id))
     .bind(decision)
     .execute(&mut **tx)
     .await?
@@ -340,9 +360,13 @@ async fn write_reference_decisions(
     let cohort = c.get::<Uuid, _>("id");
     let project = c.get::<Uuid, _>("project_id");
     let references = sqlx::query("SELECT m.report_id,COALESCE(s.revision,0) AS evaluated_revision,bool_or(l.decision<>'exclude') AS retained,
-      min(l.actor_id) AS actor_id FROM ai_screening_cohort_members m LEFT JOIN screening_state s ON s.project_id=m.project_id AND s.report_id=m.report_id JOIN ai_screening_audit_labels l
-      ON l.cohort_id=m.cohort_id AND l.report_id=m.report_id WHERE m.cohort_id=$1 AND (m.sampled OR ($2 AND m.audit_control AND s.title_abstract_status='exclude'))
-      GROUP BY m.report_id,s.revision,m.sampled HAVING m.sampled OR bool_or(l.decision<>'exclude') ORDER BY m.report_id")
+      reviewer.actor_user_id FROM ai_screening_cohort_members m LEFT JOIN screening_state s ON s.project_id=m.project_id AND s.report_id=m.report_id JOIN ai_screening_audit_labels l
+      ON l.cohort_id=m.cohort_id AND l.report_id=m.report_id
+      JOIN LATERAL (SELECT COALESCE(l2.actor_user_id,legacy_human_actor_user_id('user',l2.actor_id)) AS actor_user_id
+        FROM ai_screening_audit_labels l2 WHERE l2.cohort_id=m.cohort_id AND l2.report_id=m.report_id
+        ORDER BY l2.actor_id LIMIT 1) reviewer ON reviewer.actor_user_id IS NOT NULL
+      WHERE m.cohort_id=$1 AND (m.sampled OR ($2 AND m.audit_control AND s.title_abstract_status='exclude'))
+      GROUP BY m.report_id,s.revision,m.sampled,reviewer.actor_user_id HAVING m.sampled OR bool_or(l.decision<>'exclude') ORDER BY m.report_id")
         .bind(cohort).bind(rescue_controls).fetch_all(&mut **tx).await?;
     for row in references {
         sqlx::query("UPDATE ai_screening_dispositions SET voided_at=clock_timestamp(),void_reason='audit_human_reference'
@@ -355,7 +379,7 @@ async fn write_reference_decisions(
             exclusion_reason_id:None, protocol_version_id:c.get::<Uuid,_>("protocol_version_id").into(),
             expected_revision:row.get("evaluated_revision"),
             notes:Some(json!({"ai_first_cohort":cohort,"reference_rule":"dual_or","raw_labels":"ai_screening_audit_labels"}).to_string()),
-            actor:Actor::new(ActorKind::User,row.get::<String,_>("actor_id")).map_err(|e|AiFirstError::Invalid(e.to_string()))?,
+            actor:Actor::authenticated_user(UserId::new(row.get::<Uuid,_>("actor_user_id"))),
         }).await?;
     }
     Ok(())
@@ -384,7 +408,7 @@ pub async fn evaluate_ai_first_audit(
     }
     let mut tx = super::routing::require_current(tx, &c).await?;
     let incomplete:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_cohort_members m WHERE m.cohort_id=$1 AND (m.sampled OR m.audit_control)
-       AND (SELECT count(*) FROM ai_screening_audit_labels l WHERE l.cohort_id=m.cohort_id AND l.report_id=m.report_id)<>2)")
+       AND NOT ai_first_audit_has_two_distinct_reviewers(m.cohort_id,m.report_id))")
         .bind(cohort).fetch_one(&mut *tx).await?;
     if incomplete {
         return Err(AiFirstError::Refused(
@@ -517,8 +541,22 @@ pub async fn finalize_ai_first_cohort(
         .map_err(|e| AiFirstError::Invalid(e.to_string()))?;
     // Terminal status before scientific writes prevents the human-reference hook
     // from interpreting these approved cohort writes as new reference judgments.
-    sqlx::query("UPDATE ai_screening_cohorts SET status='finalized',final_approval_id=$2,finalized_by=$3,finalized_at=now() WHERE id=$1")
-        .bind(cohort).bind(approval).bind(actor.id()).execute(&mut *tx).await?;
+    let reviewers_distinct: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS(SELECT 1 FROM ai_screening_cohort_members m
+         WHERE m.cohort_id=$1 AND (m.sampled OR m.audit_control)
+           AND NOT ai_first_audit_has_two_distinct_reviewers(m.cohort_id,m.report_id))",
+    )
+    .bind(cohort)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !reviewers_distinct {
+        return Err(AiFirstError::Refused(
+            "two distinct, mapped reviewers are required for every audit record".into(),
+        ));
+    }
+    sqlx::query("UPDATE ai_screening_cohorts SET status='finalized',final_approval_id=$2,finalized_by=$3,finalized_by_actor_user_id=$4,finalized_at=now() WHERE id=$1")
+        .bind(cohort).bind(approval).bind(actor.id()).bind(actor.user_id().map(|id| id.as_uuid()))
+        .execute(&mut *tx).await?;
     for row in &rows {
         let snapshot=crate::screening::screen_report_in_transaction(&mut tx,ScreenReportCommand {
             project_id:ProjectId::new(project),report_id:ReportId::new(row.get("report_id")),
@@ -537,7 +575,7 @@ pub async fn finalize_ai_first_cohort(
         "ai_first_finalization_approved",
         json!({"approval_id":approval,"design":design(&c)?,
         "result":result,"automated_exclusions":rows.len(),"reference_limits_acknowledged":true,
-        "actor_identity":"self_asserted"}),
+        "actor_identity":"authenticated_user"}),
         actor,
     )
     .await?;
@@ -555,7 +593,7 @@ pub(crate) async fn frozen_evidence_current(
     let contaminated: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_audit_labels l JOIN ai_opinion_exposures e
        ON e.project_id=l.project_id AND e.report_id=l.report_id
        WHERE l.cohort_id=$1 AND e.exposure_possible_at<=l.created_at
-       AND (e.audience_actor_id IS NULL OR same_human_actor_identity('user',e.audience_actor_id,'user',l.actor_id)))")
+       AND (e.audience_actor_id IS NULL OR same_human_actor_identity(e.audience_actor_kind,e.audience_actor_id,e.audience_actor_user_id,'user',l.actor_id,l.actor_user_id)))")
         .bind(cohort).fetch_one(&mut **tx).await?;
     if contaminated {
         return Ok(false);

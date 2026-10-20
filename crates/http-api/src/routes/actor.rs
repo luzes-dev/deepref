@@ -1,5 +1,5 @@
 use axum::{extract::FromRequestParts, http::request::Parts};
-use deepref_domain::{Actor as DomainActor, ActorKind, Principal};
+use deepref_domain::{Actor as DomainActor, Principal};
 
 use crate::{
     auth::AuthenticatedPrincipal,
@@ -39,13 +39,12 @@ pub(crate) fn actor_from_principal(principal: Principal) -> Result<Actor, ApiErr
     let Principal::User(user) = principal else {
         return Err(ApiError::Auth(AuthFailure::Unauthenticated));
     };
-    DomainActor::new(ActorKind::User, user.user_id.as_uuid().to_string())
-        .map_err(|error| ApiError::Internal(error.into()))
+    Ok(DomainActor::authenticated_user(user.user_id))
 }
 
 #[cfg(test)]
 mod tests {
-    use deepref_domain::{Principal, UserId};
+    use deepref_domain::{ActorKind, Principal, UserId};
     use uuid::Uuid;
 
     use super::*;
@@ -56,6 +55,7 @@ mod tests {
         let actor = actor_from_principal(Principal::user(user_id)).expect("user principal");
         assert_eq!(actor.kind(), ActorKind::User);
         assert_eq!(actor.id(), "00000000-0000-0000-0000-000000001234");
+        assert_eq!(actor.user_id(), Some(user_id));
     }
 
     #[test]

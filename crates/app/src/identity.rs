@@ -185,6 +185,74 @@ pub(crate) async fn insert_admin_audit(
     Ok(())
 }
 
+/// The fixed user supplied by the API only when authentication is disabled in
+/// development. The HTTP session gate and startup provisioning share this ID.
+pub fn development_principal_id() -> UserId {
+    UserId::new(Uuid::from_u128(3))
+}
+
+/// Ensure the fixed auth-off development principal exists and is active. The
+/// caller passes the same runtime gate used by the session middleware; false
+/// performs no database access and provisions nothing.
+pub async fn ensure_development_principal(
+    pool: &PgPool,
+    enabled: bool,
+) -> Result<Option<UserId>, IdentityStoreError> {
+    if !enabled {
+        return Ok(None);
+    }
+
+    const WORKOS_ID: &str = "deepref-development-principal";
+    const EMAIL: &str = "development@deepref.invalid";
+    let user_id = development_principal_id();
+    let mut tx = pool.begin().await?;
+    let inserted = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO users(id,workos_user_id,primary_email,display_name,status)
+         VALUES($1,$2,$3,'Local development principal','active')
+         ON CONFLICT(id) DO NOTHING RETURNING id",
+    )
+    .bind(user_id.as_uuid())
+    .bind(WORKOS_ID)
+    .bind(EMAIL)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if inserted.is_some() {
+        insert_admin_audit(
+            &mut tx,
+            "user.provisioned",
+            AuditPrincipal::System,
+            Some(user_id),
+            None,
+            None,
+            json!({}),
+            AuditRequest {
+                session_ref: None,
+                request_id: None,
+            },
+        )
+        .await?;
+    } else {
+        let existing_external_id: Option<String> =
+            sqlx::query_scalar("SELECT workos_user_id FROM users WHERE id=$1 FOR UPDATE")
+                .bind(user_id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await?;
+        if existing_external_id.as_deref() != Some(WORKOS_ID) {
+            return Err(IdentityStoreError::Corrupt(
+                "development principal identity",
+            ));
+        }
+        sqlx::query("UPDATE users SET status='active',updated_at=now() WHERE id=$1")
+            .bind(user_id.as_uuid())
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+    Ok(Some(user_id))
+}
+
 async fn write_audit(
     tx: &mut Transaction<'_, Postgres>,
     event: AuditEvent,

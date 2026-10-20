@@ -30,11 +30,18 @@ use uuid::Uuid;
 const DEVELOPMENT_ACTOR_ID: &str = "00000000-0000-0000-0000-000000000003";
 
 async fn database() -> Option<PgPool> {
-    deepref_app::test_isolation::isolated_pool_from_env_first(
+    let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         8,
     )
+    .await?;
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        api_config().runtime.development_principal_enabled(),
+    )
     .await
+    .expect("development principal is initialized for the auth-off runtime");
+    Some(pool)
 }
 
 fn api_config() -> ApiConfig {

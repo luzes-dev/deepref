@@ -20,12 +20,13 @@ use axum::{
 };
 use deepref_app::identity::{
     RefreshLease, SessionUpdate, StoredBrowserSession, UserRecord, claim_refresh_lease,
-    end_session_if_leased, find_active_session, release_refresh_lease, update_active_session,
+    development_principal_id, end_session_if_leased, find_active_session, release_refresh_lease,
+    update_active_session,
 };
 use deepref_application::identity::{
     IdentityError, OpaqueSecret, ProviderSession, RefreshOutcome, SessionStatus,
 };
-use deepref_domain::{Principal, UserId};
+use deepref_domain::Principal;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -178,7 +179,7 @@ pub(crate) async fn authenticate_requests(
         if gate.development {
             request
                 .extensions_mut()
-                .insert(Principal::user(UserId::new(Uuid::from_u128(3))));
+                .insert(Principal::user(development_principal_id()));
         }
         return next.run(request).await;
     }

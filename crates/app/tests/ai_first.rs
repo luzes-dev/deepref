@@ -41,7 +41,7 @@ fn actor(id: &str) -> Actor {
     let value = id.as_bytes().iter().fold(0_u128, |hash, byte| {
         hash.wrapping_mul(257).wrapping_add(u128::from(*byte))
     });
-    Actor::new(ActorKind::User, Uuid::from_u128(value).to_string()).unwrap()
+    Actor::authenticated_user(UserId::new(Uuid::from_u128(value)))
 }
 
 fn user_id(id: &str) -> UserId {
@@ -80,7 +80,7 @@ impl Fixture {
             .execute(&pool)
             .await
             .unwrap();
-        for id in ["owner", "reviewer-a", "reviewer-b"] {
+        for id in ["owner", "reviewer-a", "reviewer-b", "reviewer-initial"] {
             add_user(&pool, id).await;
         }
         insert_fixture_route(&pool).await;
@@ -599,6 +599,157 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
             .suspended_reason
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn mapped_legacy_audit_label_blocks_direct_duplicate_screening_post() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    let report = sample[0];
+    let legacy_label = "reviewer-a";
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        legacy_label,
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "verified old audit label",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,decision)
+        VALUES($1,$2,$3,$4,'exclude')",
+    )
+    .bind(f.project)
+    .bind(f.cohort)
+    .bind(report)
+    .bind(legacy_label)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+
+    assert!(
+        f.decide(
+            report,
+            "reviewer-a",
+            deepref_domain::ScreeningDecision::Exclude
+        )
+        .await
+        .is_err(),
+        "a direct POST must resolve aliases before appending another label"
+    );
+    let other = f
+        .decide(
+            report,
+            "reviewer-b",
+            deepref_domain::ScreeningDecision::Exclude,
+        )
+        .await
+        .expect("a distinct authenticated reviewer can supply the second label");
+    assert_eq!(other.title_abstract_status, ScreeningStatus::Unscreened);
+}
+
+#[tokio::test]
+async fn evaluate_refuses_two_label_rows_that_resolve_to_one_reviewer() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    let duplicate_report = sample[0];
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        "reviewer-a",
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "legacy alias belongs to canonical reviewer",
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,decision)
+        VALUES($1,$2,$3,'reviewer-a','exclude')",
+    )
+    .bind(f.project)
+    .bind(f.cohort)
+    .bind(duplicate_report)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+        VALUES($1,$2,$3,$4,$5,'exclude')")
+        .bind(f.project)
+        .bind(f.cohort)
+        .bind(duplicate_report)
+        .bind(user_id("reviewer-a").as_uuid().to_string())
+        .bind(user_id("reviewer-a").as_uuid())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+
+    let controls: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT report_id FROM ai_screening_cohort_members WHERE cohort_id=$1 AND audit_control ORDER BY report_id",
+    )
+    .bind(f.cohort)
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
+    for report in sample.iter().chain(controls.iter()) {
+        if *report == duplicate_report {
+            continue;
+        }
+        let decision = if sample.contains(report) {
+            deepref_domain::ScreeningDecision::Exclude
+        } else {
+            deepref_domain::ScreeningDecision::Include
+        };
+        f.decide(*report, "reviewer-a", decision).await.unwrap();
+        f.decide(
+            *report,
+            "reviewer-b",
+            deepref_domain::ScreeningDecision::Exclude,
+        )
+        .await
+        .unwrap();
+    }
+
+    assert!(
+        evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+            .await
+            .is_err(),
+        "two rows from one resolved person do not make an independent reference"
+    );
+}
+
+#[tokio::test]
+async fn finalize_rechecks_distinct_reviewers_after_mapping_changes() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    f.label_all(&sample, false).await;
+    let result = evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+        .await
+        .unwrap();
+    assert!(result.passed);
+
+    map_legacy_actor(
+        &f.pool,
+        "user",
+        &user_id("reviewer-b").as_uuid().to_string(),
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "operator resolved duplicate canonical reviewer identity",
+    )
+    .await
+    .unwrap();
+    assert!(
+        finalize_ai_first_cohort(&f.pool, f.project, f.cohort, true, &actor("owner"))
+            .await
+            .is_err(),
+        "finalization revalidates reviewers after identity mappings change"
+    );
+    assert_eq!(f.status().await, "passed");
 }
 
 #[tokio::test]

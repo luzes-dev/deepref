@@ -100,6 +100,11 @@ pub async fn serve_with_shutdown(
     deepref_application::validate_shipped_appraisal_definitions()
         .map_err(|error| anyhow::anyhow!("invalid shipped appraisal definition: {error}"))?;
     let pool = database_pool(&config).await?;
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        config.runtime.development_principal_enabled(),
+    )
+    .await?;
 
     let document_store = deepref_documents::DocumentStore::from_config(&config.documents)?;
     anyhow::ensure!(

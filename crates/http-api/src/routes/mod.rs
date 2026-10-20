@@ -317,8 +317,7 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             crate::auth::SessionGate {
                 enabled: config.runtime.auth_enabled,
-                development: config.runtime.environment.is_development()
-                    && !config.runtime.auth_enabled,
+                development: config.runtime.development_principal_enabled(),
                 state: state.clone(),
             },
             crate::auth::authenticate_requests,

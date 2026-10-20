@@ -228,6 +228,16 @@ async fn screening_proposal(
 
 /// The person's screening decision on a record at title and abstract.
 async fn decide(pool: &PgPool, project_id: Uuid, report_id: Uuid, decision: ScreeningDecision) {
+    decide_as(pool, project_id, report_id, decision, person()).await;
+}
+
+async fn decide_as(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    decision: ScreeningDecision,
+    actor: Actor,
+) {
     let protocol_id = get_published_protocol(pool, project_id)
         .await
         .expect("protocol")
@@ -251,7 +261,7 @@ async fn decide(pool: &PgPool, project_id: Uuid, report_id: Uuid, decision: Scre
             protocol_version_id: ProtocolVersionId::new(protocol_id),
             expected_revision: revision,
             notes: None,
-            actor: person(),
+            actor,
         },
     )
     .await
@@ -938,7 +948,14 @@ async fn an_unmapped_legacy_exposure_excludes_until_operator_non_identity() {
     record_exposure(&pool, &exposure)
         .await
         .expect("legacy exposure persists");
-    decide(&pool, project_id, record, ScreeningDecision::Include).await;
+    decide_as(
+        &pool,
+        project_id,
+        record,
+        ScreeningDecision::Include,
+        Actor::authenticated_user(user_id),
+    )
+    .await;
 
     let conservative = independent_reviewer_pairs(&pool, project_id, None)
         .await

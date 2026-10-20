@@ -263,14 +263,15 @@ async fn authenticated_users_have_distinct_fresh_auditor_blinding() {
     let cohort_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO ai_screening_cohorts \
-         (id,project_id,protocol_version_id,semantic_bundle_hash,semantic_identity,policy_version,status,target_percent,approved_by) \
-         VALUES($1,$2,$3,$4,'{}',1,'auditing',95,$5)",
+         (id,project_id,protocol_version_id,semantic_bundle_hash,semantic_identity,policy_version,status,target_percent,approved_by,approved_by_actor_user_id) \
+         VALUES($1,$2,$3,$4,'{}',1,'auditing',95,$5,$6)",
     )
     .bind(cohort_id)
     .bind(project_id)
     .bind(protocol_id)
     .bind("a".repeat(64))
     .bind(alice.user.as_uuid().to_string())
+    .bind(alice.user.as_uuid())
     .execute(&harness.pool)
     .await
     .unwrap();
@@ -285,14 +286,16 @@ async fn authenticated_users_have_distinct_fresh_auditor_blinding() {
     .await
     .unwrap();
 
-    let alice_is_fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor_v2($1,$2)")
+    let alice_is_fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor_v3($1,$2,$3)")
         .bind(cohort_id)
+        .bind(cohort_report)
         .bind(alice.user.as_uuid())
         .fetch_one(&harness.pool)
         .await
         .unwrap();
-    let bob_is_fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor_v2($1,$2)")
+    let bob_is_fresh: bool = sqlx::query_scalar("SELECT ai_first_fresh_auditor_v3($1,$2,$3)")
         .bind(cohort_id)
+        .bind(cohort_report)
         .bind(bob.user.as_uuid())
         .fetch_one(&harness.pool)
         .await
@@ -307,7 +310,7 @@ async fn authenticated_users_have_distinct_fresh_auditor_blinding() {
     );
 
     let bob_sees_queue_item: bool =
-        sqlx::query_scalar("SELECT ai_first_queue_visible_v2($1,$2,$3)")
+        sqlx::query_scalar("SELECT ai_first_queue_visible_v3($1,$2,$3)")
             .bind(project_id)
             .bind(cohort_report)
             .bind(bob.user.as_uuid())
