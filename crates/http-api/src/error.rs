@@ -11,6 +11,12 @@ tokio::task_local! {
     pub(crate) static REQUEST_CORRELATION_ID: Uuid;
 }
 
+/// The correlation ID of the request this task is serving, when there is one.
+/// Audit rows carry it; operator commands and worker jobs have none.
+pub(crate) fn correlation_id() -> Option<String> {
+    REQUEST_CORRELATION_ID.try_with(|id| id.to_string()).ok()
+}
+
 fn persistence_response(
     error: deepref_app::PersistenceError,
 ) -> (

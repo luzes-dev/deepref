@@ -25,14 +25,19 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use deepref_app::auth_rejections::RejectionReason;
 
 use crate::{
     auth::{CookiePolicy, read_cookie},
     error::{ApiError, AuthFailure},
+    state::AppState,
 };
 
-#[derive(Debug, Clone)]
-pub(crate) struct OriginGuard(Arc<Inner>);
+#[derive(Clone)]
+pub(crate) struct OriginGuard {
+    inner: Arc<Inner>,
+    state: AppState,
+}
 
 #[derive(Debug)]
 struct Inner {
@@ -41,18 +46,21 @@ struct Inner {
 }
 
 impl OriginGuard {
-    pub(crate) fn new(origin: &deepref_config::PublicOrigin) -> Self {
-        Self(Arc::new(Inner {
-            origin: origin.as_str().to_owned(),
-            session_cookie: CookiePolicy::for_origin(origin).session_name(),
-        }))
+    pub(crate) fn new(origin: &deepref_config::PublicOrigin, state: AppState) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                origin: origin.as_str().to_owned(),
+                session_cookie: CookiePolicy::for_origin(origin).session_name(),
+            }),
+            state,
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     Allowed,
-    Rejected(&'static str),
+    Rejected(RejectionReason),
 }
 
 fn is_safe(method: &Method) -> bool {
@@ -65,16 +73,16 @@ fn judge(guard: &Inner, method: &Method, headers: &HeaderMap) -> Verdict {
     }
     let mut origins = headers.get_all(header::ORIGIN).iter();
     match (origins.next(), origins.next()) {
-        (Some(_), Some(_)) => Verdict::Rejected("multiple origin headers"),
+        (Some(_), Some(_)) => Verdict::Rejected(RejectionReason::OriginMultipleHeaders),
         (Some(origin), None) if origin.as_bytes() == guard.origin.as_bytes() => Verdict::Allowed,
-        (Some(_), None) => Verdict::Rejected("origin differs from the application origin"),
+        (Some(_), None) => Verdict::Rejected(RejectionReason::OriginMismatch),
         (None, _) => match headers
             .get("sec-fetch-site")
             .and_then(|value| value.to_str().ok())
         {
             Some("same-origin") => Verdict::Allowed,
-            Some(_) => Verdict::Rejected("sec-fetch-site is not same-origin"),
-            None => Verdict::Rejected("neither origin nor sec-fetch-site present"),
+            Some(_) => Verdict::Rejected(RejectionReason::OriginSecFetchSiteMismatch),
+            None => Verdict::Rejected(RejectionReason::OriginMissingEvidence),
         },
     }
 }
@@ -85,15 +93,16 @@ pub(crate) async fn reject_cross_origin_session_requests(
     request: Request,
     next: Next,
 ) -> Response {
-    match judge(&guard.0, request.method(), request.headers()) {
+    match judge(&guard.inner, request.method(), request.headers()) {
         Verdict::Allowed => next.run(request).await,
         Verdict::Rejected(reason) => {
             tracing::warn!(
-                reason,
+                reason = reason.as_str(),
                 method = %request.method(),
                 path = request.uri().path(),
                 "rejected a cookie-authenticated unsafe request"
             );
+            guard.state.record_auth_rejection(reason, None).await;
             ApiError::Auth(AuthFailure::OriginRejected).into_response()
         }
     }

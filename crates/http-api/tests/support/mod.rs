@@ -93,7 +93,12 @@ pub fn auth_app_with(
 
 /// A pool that never connects, for requests that must be decided before any query.
 pub fn unused_pool() -> sqlx::PgPool {
+    // A pool no test may query. It fails an acquire immediately instead of
+    // waiting out the default 30-second timeout when an audit write or a
+    // session read reaches it: "no database is needed" must also mean "and no
+    // database is waited for".
     sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(250))
         .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
         .unwrap()
 }

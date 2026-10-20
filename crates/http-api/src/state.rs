@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use deepref_ai::{AiGateway, RoutedGateway};
+use deepref_app::auth_rejections::RejectionAuditor;
 use deepref_app::authorization::{DenialAuditor, PostgresAuthorizationStore};
 use deepref_application::authorization::{Authorizer, PolicyDecisionPoint};
 use deepref_documents::DocumentStore;
@@ -33,6 +34,8 @@ pub struct AppState {
     pub authorizer: Arc<dyn Authorizer>,
     /// Bounded audit of authorization denials.
     pub denials: Arc<DenialAuditor>,
+    /// Bounded audit of authentication rejections (11 Part B).
+    pub auth_rejections: Arc<RejectionAuditor>,
     /// How often an open stream re-checks that its principal may still view
     /// the project. A revoked member's stream ends within this interval.
     pub stream_recheck: std::time::Duration,
@@ -48,6 +51,7 @@ impl AppState {
                 pool.clone(),
             ))),
             denials: Arc::new(DenialAuditor::new(pool.clone())),
+            auth_rejections: Arc::new(RejectionAuditor::new(pool.clone())),
             stream_recheck: DEFAULT_STREAM_RECHECK,
             pool,
             started_at: Instant::now(),
@@ -73,6 +77,25 @@ impl AppState {
     pub fn with_stream_recheck(mut self, interval: std::time::Duration) -> Self {
         self.stream_recheck = interval;
         self
+    }
+
+    /// Records an authentication rejection into the bounded `auth.rejected`
+    /// audit (11 Part B). A failed write is logged: a rejection is never
+    /// turned into an error by its own audit.
+    pub async fn record_auth_rejection(
+        &self,
+        reason: deepref_app::auth_rejections::RejectionReason,
+        target: Option<deepref_domain::UserId>,
+    ) {
+        let request_id = crate::error::correlation_id();
+        let rejection = deepref_app::auth_rejections::AuthRejection {
+            reason,
+            target,
+            request_id: request_id.as_deref(),
+        };
+        if let Err(error) = self.auth_rejections.record(rejection).await {
+            tracing::warn!(%error, "authentication rejection could not be audited");
+        }
     }
 
     pub fn with_workflow_config(mut self, workflow: deepref_config::WorkflowConfig) -> Self {

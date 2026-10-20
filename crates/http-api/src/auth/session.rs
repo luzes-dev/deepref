@@ -18,6 +18,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use deepref_app::auth_rejections::RejectionReason;
 use deepref_app::identity::{
     RefreshLease, SessionUpdate, StoredBrowserSession, UserRecord, claim_refresh_lease,
     development_principal_id, end_session_if_leased, find_active_session, release_refresh_lease,
@@ -26,7 +27,7 @@ use deepref_app::identity::{
 use deepref_application::identity::{
     IdentityError, OpaqueSecret, ProviderSession, RefreshOutcome, SessionStatus,
 };
-use deepref_domain::Principal;
+use deepref_domain::{Principal, UserId};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -166,8 +167,22 @@ pub(crate) struct SessionGate {
 
 enum Resolution {
     Anonymous,
-    Rejected(&'static str),
+    Rejected(Refused),
     Authenticated(Box<SessionContext>),
+}
+
+/// A presented session the server would not accept: a closed reason from
+/// [`RejectionReason`], and the user a stored session row already named (never
+/// anything read from the request).
+struct Refused {
+    reason: RejectionReason,
+    target: Option<UserId>,
+}
+
+impl Refused {
+    fn new(reason: RejectionReason, target: Option<UserId>) -> Self {
+        Self { reason, target }
+    }
 }
 
 pub(crate) async fn authenticate_requests(
@@ -202,8 +217,14 @@ pub(crate) async fn authenticate_requests(
             next.run(request).await
         }
         Ok(Resolution::Anonymous) => ApiError::Auth(AuthFailure::Unauthenticated).into_response(),
-        Ok(Resolution::Rejected(reason)) => {
-            tracing::warn!(reason, "rejected a request with an unusable session");
+        Ok(Resolution::Rejected(refused)) => {
+            tracing::warn!(
+                reason = refused.reason.as_str(),
+                "rejected a request with an unusable session"
+            );
+            gate.state
+                .record_auth_rejection(refused.reason, refused.target)
+                .await;
             let mut response = ApiError::Auth(AuthFailure::SessionExpired).into_response();
             clear_session_cookie(&auth, &mut response);
             response
@@ -227,12 +248,18 @@ async fn resolve(
         return Ok(Resolution::Anonymous);
     };
     if Uuid::parse_str(cookie_token).is_err() {
-        return Ok(Resolution::Rejected("malformed_session_cookie"));
+        return Ok(Resolution::Rejected(Refused::new(
+            RejectionReason::SessionMalformedCookie,
+            None,
+        )));
     }
     let token_hash = auth.session_tokens().token_hash(cookie_token);
     for _ in 0..MAX_PERSIST_ATTEMPTS {
         let Some(stored) = find_active_session(pool, &token_hash).await? else {
-            return Ok(Resolution::Rejected("unknown_expired_or_revoked_session"));
+            return Ok(Resolution::Rejected(Refused::new(
+                RejectionReason::SessionUnknownExpiredOrRevoked,
+                None,
+            )));
         };
         match auth
             .provider()
@@ -240,16 +267,29 @@ async fn resolve(
             .await
         {
             Ok(SessionStatus::Active(session)) => {
-                if let Some(reason) = identity_mismatch(auth, &stored, &session) {
-                    return Ok(Resolution::Rejected(reason));
+                if let Some(mismatch) = identity_mismatch(auth, &stored, &session) {
+                    return Ok(Resolution::Rejected(Refused::new(
+                        mismatch.session_reason(),
+                        Some(stored.user.id),
+                    )));
                 }
             }
             Ok(SessionStatus::Expired(_)) => match refresh_expired(auth, pool, &stored).await? {
                 Refresh::Persisted => {}
                 Refresh::Superseded => continue,
-                Refresh::Terminal(reason) => return Ok(Resolution::Rejected(reason)),
+                Refresh::Terminal(reason) => {
+                    return Ok(Resolution::Rejected(Refused::new(
+                        reason,
+                        Some(stored.user.id),
+                    )));
+                }
             },
-            Ok(SessionStatus::Invalid) => return Ok(Resolution::Rejected("invalid_session")),
+            Ok(SessionStatus::Invalid) => {
+                return Ok(Resolution::Rejected(Refused::new(
+                    RejectionReason::SessionInvalid,
+                    Some(stored.user.id),
+                )));
+            }
             Err(error) => return Err(provider_error(error)),
         }
         return Ok(Resolution::Authenticated(Box::new(context(stored))));
@@ -257,18 +297,39 @@ async fn resolve(
     Err(ApiError::Auth(AuthFailure::ProviderUnavailable))
 }
 
+/// Which stored identity a provider session fails to match.
+enum Mismatch {
+    User,
+    Reference,
+}
+
+impl Mismatch {
+    const fn session_reason(self) -> RejectionReason {
+        match self {
+            Self::User => RejectionReason::SessionUserMismatch,
+            Self::Reference => RejectionReason::SessionReferenceMismatch,
+        }
+    }
+
+    const fn refresh_reason(self) -> RejectionReason {
+        match self {
+            Self::User => RejectionReason::RefreshUserMismatch,
+            Self::Reference => RejectionReason::RefreshReferenceMismatch,
+        }
+    }
+}
+
 /// Why a provider session does not belong to the stored row, if it does not.
 fn identity_mismatch(
     auth: &AuthRuntime,
     stored: &StoredBrowserSession,
     session: &ProviderSession,
-) -> Option<&'static str> {
+) -> Option<Mismatch> {
     if session.external_user_id != stored.user.external_user_id {
-        return Some("session_user_mismatch");
+        return Some(Mismatch::User);
     }
     let session_ref = auth.session_refs().session_ref(&session.session_id);
-    (!super::constant_time_eq(&session_ref, &stored.session_ref))
-        .then_some("session_reference_mismatch")
+    (!super::constant_time_eq(&session_ref, &stored.session_ref)).then_some(Mismatch::Reference)
 }
 
 enum Refresh {
@@ -277,7 +338,7 @@ enum Refresh {
     /// Another request refreshed first: reload and use its session.
     Superseded,
     /// The session is definitively over. Only this clears the cookie.
-    Terminal(&'static str),
+    Terminal(RejectionReason),
 }
 
 /// Refreshes an expired session as the only request doing so, across replicas.
@@ -338,7 +399,9 @@ async fn refresh_expired(
                 RefreshLease::Claimed => break,
                 RefreshLease::Superseded => return Ok(Refresh::Superseded),
                 RefreshLease::Gone => {
-                    return Ok(Refresh::Terminal("session_revoked_during_refresh"));
+                    return Ok(Refresh::Terminal(
+                        RejectionReason::RefreshRevokedDuringRefresh,
+                    ));
                 }
                 RefreshLease::Held if tokio::time::Instant::now() >= deadline => {
                     tracing::warn!("a competing session refresh did not finish in time");
@@ -398,8 +461,8 @@ async fn refresh_and_persist(
             sealed_session,
             session,
         } => {
-            if let Some(reason) = identity_mismatch(auth, stored, &session) {
-                return Ok(Refresh::Terminal(reason));
+            if let Some(mismatch) = identity_mismatch(auth, stored, &session) {
+                return Ok(Refresh::Terminal(mismatch.refresh_reason()));
             }
             let session_ref = auth.session_refs().session_ref(&session.session_id);
             Ok(
@@ -414,7 +477,9 @@ async fn refresh_and_persist(
                 .await?
                 {
                     SessionUpdate::Updated => Refresh::Persisted,
-                    SessionUpdate::Gone => Refresh::Terminal("session_revoked_during_refresh"),
+                    SessionUpdate::Gone => {
+                        Refresh::Terminal(RejectionReason::RefreshRevokedDuringRefresh)
+                    }
                     // Lost the lease or the version: reload the winner's row.
                     SessionUpdate::Conflict => Refresh::Superseded,
                 },
@@ -426,7 +491,7 @@ async fn refresh_and_persist(
         // refresh already rotated, and that refresh's result is the truth.
         RefreshOutcome::Rejected => Ok(
             if end_session_if_leased(pool, stored.id, stored.version, owner).await? {
-                Refresh::Terminal("refresh_rejected")
+                Refresh::Terminal(RejectionReason::RefreshRejected)
             } else {
                 Refresh::Superseded
             },

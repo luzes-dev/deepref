@@ -56,6 +56,10 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(auth::login))
         .routes(routes!(auth::callback))
         .routes(routes!(auth::logout))
+        .routes(routes!(
+            auth::request_account_deletion,
+            auth::cancel_account_deletion
+        ))
         .routes(routes!(projection::get_projection))
         .routes(routes!(settings::get_settings, settings::update_settings))
         .routes(routes!(projects::list_projects, projects::create_project))
@@ -323,7 +327,7 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             crate::auth::authenticate_requests,
         ))
         .layer(axum::middleware::from_fn_with_state(
-            crate::origin_guard::OriginGuard::new(&config.runtime.public_origin),
+            crate::origin_guard::OriginGuard::new(&config.runtime.public_origin, state.clone()),
             crate::origin_guard::reject_cross_origin_session_requests,
         ))
         .layer(cors)

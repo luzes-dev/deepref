@@ -12,10 +12,13 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
 };
+use deepref_app::account_deletion::{self, AccountDeletionError};
+use deepref_app::auth_rejections::RejectionReason;
 use deepref_app::identity::{AuditRequest, NewBrowserSession, SignIn, record_logout, sign_in};
 use deepref_application::identity::{
     IdentityError, LoginState, OpaqueSecret, ReturnPath, SessionStatus,
 };
+use deepref_domain::UserId;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -178,10 +181,25 @@ impl CallbackError {
             Self::AccountDeactivated => "account_deactivated",
         }
     }
+
+    /// The closed audit vocabulary for the same refusal (11 Part B).
+    const fn rejection_reason(self) -> RejectionReason {
+        match self {
+            Self::InvalidState => RejectionReason::CallbackInvalidState,
+            Self::AccessDenied => RejectionReason::CallbackAccessDenied,
+            Self::InvalidCode => RejectionReason::CallbackInvalidCode,
+            Self::ProviderUnavailable => RejectionReason::CallbackProviderUnavailable,
+            Self::ProvisioningFailed => RejectionReason::CallbackProvisioningFailed,
+            Self::AccountDeactivated => RejectionReason::CallbackAccountDeactivated,
+        }
+    }
 }
 
-fn callback_failure(auth: &AuthRuntime, error: CallbackError) -> Response {
+async fn callback_failure(state: &AppState, auth: &AuthRuntime, error: CallbackError) -> Response {
     tracing::warn!(reason = error.code(), "sign-in callback refused");
+    state
+        .record_auth_rejection(error.rejection_reason(), None)
+        .await;
     let mut response =
         Redirect::to(&format!("{}/signin?error={}", auth.origin(), error.code())).into_response();
     if let Some(cookie) = auth.cookies().clear(auth.cookies().login_name()) {
@@ -202,25 +220,25 @@ pub async fn callback(
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, ApiError> {
     let auth = auth_runtime(&state)?;
-    let fail = |error| Ok(callback_failure(auth, error));
+    let fail = |error| callback_failure(&state, auth, error);
 
     let login_state = read_cookie(&headers, auth.cookies().login_name())
         .and_then(|sealed| auth.provider().open_login_state(sealed))
         .filter(|login| login.expires_at_unix > chrono::Utc::now().timestamp());
     let Some(login_state) = login_state else {
-        return fail(CallbackError::InvalidState);
+        return Ok(fail(CallbackError::InvalidState).await);
     };
     let state_matches = query.state.as_deref().is_some_and(|returned| {
         constant_time_eq(returned.as_bytes(), login_state.state.as_bytes())
     });
     if !state_matches {
-        return fail(CallbackError::InvalidState);
+        return Ok(fail(CallbackError::InvalidState).await);
     }
     if query.error.is_some() {
-        return fail(CallbackError::AccessDenied);
+        return Ok(fail(CallbackError::AccessDenied).await);
     }
     let Some(code) = query.code.as_deref().filter(|code| !code.is_empty()) else {
-        return fail(CallbackError::InvalidCode);
+        return Ok(fail(CallbackError::InvalidCode).await);
     };
 
     let login = match auth
@@ -229,9 +247,11 @@ pub async fn callback(
         .await
     {
         Ok(login) => login,
-        Err(IdentityError::Rejected) => return fail(CallbackError::InvalidCode),
-        Err(IdentityError::Unavailable) => return fail(CallbackError::ProviderUnavailable),
-        Err(IdentityError::Internal(_)) => return fail(CallbackError::ProvisioningFailed),
+        Err(IdentityError::Rejected) => return Ok(fail(CallbackError::InvalidCode).await),
+        Err(IdentityError::Unavailable) => {
+            return Ok(fail(CallbackError::ProviderUnavailable).await);
+        }
+        Err(IdentityError::Internal(_)) => return Ok(fail(CallbackError::ProvisioningFailed).await),
     };
     let cookie_token = Uuid::new_v4().to_string();
     let Some(session_cookie) = auth.cookies().set(
@@ -239,7 +259,7 @@ pub async fn callback(
         &cookie_token,
         SESSION_COOKIE_MAX_AGE_SECS,
     ) else {
-        return fail(CallbackError::ProvisioningFailed);
+        return Ok(fail(CallbackError::ProvisioningFailed).await);
     };
     let cookie_token_hash = auth.session_tokens().token_hash(&cookie_token);
     let session_ref = auth.session_refs().session_ref(&login.session.session_id);
@@ -262,10 +282,10 @@ pub async fn callback(
     .await;
     match outcome {
         Ok(SignIn::Active { .. }) => {}
-        Ok(SignIn::Deactivated) => return fail(CallbackError::AccountDeactivated),
+        Ok(SignIn::Deactivated) => return Ok(fail(CallbackError::AccountDeactivated).await),
         Err(error) => {
             tracing::error!(%error, "could not provision the signed-in user");
-            return fail(CallbackError::ProvisioningFailed);
+            return Ok(fail(CallbackError::ProvisioningFailed).await);
         }
     }
     let mut response = Redirect::to(&format!(
@@ -333,4 +353,81 @@ async fn revoke_at_provider(auth: &AuthRuntime, sealed: &OpaqueSecret) {
     if let Err(error) = auth.provider().revoke_session(&session_id).await {
         tracing::warn!(%error, "could not revoke the provider session at sign-out");
     }
+}
+
+/// The account whose deletion the caller manages: always their own. Without
+/// authentication (local development) there is no account to delete.
+fn account_owner(state: &AppState, session: Option<&CurrentSession>) -> Result<UserId, ApiError> {
+    if state.auth.is_none() {
+        return Err(ApiError::NotFound(
+            "authentication is not enabled".to_owned(),
+        ));
+    }
+    let CurrentSession(context) = session.ok_or(ApiError::Auth(AuthFailure::Unauthenticated))?;
+    context
+        .principal
+        .user_id()
+        .ok_or_else(|| ApiError::NotFound("resource not found".to_owned()))
+}
+
+fn deletion_error(error: AccountDeletionError) -> ApiError {
+    match error {
+        AccountDeletionError::Database(error) => ApiError::Database(error),
+        AccountDeletionError::UnknownUser | AccountDeletionError::Inactive => {
+            ApiError::NotFound("resource not found".to_owned())
+        }
+        AccountDeletionError::Workspace(error) => ApiError::Internal(anyhow::anyhow!(error)),
+    }
+}
+
+#[utoipa::path(post, path = "/me/deletion-request", operation_id = "requestAccountDeletion",
+    tag = "auth",
+    responses(
+        (status = 202, description = "Deletion requested; completion runs 30 days later"),
+        (status = 401, body = ApiErrorBody, description = "No valid session"),
+        (status = 404, body = ApiErrorBody, description = "Authentication is not enabled"),
+    ))]
+pub async fn request_account_deletion(
+    State(state): State<AppState>,
+    session: Option<CurrentSession>,
+) -> Result<StatusCode, ApiError> {
+    let user = account_owner(&state, session.as_ref())?;
+    let request_id = correlation_id();
+    account_deletion::request_account_deletion(
+        &state.pool,
+        user,
+        AuditRequest {
+            request_id: request_id.as_deref(),
+            session_ref: None,
+        },
+    )
+    .await
+    .map_err(deletion_error)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[utoipa::path(delete, path = "/me/deletion-request", operation_id = "cancelAccountDeletion",
+    tag = "auth",
+    responses(
+        (status = 204, description = "Any pending deletion request is cancelled"),
+        (status = 401, body = ApiErrorBody, description = "No valid session"),
+        (status = 404, body = ApiErrorBody, description = "Authentication is not enabled"),
+    ))]
+pub async fn cancel_account_deletion(
+    State(state): State<AppState>,
+    session: Option<CurrentSession>,
+) -> Result<StatusCode, ApiError> {
+    let user = account_owner(&state, session.as_ref())?;
+    let request_id = correlation_id();
+    account_deletion::cancel_account_deletion(
+        &state.pool,
+        user,
+        AuditRequest {
+            request_id: request_id.as_deref(),
+            session_ref: None,
+        },
+    )
+    .await
+    .map_err(deletion_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
