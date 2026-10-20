@@ -8,7 +8,7 @@ export function shouldRetryQuery(failureCount: number, error: Error): boolean {
 }
 
 /** An unauthenticated answer to anything but `/me` means the session ended; re-ask `/me` so the shell shows the sign-in screen. */
-export function isSessionEnded(error: unknown): boolean {
+function isSessionEnded(error: unknown): boolean {
 	return error instanceof ApiError && error.status === 401;
 }
 

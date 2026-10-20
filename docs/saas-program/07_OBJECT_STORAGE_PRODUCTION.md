@@ -18,10 +18,11 @@ Audit existing PostgreSQL schemas for binary and oversized text payloads:
 Migration sequence for `workflow_files`:
 
 ```text
-1. Expand: add object storage reference columns (storage key, sha256 hash, byte size) to workflow_files while keeping content nullable.
-2. Dual-write: write new files to object storage and populate metadata columns; fall back to reading content bytea if storage key is null.
+1. Expand: add object storage reference columns (storage key, sha256 hash, byte size) to workflow_files while preserving content bytea NOT NULL.
+2. Dual-write: write new files to object storage and populate metadata columns, while continuing to populate content bytea during the compatibility overlap so old readers (decoding into Vec<u8> via get_workflow_file) continue working; new readers prefer object storage and fall back to reading content bytea if storage key is null.
 3. Backfill: run an idempotent background task reading content bytea, writing to object storage, verifying sha256 hash against written bytes, and setting storage key.
-4. Contract: drop content bytea in a subsequent release once all rows reference verified objects (see 12_OPERATIONS_ACCEPTANCE.md).
+4. Drain and relax: once old readers drain across deployments, drop the NOT NULL constraint on content bytea and switch writers to object-only writes.
+5. Contract: drop content bytea in a subsequent release once all rows reference verified objects and active binaries no longer read content (see 12_OPERATIONS_ACCEPTANCE.md).
 ```
 
 ## Scope
@@ -134,7 +135,9 @@ Cover:
 - tenant isolation;
 - unauthorized signed-URL request;
 - workflow_files staged backfill to object storage with sha256 hash verification;
-- expand/contract dual-write and fallback read when storage key is null;
+- dual-write populating both content bytea and object storage during compatibility overlap;
+- fallback read of content bytea when storage key is null;
+- writers switching to object-only writes after dropping NOT NULL constraint;
 - backfill task idempotency and resume after interruption;
 - failed upload;
 - DB commit failure after upload;

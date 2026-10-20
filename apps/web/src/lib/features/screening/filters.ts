@@ -55,7 +55,8 @@ export function screeningUrlSearchParams(state: ScreeningUrlState): URLSearchPar
 	const params = new URLSearchParams();
 	if (state.mode !== defaultScreeningUrlState.mode) params.set('mode', state.mode);
 	if (state.status !== defaultScreeningUrlState.status) params.set('status', state.status);
-	if (state.search) params.set('search', state.search);
+	const search = state.search.trim();
+	if (search) params.set('search', search);
 	if (state.sort !== defaultScreeningUrlState.sort) params.set('sort', state.sort);
 	if (state.report) params.set('report', state.report);
 	return params;

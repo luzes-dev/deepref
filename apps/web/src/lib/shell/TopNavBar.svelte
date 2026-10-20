@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { cn } from '#lib/utils.js';
 	import DependencyHealthIndicator from './DependencyHealthIndicator.svelte';
-	import UserMenu from '#lib/features/auth/UserMenu.svelte';
+	import UserMenu from './UserMenu.svelte';
 	import NotificationBell from './NotificationBell.svelte';
 
 	let {

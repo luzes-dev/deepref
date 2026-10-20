@@ -2,8 +2,8 @@
 	import { Alert, AlertDescription, AlertTitle } from '@deepref/ui/alert';
 	import { Button } from '@deepref/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@deepref/ui/card';
-	import { loginUrl, returnPathFor, signInErrorMessage } from './auth-urls.js';
-	import type { SessionStatus } from './session-status.js';
+	import { loginUrl, returnPathFor, signInErrorMessage } from '#lib/shell/auth-urls.js';
+	import type { SessionStatus } from '#lib/shell/session-status.js';
 
 	let {
 		status,

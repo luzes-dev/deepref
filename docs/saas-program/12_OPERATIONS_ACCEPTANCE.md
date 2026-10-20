@@ -4,7 +4,7 @@
 
 Make the launch system operable: a recorded deployment owner and target, expand/contract migrations that survive rolling deploys, restore drills that prove PostgreSQL and object storage agree, SLOs with alerts, dependency-failure tests, and a CI service for every new infrastructure dependency.
 
-This handoff is launch-required. It starts with 01 (deployment ownership, CI services) and closes after the rest of the launch set: 02–09 and 11 Parts B and C.
+This handoff is launch-required. It starts with 01 (deployment ownership, CI services) and closes after the rest of the launch set: 02, 03a–c, 04a, 05a, 07, 08, 09, and 11 Parts B and C.
 
 Read `00_PROGRAM.md` first.
 
@@ -123,8 +123,10 @@ CI check (idea; enforcing once the first release tag exists):
 migration-compat
   1. build the schema from the previous release tag's crates/app/migrations on a disposable PostgreSQL
   2. seed representative rows: projects, workspaces, jobs in each state, documents, webhook inbox rows
-  3. apply the PR's migrations
-  4. run the previous release's integration suite (checked out at the tag) against the migrated database
+  3. apply the PR's migrations: this is the prepared N-schema database
+  4. make it the previous release's template (below)
+  5. assert the template's schema version is the PR's newest migration (the query /health/ready runs)
+  6. run the previous release's integration suite (checked out at the tag) against the clones
 append-only
   git diff --diff-filter=MD <previous-tag> -- crates/app/migrations must be empty
 destructive-sql
@@ -133,6 +135,8 @@ destructive-sql
 ```
 
 Until the first `v*` tag exists, run these checks in report-only mode and record that decision in the ADR.
+
+The previous suite cannot read the prepared database through its URL. `isolated_pool_from_env` (`crates/app/src/test_isolation.rs`) keeps only the server and credentials from `DATABASE_URL` and clones `dtpl_<hash>`, a template built from the migrations embedded in that checkout. The harness therefore supplies the template itself: it drops any existing template under the name `template_name` derives from the previous tag's migration set, then clones the prepared database into that name. `ensure_template` finds it and skips the build, so every test clone carries the N schema. Run the harness on a disposable server, because the template name is shared by every checkout with the same migration set. Seed rows reach every test clone too; a previous-suite failure they cause is a compatibility finding to triage, not a reason to remove the seed.
 
 ## Backups and recovery
 
@@ -159,7 +163,12 @@ Restore drill:
 2  restore PITR to a new isolated instance at an approved timestamp. Never overwrite the source first
 3  resolve object versions as of the same timestamp into a quarantined bucket or prefix, read-only
 4  run the reconciliation below with a read-only database role
-5  start a candidate API and worker against the restored copy; verify /health/ready and a job drain
+5  before any worker starts: point the restored copy at isolated provider credentials and endpoints
+   (WorkOS, Polar, AI providers, every other outbound target) and at the quarantined bucket or prefix
+   only; block production egress from the drill network; quarantine the restored `queued` and `running`
+   jobs after step 4 has read them, so no candidate worker can claim production work. Then start a
+   candidate API and worker, enqueue controlled fixture jobs, and verify /health/ready and that the
+   fixtures drain. Production jobs never drain in the drill
 6  record achieved RPO and RTO, mismatch counts and validation output; then delete the restored instance
 ```
 
@@ -170,24 +179,25 @@ Restore drill:
   - jobs `running` with expired leases that workers cannot reclaim, and inbox rows received but never processed;
   - reservations pending settlement past their expiry (09).
 - Keep reconciliation as one read-only command. Record its home in the ADR: `tools/xtask` or a documented script. A fifth `deepref-server` subcommand changes ADR 0001 and needs its own ADR.
+- Lease fencing inside the restored database fences only the workers that share it. It cannot fence workers on the live database, so the drill's isolation comes from credentials, endpoints and network, never from fencing. The drill network has no route to the live database.
 
 ## SLOs and alerts
 
 Owners set every target before launch. No row ships with `TBD`.
 
-| SLI                                                                            | Source today                                                                          | Target            | Window | Owner          |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- | ----------------- | ------ | -------------- |
-| API availability (non-5xx ratio)                                               | none; needs a metric                                                                  | TBD               | TBD    | API owner      |
-| API latency p95 by route class, excluding SSE streams                          | none; needs a metric                                                                  | TBD               | TBD    | API owner      |
-| API replicas below the required schema version                                 | `/health/ready`                                                                       | 0 after rollout   | TBD    | API owner      |
-| Job queue age per workload pool                                                | `/health/dependencies` `oldest_age_seconds`, whole workspace only; per pool after 05a | TBD               | TBD    | Worker owner   |
-| Dead jobs                                                                      | `/health/dependencies` `recent_dead`                                                  | TBD               | TBD    | Worker owner   |
-| Live workers against expected                                                  | `/health/dependencies` `live_workers` (heartbeat every 15 s, 60 s window)             | at least expected | TBD    | Worker owner   |
-| Outbox backlog age (04a and `ai_autonomy_outbox`)                              | SQL; no metric                                                                        | TBD               | TBD    | Platform owner |
-| Inbox backlog age and webhook processing lag (WorkOS, Polar)                   | SQL after 04a                                                                         | TBD               | TBD    | Billing owner  |
-| Usage settlement backlog (expired unsettled reservations, Polar usage backlog) | 09 observability; SQL                                                                 | TBD               | TBD    | AI owner       |
-| Backup freshness and WAL archive lag                                           | none                                                                                  | TBD               | TBD    | Platform owner |
-| Object-store error rate and reconciliation orphan count                        | none                                                                                  | TBD               | TBD    | Platform owner |
+| SLI                                                                            | Source today                                                                | Target            | Window | Owner          |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------- | ------ | -------------- |
+| API availability (non-5xx ratio)                                               | none; needs a metric                                                        | TBD               | TBD    | API owner      |
+| API latency p95 by route class, excluding SSE streams                          | none; needs a metric                                                        | TBD               | TBD    | API owner      |
+| API replicas below the required schema version                                 | `/health/ready`                                                             | 0 after rollout   | TBD    | API owner      |
+| Job queue age per workload pool                                                | `worker.oldest_age_seconds`; workspace or one project; per pool after 05a   | TBD               | TBD    | Worker owner   |
+| Dead jobs                                                                      | `worker.recent_failed` (SQL `recent_dead`: dead jobs in a 30-minute window) | TBD               | TBD    | Worker owner   |
+| Live workers against expected                                                  | `worker.live_workers` (heartbeat every 15 s, 60 s window)                   | at least expected | TBD    | Worker owner   |
+| Outbox backlog age (04a and `ai_autonomy_outbox`)                              | SQL; no metric                                                              | TBD               | TBD    | Platform owner |
+| Inbox backlog age and webhook processing lag (WorkOS, Polar)                   | SQL after 04a                                                               | TBD               | TBD    | Billing owner  |
+| Usage settlement backlog (expired unsettled reservations, Polar usage backlog) | 09 observability; SQL                                                       | TBD               | TBD    | AI owner       |
+| Backup freshness and WAL archive lag                                           | none                                                                        | TBD               | TBD    | Platform owner |
+| Object-store error rate and reconciliation orphan count                        | none                                                                        | TBD               | TBD    | Platform owner |
 
 Rules:
 
@@ -260,6 +270,9 @@ Start each new service with the same shape as the existing PostgreSQL step in `c
 Cover at minimum:
 
 - `migration-compat`: the previous release's suite passes against the N schema, seeded with representative rows;
+- `migration-compat` harness: a prepared database whose newest migration is not the PR's fails step 5 before the previous suite starts;
+- restore drill guard: a candidate worker started on a restored copy claims no quarantined job and reaches no production endpoint (egress fixture);
+- every `worker.<field>` named in the SLO table exists on `DependencyDetail` in `crates/http-api/src/routes/health.rs`;
 - append-only and destructive-SQL checks, each with a failing fixture;
 - readiness: an N binary against an N-1 schema returns 503; an N-1 binary against an N schema stays ready and warns;
 - startup writes: `ensure_default_model_routes` under N and N-1 settings does not repoint routes (extend `crates/app/tests/ai.rs`);
@@ -274,4 +287,4 @@ Cover at minimum:
 
 ## Completion criterion
 
-Launch operations are accepted when: the ADR names the owner, target, region, secrets, migration runner and metrics backend; `migration-compat` and the append-only check pass against the first release tag; a restore drill on a restored copy records RPO and RTO that meet the signed targets, with zero unexplained reconciliation mismatches; every SLO row has a source, a page and a ticket threshold, and a runbook; the dependency matrix passes for PostgreSQL, object storage, WorkOS and Polar; every new infrastructure dependency used by the launch set has a CI service; and every runbook is indexed from `docs/README.md`. The NATS and Valkey rows activate only when their triggers fire.
+Launch operations are accepted when: the ADR names the owner, target, region, secrets, migration runner and metrics backend; `migration-compat` and the append-only check pass against the first release tag; a restore drill on a restored copy, run with isolated credentials and blocked production egress, records RPO and RTO that meet the signed targets, with zero unexplained reconciliation mismatches; every SLO row has a source, a page and a ticket threshold, and a runbook; the dependency matrix passes for PostgreSQL, object storage, WorkOS and Polar; every new infrastructure dependency used by the launch set has a CI service; and every runbook is indexed from `docs/README.md`. The NATS and Valkey rows activate only when their triggers fire.

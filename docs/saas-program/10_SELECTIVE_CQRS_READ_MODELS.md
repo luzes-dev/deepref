@@ -6,7 +6,7 @@ Separate expensive read concerns from command-side transactional models where pr
 
 Do not implement full CQRS or event sourcing.
 
-Read `00_PROGRAM.md`. This handoff is trigger-gated by `T-CQRS`: work starts only after a specific read has a measured profile, and after 03 for every projection. Complete handoff 04 (04a for asynchronous projections) before relying on transport. Handoff 05 should be available before production projection workloads are moved to JetStream.
+Read `00_PROGRAM.md`. This handoff is trigger-gated by `T-CQRS`: work starts only after a specific read has a measured profile, and after 03 for every projection. Complete handoff 04 (04a for asynchronous projections) before relying on transport. Handoff 05b should be available before production projection workloads are moved to JetStream.
 
 ## Definition
 
