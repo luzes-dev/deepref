@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../../../../tests/e2e-test';
+import type { Page } from '@playwright/test';
 
 const project = {
 	id: 'project-1',

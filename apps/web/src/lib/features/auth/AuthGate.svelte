@@ -4,7 +4,7 @@
 	import { Spinner } from '@deepref/ui/spinner';
 	import { createGetCurrentUser } from '#lib/api/generated/auth/auth.js';
 	import SignInScreen from './SignInScreen.svelte';
-	import { sessionStatus } from './session-status.js';
+	import { sessionStatus } from '#lib/shell/session-status.js';
 
 	let { children }: { children: Snippet } = $props();
 

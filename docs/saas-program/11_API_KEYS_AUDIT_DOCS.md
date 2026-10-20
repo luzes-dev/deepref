@@ -165,7 +165,7 @@ Remove/anonymize unnecessary PII according to product/legal policy, not by delet
 
 ## Part C: documentation and dead-model cleanup
 
-Perform a repository-wide audit for:
+Perform a repository-wide audit for obsolete single-user and untrusted-environment assumptions:
 
 ```text
 open-source
@@ -180,11 +180,13 @@ APP_ENV=local
 staging
 x-actor-id
 x-actor-kind
-PostgreSQL is the queue
-removed NATS guard
 ```
 
-Normative documentation should describe the new architecture:
+Do not treat PostgreSQL queueing or the NATS boundary ban as obsolete for the launch milestone. Launch keeps PostgreSQL transport (`05a`). Keep the `async-nats` architecture boundary ban in `tools/xtask/src/boundaries.rs` until 04b (`T-NATS`).
+
+Normative documentation should describe the launch architecture and the trigger-gated target architecture separately.
+
+Launch architecture:
 
 ```text
 private SaaS
@@ -193,15 +195,24 @@ WorkOS identity
 workspace tenancy
 central authorization
 scientific policy
-PostgreSQL authoritative state
-NATS JetStream transport
-Valkey ephemeral state
-object storage
+PostgreSQL authoritative state, transactional outbox and durable work transport (05a)
+S3-compatible object storage
 Polar Merchant of Record
 local entitlements
 AI reservation/settlement
-selective CQRS
+in-memory / database concurrency controls
 ```
+
+Trigger-gated target architecture:
+
+```text
+NATS JetStream durable work/event transport (04b, 05b; gated by T-NATS)
+Valkey ephemeral distributed cache/rate/concurrency state (06; gated by T-VALKEY)
+selective CQRS asynchronous read models (10; gated by T-CQRS)
+API keys and machine principals (11 Part A)
+```
+
+Update documentation again at each trigger-gated cutover as triggers fire.
 
 Historical architecture/review documents remain historical.
 
@@ -246,23 +257,35 @@ Do not change legal licensing or repository visibility through code unless expli
 
 ## Architecture docs
 
-Update the authoritative architecture document to state the final responsibility split.
+Update the authoritative architecture document to state the launch responsibility split and the trigger-gated target split separately.
 
-A concise target:
+Launch architecture:
 
 ```text
-PostgreSQL       authoritative transaction/scientific/durable state
-NATS JetStream   durable work/event transport
-Valkey           ephemeral distributed cache/rate/concurrency state
+PostgreSQL       authoritative transaction/scientific/durable state, outbox, and durable work transport (05a)
 Object storage   large durable blobs
 WorkOS           authentication/organization provisioning
 Polar            commercial billing/MoR
 DeepRef          authorization/scientific policy/entitlements/hard limits
 ```
 
-Document at-least-once messaging and transactional outbox.
+Trigger-gated target (post-launch):
+
+```text
+PostgreSQL       authoritative transaction/scientific/durable state and transactional outbox
+NATS JetStream   durable work/event transport (after T-NATS trigger: 04b/05b)
+Valkey           ephemeral distributed cache/rate/concurrency state (after T-VALKEY trigger: 06)
+Object storage   large durable blobs
+WorkOS           authentication/organization provisioning
+Polar            commercial billing/MoR
+DeepRef          authorization/scientific policy/entitlements/hard limits
+```
+
+Document at-least-once messaging, broker-independent integration inbox, and transactional outbox.
 
 Document selective CQRS, not full CQRS.
+
+Keep the `tools/xtask/src/boundaries.rs` ban on `async-nats` intact throughout the launch milestone; lift it only when 04b is adopted under `T-NATS`. Update architecture documentation again at each subsequent cutover.
 
 ## Security docs
 
@@ -296,8 +319,9 @@ Cover:
 - audit retention pruning and archival;
 - administrative audit excluded from scientific research exports;
 - user deactivation preserves history;
-- repository search/contract tests for obsolete deployment language where practical.
+- repository search/contract tests for obsolete deployment language where practical, while verifying the NATS boundary ban in xtask remains enforced for launch;
+- documentation audit verifying launch architecture (PostgreSQL transport) is documented separately from trigger-gated targets (NATS, Valkey, CQRS).
 
 ## Completion criterion
 
-Administrative actions across identity, workspace membership, billing and credentials are comprehensively audited with bounded denial volume and incident-response query access; normative code/docs consistently describe the new private SaaS architecture; and machine identity is supported through central authorization when enabled.
+Administrative actions across identity, workspace membership, billing and credentials are comprehensively audited with bounded denial volume and incident-response query access; normative code/docs consistently describe the launch architecture (with PostgreSQL transport and intact NATS boundary guard) separate from trigger-gated targets, with an update plan for each cutover; and machine identity is supported through central authorization when enabled.

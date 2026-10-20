@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../../../../tests/e2e-test';
+import type { Page } from '@playwright/test';
 
 const projectId = 'project-1';
 const api = 'http://localhost:4173/api';
