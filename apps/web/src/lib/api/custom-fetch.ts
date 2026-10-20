@@ -1,5 +1,3 @@
-import { currentReviewerId } from './reviewer';
-
 export class ApiError<T = unknown> extends Error {
 	readonly status: number;
 	readonly info: T;
@@ -93,22 +91,11 @@ function correlationId(): string | undefined {
 	return globalThis.crypto?.randomUUID?.();
 }
 
-/**
- * Sign-in, sign-out and current-user requests establish who the person is, so
- * they carry no `x-actor-*` label. The server ignores those headers for
- * authentication either way.
- */
-function isIdentityRequest(url: string): boolean {
-	const path = new URL(url, 'http://localhost').pathname.replace(/^\/api(?=\/)/, '');
-	return path === '/me' || path.startsWith('/auth/');
-}
-
 export async function customFetch<T>(url: string, options: RequestInit): Promise<T> {
 	const headers = new Headers(options.headers);
-	if (!isIdentityRequest(url)) {
-		if (!headers.has('x-actor-id')) headers.set('x-actor-id', currentReviewerId());
-		if (!headers.has('x-actor-kind')) headers.set('x-actor-kind', 'user');
-	}
+	// N-1 callers may still supply these legacy labels; never forward them.
+	headers.delete('x-actor-id');
+	headers.delete('x-actor-kind');
 	if (!headers.has('x-correlation-id')) {
 		const id = correlationId();
 		if (id) headers.set('x-correlation-id', id);

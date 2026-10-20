@@ -9,10 +9,6 @@ import type { RecordResolutionActionInput } from './recordResolutionActionInput.
 export interface RecordResolutionRequest {
 	action: RecordResolutionActionInput;
 	/** @nullable */
-	actor_id?: string | null;
-	/** @nullable */
-	actor_kind?: string | null;
-	/** @nullable */
 	proposal_id?: string | null;
 	reason: string;
 	/** @nullable */
