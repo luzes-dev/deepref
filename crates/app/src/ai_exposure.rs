@@ -299,6 +299,8 @@ pub async fn independent_reviewer_pairs(
     project_id: Uuid,
     stage: Option<&str>,
 ) -> Result<ReviewerPairs, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    crate::legacy_actors::lock_identity_mappings_shared(&mut tx).await?;
     let rows = sqlx::query(
         "SELECT t.decision_id, t.report_id, t.stage, t.ai_decision, t.human_decision,
                 EXISTS (
@@ -344,8 +346,9 @@ pub async fn independent_reviewer_pairs(
     )
     .bind(project_id)
     .bind(stage)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     let mut pairs = ReviewerPairs::default();
     for row in rows {
         let decode = |column: &str| -> Result<&str, sqlx::Error> { row.try_get(column) };

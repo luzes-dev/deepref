@@ -226,6 +226,7 @@ pub(crate) async fn record_audit_label(
     tx: &mut Transaction<'_, Postgres>,
     command: &ScreenReportCommand,
 ) -> Result<AuditLabelOutcome, AiFirstError> {
+    crate::legacy_actors::lock_identity_mappings_shared(tx).await?;
     if command.stage != ScreeningStage::TitleAbstract {
         return Ok(AuditLabelOutcome::NotAudit);
     }
@@ -279,11 +280,13 @@ pub(crate) async fn record_audit_label(
     let exposed: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM ai_opinion_exposures WHERE project_id=$1
       AND report_id=$2 AND stage='title_abstract' AND exposure_possible_at<=clock_timestamp()
-      AND (audience_actor_id IS NULL OR actor_identity_may_be_user(audience_actor_kind,audience_actor_id,audience_actor_user_id,$3)))",
+      AND (audience_actor_id IS NULL OR same_human_actor_identity(
+        audience_actor_kind,audience_actor_id,audience_actor_user_id,'user',$4,$3)))",
     )
     .bind(project)
     .bind(report)
     .bind(user_id)
+    .bind(command.actor.id())
     .fetch_one(&mut **tx)
     .await?;
     if exposed {
@@ -293,10 +296,11 @@ pub(crate) async fn record_audit_label(
     let already_labeled: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM ai_screening_audit_labels l
          WHERE l.cohort_id=$1 AND l.report_id=$2
-           AND actor_identity_may_be_user('user',l.actor_id,l.actor_user_id,$3))",
+           AND same_human_actor_identity('user',$3,$4,'user',l.actor_id,l.actor_user_id))",
     )
     .bind(cohort)
     .bind(report)
+    .bind(command.actor.id())
     .bind(user_id)
     .fetch_one(&mut **tx)
     .await?;
@@ -393,6 +397,7 @@ pub async fn evaluate_ai_first_audit(
 ) -> Result<AuditResult, AiFirstError> {
     user(actor)?;
     let mut tx = pool.begin().await?;
+    crate::legacy_actors::lock_identity_mappings_shared(&mut tx).await?;
     lock_project(&mut tx, project).await?;
     let c =
         sqlx::query("SELECT * FROM ai_screening_cohorts WHERE project_id=$1 AND id=$2 FOR UPDATE")
@@ -490,6 +495,7 @@ pub async fn finalize_ai_first_cohort(
         ));
     }
     let mut tx = pool.begin().await?;
+    crate::legacy_actors::lock_identity_mappings_shared(&mut tx).await?;
     lock_project(&mut tx, project).await?;
     let c =
         sqlx::query("SELECT * FROM ai_screening_cohorts WHERE project_id=$1 AND id=$2 FOR UPDATE")

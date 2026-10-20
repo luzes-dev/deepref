@@ -18,6 +18,57 @@ ALTER TABLE ai_screening_cohorts
   ADD COLUMN approved_by_actor_user_id uuid REFERENCES users(id),
   ADD COLUMN finalized_by_actor_user_id uuid REFERENCES users(id);
 
+-- N-1 may change a text actor without knowing about its new provenance field.
+-- Clear stale provenance whenever a label changes but its UserId does not.
+CREATE FUNCTION clear_stale_actor_user_provenance() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+  pair_index integer;
+  actor_column text;
+  user_column text;
+  old_row jsonb := to_jsonb(OLD);
+  new_row jsonb := to_jsonb(NEW);
+BEGIN
+  IF TG_NARGS % 2 <> 0 THEN
+    RAISE EXCEPTION 'actor provenance trigger requires actor/provenance column pairs';
+  END IF;
+
+  FOR pair_index IN 0..((TG_NARGS / 2) - 1) LOOP
+    actor_column := TG_ARGV[pair_index * 2];
+    user_column := TG_ARGV[pair_index * 2 + 1];
+    IF new_row -> actor_column IS DISTINCT FROM old_row -> actor_column
+       AND new_row -> user_column IS NOT DISTINCT FROM old_row -> user_column THEN
+      NEW := jsonb_populate_record(NEW, jsonb_build_object(user_column, NULL));
+      new_row := to_jsonb(NEW);
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER screening_events_clear_stale_actor_provenance
+BEFORE UPDATE OF actor_id, actor_user_id ON screening_events
+FOR EACH ROW EXECUTE FUNCTION clear_stale_actor_user_provenance('actor_id', 'actor_user_id');
+
+CREATE TRIGGER ai_opinion_exposures_clear_stale_actor_provenance
+BEFORE UPDATE OF audience_actor_id, audience_actor_user_id ON ai_opinion_exposures
+FOR EACH ROW EXECUTE FUNCTION clear_stale_actor_user_provenance('audience_actor_id', 'audience_actor_user_id');
+
+CREATE TRIGGER ai_screening_audit_labels_clear_stale_actor_provenance
+BEFORE UPDATE OF actor_id, actor_user_id ON ai_screening_audit_labels
+FOR EACH ROW EXECUTE FUNCTION clear_stale_actor_user_provenance('actor_id', 'actor_user_id');
+
+CREATE TRIGGER project_ai_screening_authority_clear_stale_actor_provenance
+BEFORE UPDATE OF approved_by, approved_by_actor_user_id ON project_ai_screening_authority
+FOR EACH ROW EXECUTE FUNCTION clear_stale_actor_user_provenance('approved_by', 'approved_by_actor_user_id');
+
+CREATE TRIGGER ai_screening_cohorts_clear_stale_actor_provenance
+BEFORE UPDATE OF approved_by, approved_by_actor_user_id, finalized_by, finalized_by_actor_user_id
+ON ai_screening_cohorts
+FOR EACH ROW EXECUTE FUNCTION clear_stale_actor_user_provenance(
+  'approved_by', 'approved_by_actor_user_id',
+  'finalized_by', 'finalized_by_actor_user_id'
+);
+
 -- Finalizer provenance changes with the existing finalization fields after a
 -- frozen design reaches its terminal state. The original approval provenance
 -- remains part of the frozen evidence and cannot be rewritten.
@@ -134,9 +185,9 @@ AS $$
     ), false)
 $$;
 
--- Provenance-aware comparison used when two historical identity inputs are
--- compared. Unknown labels conservatively intersect each known identity unless
--- an operator recorded that label as a non-identity for that user.
+-- Pairwise distinctness requires two resolved, consistent UserIds. A negative
+-- decision only rules out one current user; it cannot prove that two unknown
+-- labels belong to different people outside the users table.
 CREATE FUNCTION same_human_actor_identity(
   p_left_kind text,
   p_left_id text,
@@ -150,70 +201,21 @@ AS $$
   WITH resolved AS (
     SELECT legacy_human_actor_user_id(p_left_kind, p_left_id) AS left_mapped_user_id,
            legacy_human_actor_user_id(p_right_kind, p_right_id) AS right_mapped_user_id
-  ), candidates AS (
-    SELECT p_left_user_id AS left_user_id,
-           r.left_mapped_user_id,
-           p_right_user_id AS right_user_id,
-           r.right_mapped_user_id
-    FROM resolved r
+  ), identities AS (
+    SELECT COALESCE(p_left_user_id, left_mapped_user_id) AS left_user_id,
+           COALESCE(p_right_user_id, right_mapped_user_id) AS right_user_id,
+           p_left_user_id IS NOT NULL AND left_mapped_user_id IS NOT NULL
+             AND p_left_user_id <> left_mapped_user_id AS left_conflict,
+           p_right_user_id IS NOT NULL AND right_mapped_user_id IS NOT NULL
+             AND p_right_user_id <> right_mapped_user_id AS right_conflict
+    FROM resolved
   )
   SELECT COALESCE(p_left_kind = 'user' AND p_right_kind = 'user'
-    AND (
-      p_left_id = p_right_id
-      OR EXISTS (
-        SELECT 1 FROM candidates c
-        WHERE c.left_user_id IS NOT NULL
-          AND c.left_user_id IN (c.right_user_id, c.right_mapped_user_id)
-      )
-      OR EXISTS (
-        SELECT 1 FROM candidates c
-        WHERE c.left_mapped_user_id IS NOT NULL
-          AND c.left_mapped_user_id IN (c.right_user_id, c.right_mapped_user_id)
-      )
-      OR EXISTS (
-        SELECT 1 FROM candidates c
-        WHERE p_left_user_id IS NULL
-          AND c.left_mapped_user_id IS NULL
-          AND legacy_human_actor_is_unmapped(p_left_kind, p_left_id)
-          AND (c.right_user_id IS NOT NULL OR c.right_mapped_user_id IS NOT NULL)
-          AND NOT EXISTS (
-            SELECT 1 FROM legacy_actor_non_identities n
-            WHERE n.legacy_actor_kind = p_left_kind
-              AND n.legacy_actor_id = p_left_id
-              AND n.user_id IN (c.right_user_id, c.right_mapped_user_id)
-          )
-      )
-      OR EXISTS (
-        SELECT 1 FROM candidates c
-        WHERE p_right_user_id IS NULL
-          AND c.right_mapped_user_id IS NULL
-          AND legacy_human_actor_is_unmapped(p_right_kind, p_right_id)
-          AND (c.left_user_id IS NOT NULL OR c.left_mapped_user_id IS NOT NULL)
-          AND NOT EXISTS (
-            SELECT 1 FROM legacy_actor_non_identities n
-            WHERE n.legacy_actor_kind = p_right_kind
-              AND n.legacy_actor_id = p_right_id
-              AND n.user_id IN (c.left_user_id, c.left_mapped_user_id)
-          )
-      )
-      OR EXISTS (
-        SELECT 1 FROM candidates c
-        WHERE p_left_user_id IS NULL
-          AND c.left_mapped_user_id IS NULL
-          AND p_right_user_id IS NULL
-          AND c.right_mapped_user_id IS NULL
-          AND legacy_human_actor_is_unmapped(p_left_kind, p_left_id)
-          AND legacy_human_actor_is_unmapped(p_right_kind, p_right_id)
-          AND EXISTS (
-            SELECT 1 FROM users u
-            WHERE NOT EXISTS (
-              SELECT 1 FROM legacy_actor_non_identities n
-              WHERE n.user_id = u.id
-                AND ((n.legacy_actor_kind = p_left_kind AND n.legacy_actor_id = p_left_id)
-                  OR (n.legacy_actor_kind = p_right_kind AND n.legacy_actor_id = p_right_id))
-            )
-          )
-      )
+    AND EXISTS (
+      SELECT 1 FROM identities i
+      WHERE i.left_conflict OR i.right_conflict
+         OR i.left_user_id IS NULL OR i.right_user_id IS NULL
+         OR i.left_user_id = i.right_user_id
     ), false)
 $$;
 
@@ -232,6 +234,32 @@ AS $$
     p_right_kind, p_right_id, NULL::uuid
   )
 $$;
+
+-- N-1 approval and evaluation code counts audit-label rows. Reject a label
+-- before storage unless every other row in its cohort/report has a provably
+-- different, resolved identity.
+CREATE FUNCTION guard_ai_first_audit_label_identity() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock_shared(73003203);
+  IF EXISTS (
+    SELECT 1 FROM ai_screening_audit_labels l
+    WHERE l.cohort_id = NEW.cohort_id AND l.report_id = NEW.report_id
+      AND l.id IS DISTINCT FROM CASE WHEN TG_OP = 'UPDATE' THEN OLD.id ELSE NULL END
+      AND same_human_actor_identity(
+        'user', NEW.actor_id, NEW.actor_user_id,
+        'user', l.actor_id, l.actor_user_id
+      )
+  ) THEN
+    RAISE EXCEPTION 'audit label is not provably distinct from an existing reviewer'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER ai_first_audit_label_identity_guard
+BEFORE INSERT OR UPDATE OF actor_id, actor_user_id ON ai_screening_audit_labels
+FOR EACH ROW EXECUTE FUNCTION guard_ai_first_audit_label_identity();
 
 CREATE FUNCTION ai_first_human_history_clear(p_cohort uuid, p_user_id uuid)
 RETURNS boolean
@@ -270,8 +298,9 @@ AS $$
     SELECT 1 FROM scope s
     WHERE NOT EXISTS (
       SELECT 1 FROM history h
-      WHERE actor_identity_may_be_user(
-        h.actor_kind, h.actor_id, h.actor_user_id, p_user_id
+      WHERE same_human_actor_identity(
+        'user', p_user_id::text, p_user_id,
+        h.actor_kind, h.actor_id, h.actor_user_id
       )
     )
       AND NOT EXISTS (
@@ -284,12 +313,15 @@ AS $$
 $$;
 
 -- Audit labels affect only that report's reviewer eligibility. The same person
--- can review other blind records independently; an unresolved label blocks U
--- on this report until it is mapped to someone else or denied for U.
+-- can review other blind records independently; an unresolved label blocks all
+-- candidate reviewers for this report until it resolves to a different user.
 CREATE FUNCTION ai_first_fresh_auditor_v3(p_cohort uuid, p_report uuid, p_user_id uuid)
 RETURNS boolean
-LANGUAGE sql STABLE
+LANGUAGE sql VOLATILE
 AS $$
+  WITH identity_lock AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock_shared(73003203)
+  )
   SELECT EXISTS (
     SELECT 1 FROM ai_screening_cohorts c
     WHERE c.id = p_cohort
@@ -304,15 +336,22 @@ AS $$
       AND NOT EXISTS (
         SELECT 1 FROM ai_screening_audit_labels l
         WHERE l.cohort_id = c.id AND l.report_id = p_report
-          AND actor_identity_may_be_user('user', l.actor_id, l.actor_user_id, p_user_id)
+          AND same_human_actor_identity(
+            'user', p_user_id::text, p_user_id,
+            'user', l.actor_id, l.actor_user_id
+          )
       )
   )
+  FROM identity_lock
 $$;
 
 CREATE FUNCTION ai_first_queue_visible_v3(p_project uuid, p_report uuid, p_user_id uuid)
 RETURNS boolean
-LANGUAGE sql STABLE
+LANGUAGE sql VOLATILE
 AS $$
+  WITH identity_lock AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock_shared(73003203)
+  )
   SELECT CASE
     WHEN ai_first_audit_masked(p_project, p_report) THEN EXISTS (
       SELECT 1 FROM ai_screening_cohort_members m
@@ -331,13 +370,16 @@ AS $$
         AND c.status IN ('open', 'closed', 'passed')
     )
   END
+  FROM identity_lock
 $$;
 
 CREATE FUNCTION ai_first_audit_has_two_distinct_reviewers(p_cohort uuid, p_report uuid)
 RETURNS boolean
-LANGUAGE sql STABLE
+LANGUAGE sql VOLATILE
 AS $$
-  WITH labels AS (
+  WITH identity_lock AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock_shared(73003203)
+  ), labels AS (
     SELECT l.actor_user_id,
            legacy_human_actor_user_id('user', l.actor_id) AS mapped_user_id
     FROM ai_screening_audit_labels l
@@ -351,8 +393,32 @@ AS $$
     AND count(user_id) = 2
     AND count(DISTINCT user_id) = 2
     AND bool_and(actor_user_id IS NULL OR mapped_user_id IS NULL OR actor_user_id = mapped_user_id)
-  FROM resolved
+  FROM resolved CROSS JOIN identity_lock
 $$;
+
+-- N-1 evaluates and finalizes in application code that still counts rows. Keep
+-- the database transition boundary on the same mapping lock and reject legacy
+-- evidence that no longer has two resolved, independent reviewers.
+CREATE FUNCTION guard_ai_first_identity_transition() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status IN ('passed', 'finalized') AND NEW.status IS DISTINCT FROM OLD.status THEN
+    PERFORM pg_advisory_xact_lock_shared(73003203);
+    IF EXISTS (
+      SELECT 1 FROM ai_screening_cohort_members m
+      WHERE m.cohort_id = NEW.id AND (m.sampled OR m.audit_control)
+        AND NOT ai_first_audit_has_two_distinct_reviewers(m.cohort_id, m.report_id)
+    ) THEN
+      RAISE EXCEPTION 'two resolved, distinct reviewers are required for every audit record'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER ai_first_identity_transition_guard
+BEFORE UPDATE OF status ON ai_screening_cohorts
+FOR EACH ROW EXECUTE FUNCTION guard_ai_first_identity_transition();
 
 -- N-1 freshness has no report argument, so it treats every audit label in the
 -- cohort as prior history. This is stricter than N's report-scoped rule, but
@@ -361,9 +427,11 @@ $$;
 -- operator mappings through the same identity helper used by N.
 CREATE OR REPLACE FUNCTION ai_first_fresh_auditor(cohort uuid, actor text)
 RETURNS boolean
-LANGUAGE sql STABLE
+LANGUAGE sql VOLATILE
 AS $$
-  WITH scope AS (
+  WITH identity_lock AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock_shared(73003203)
+  ), scope AS (
     SELECT c.id, c.project_id,
            c.approved_by, c.approved_by_actor_user_id,
            c.finalized_by, c.finalized_by_actor_user_id
@@ -411,12 +479,16 @@ AS $$
         WHERE m.cohort_id = s.id AND e.audience_actor_id IS NULL
       )
   )
+  FROM identity_lock
 $$;
 
 CREATE OR REPLACE FUNCTION ai_first_queue_visible(project uuid, report uuid, actor text)
 RETURNS boolean
-LANGUAGE sql STABLE
+LANGUAGE sql VOLATILE
 AS $$
+  WITH identity_lock AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock_shared(73003203)
+  )
   SELECT CASE
     WHEN ai_first_audit_masked(project, report) THEN EXISTS (
       SELECT 1 FROM ai_screening_cohort_members m
@@ -443,6 +515,7 @@ AS $$
         AND c.status IN ('open', 'closed', 'passed')
     )
   END
+  FROM identity_lock
 $$;
 
 -- The old N caller cannot supply a report to its v2 freshness function. Keep
@@ -453,3 +526,116 @@ RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
 
 CREATE OR REPLACE FUNCTION ai_first_queue_visible_v2(p_project uuid, p_report uuid, p_user_id uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
+
+-- Mapping and non-identity decisions may report finalized cohorts whose
+-- historical reviewer evidence no longer passes the current identity rules.
+-- Keep the new array optional so previously deployed N writers still satisfy
+-- the same audit shape while the upgraded command records its impact.
+ALTER TABLE admin_audit_events DROP CONSTRAINT admin_audit_events_check;
+ALTER TABLE admin_audit_events ADD CONSTRAINT admin_audit_events_check CHECK (
+  -- Identity events (0085), unchanged and never workspace-scoped.
+  (event_type IN ('auth.login', 'auth.logout', 'user.provisioned')
+   AND metadata = '{}'::jsonb
+   AND workspace_id IS NULL AND project_id IS NULL)
+  OR (event_type = 'auth.session_revoked'
+      AND metadata ? 'reason'
+      AND metadata - 'reason' = '{}'::jsonb
+      AND metadata->>'reason' IN ('user_logout', 'user_deactivated')
+      AND workspace_id IS NULL AND project_id IS NULL)
+  OR (event_type = 'user.deactivated'
+      AND metadata = '{"source":"provider_event"}'::jsonb
+      AND workspace_id IS NULL AND project_id IS NULL)
+  -- Workspace lifecycle. `workspace_kind` is `personal` or `organization`;
+  -- the migration workspace is created by a migration, not by a request.
+  OR (event_type = 'workspace.created'
+      AND metadata ? 'workspace_kind'
+      AND metadata - 'workspace_kind' = '{}'::jsonb
+      AND metadata->>'workspace_kind' IN ('personal', 'organization')
+      AND workspace_id IS NOT NULL AND project_id IS NULL AND target_user_id IS NULL)
+  OR (event_type IN ('workspace.renamed', 'workspace.deleted')
+      AND metadata = '{}'::jsonb
+      AND workspace_id IS NOT NULL AND project_id IS NULL AND target_user_id IS NULL)
+  -- Membership changes name the member in `target_user_id`.
+  OR (event_type IN ('membership.created', 'membership.removed')
+      AND metadata ? 'role' AND metadata ? 'grant_source'
+      AND metadata - 'role' - 'grant_source' = '{}'::jsonb
+      AND metadata->>'role' IN ('owner', 'admin', 'member')
+      AND metadata->>'grant_source' IN ('workos_mirrored', 'local')
+      AND workspace_id IS NOT NULL AND project_id IS NULL AND target_user_id IS NOT NULL)
+  OR (event_type = 'membership.role_changed'
+      AND metadata ? 'role'
+      AND metadata - 'role' = '{}'::jsonb
+      AND metadata->>'role' IN ('owner', 'admin', 'member')
+      AND workspace_id IS NOT NULL AND project_id IS NULL AND target_user_id IS NOT NULL)
+  OR (event_type = 'membership.status_changed'
+      AND metadata ? 'status'
+      AND metadata - 'status' = '{}'::jsonb
+      AND metadata->>'status' IN ('active', 'deactivated')
+      AND workspace_id IS NOT NULL AND project_id IS NULL AND target_user_id IS NOT NULL)
+  -- Project-access changes name the member and the project.
+  OR (event_type IN ('project_access.granted', 'project_access.removed')
+      AND metadata ? 'role' AND metadata ? 'grant_source'
+      AND metadata - 'role' - 'grant_source' = '{}'::jsonb
+      AND metadata->>'role' IN ('project_admin', 'member', 'viewer')
+      AND metadata->>'grant_source' IN ('workos_mirrored', 'local')
+      AND workspace_id IS NOT NULL AND project_id IS NOT NULL AND target_user_id IS NOT NULL)
+  OR (event_type = 'project_access.role_changed'
+      AND metadata ? 'role'
+      AND metadata - 'role' = '{}'::jsonb
+      AND metadata->>'role' IN ('project_admin', 'member', 'viewer')
+      AND workspace_id IS NOT NULL AND project_id IS NOT NULL AND target_user_id IS NOT NULL)
+  -- Invitations (03a). Never the invitee's email: the row names the workspace
+  -- and the role only. Acceptance names the accepting user; the other events
+  -- have no user to name (an invitee may not have an account yet).
+  OR (event_type IN ('invitation.created', 'invitation.revoked', 'invitation.expired')
+      AND metadata ? 'role' AND metadata ? 'invitation_id'
+      AND metadata - 'role' - 'invitation_id' = '{}'::jsonb
+      AND metadata->>'role' IN ('owner', 'admin', 'member')
+      AND metadata->>'invitation_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      AND workspace_id IS NOT NULL AND project_id IS NULL AND target_user_id IS NULL)
+  OR (event_type = 'invitation.accepted'
+      AND metadata ? 'role' AND metadata ? 'invitation_id'
+      AND metadata - 'role' - 'invitation_id' = '{}'::jsonb
+      AND metadata->>'role' IN ('owner', 'admin', 'member')
+      AND metadata->>'invitation_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      AND workspace_id IS NOT NULL AND project_id IS NULL AND target_user_id IS NOT NULL)
+  -- Authorization denials (03b). High volume and caller-influenced, so the
+  -- row is a fixed shape: the permission and resource type come from closed
+  -- lists, `window` is the minute bucket (epoch minutes), and the resource
+  -- identifier is stored only when it parsed as a UUID. No request body, path
+  -- text or caller-supplied string is ever stored. 0100 makes one row per
+  -- (user, permission, resource type, window) the most the table can hold.
+  OR (event_type = 'authorization.denied'
+      AND principal_kind = 'user' AND principal_user_id IS NOT NULL
+      AND target_user_id IS NULL
+      AND metadata ? 'permission' AND metadata ? 'resource_type' AND metadata ? 'window'
+      AND metadata - 'permission' - 'resource_type' - 'window' = '{}'::jsonb
+      AND metadata->>'permission' IN (
+        'workspace:view', 'workspace:manage', 'workspace:billing', 'workspace:members:invite',
+        'project:create', 'project:view', 'project:edit', 'project:delete',
+        'screening:perform', 'screening:resolve', 'extraction:perform', 'appraisal:perform',
+        'automation:manage', 'ai:use', 'api_key:manage',
+        'route_unlisted', 'platform_operator')
+      AND metadata->>'resource_type' IN ('project', 'workspace', 'none')
+      AND metadata->>'window' ~ '^[0-9]{1,10}$'
+      AND ((metadata->>'resource_type' = 'project' AND workspace_id IS NULL)
+        OR (metadata->>'resource_type' = 'workspace' AND project_id IS NULL)
+        OR (metadata->>'resource_type' = 'none' AND workspace_id IS NULL AND project_id IS NULL)))
+  -- Legacy identity decisions (03c). The old label is retained in the audited metadata;
+  -- only trusted operator commands can create these rows.
+  OR (event_type IN ('legacy_actor.mapped', 'legacy_actor.non_identity_recorded')
+      AND principal_kind = 'user' AND principal_user_id IS NOT NULL
+      AND target_user_id IS NOT NULL
+      AND workspace_id IS NULL AND project_id IS NULL
+      AND metadata ? 'legacy_actor_kind' AND metadata ? 'legacy_actor_id' AND metadata ? 'source'
+      AND (NOT (metadata ? 'affected_finalized_cohorts')
+        OR jsonb_typeof(metadata->'affected_finalized_cohorts') = 'array')
+      AND metadata - 'legacy_actor_kind' - 'legacy_actor_id' - 'source'
+        - 'affected_finalized_cohorts' = '{}'::jsonb
+      AND metadata->>'legacy_actor_kind' = 'user'
+      AND btrim(metadata->>'legacy_actor_id') <> ''
+      AND length(metadata->>'legacy_actor_id') <= 200
+      AND btrim(metadata->>'source') <> ''
+      AND length(metadata->>'source') <= 200)
+) NOT VALID;
+ALTER TABLE admin_audit_events VALIDATE CONSTRAINT admin_audit_events_check;

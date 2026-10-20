@@ -18,6 +18,7 @@ use deepref_review::{
 };
 use sqlx::PgPool;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use uuid::Uuid;
 
 async fn insert_fixture_route(pool: &PgPool) {
@@ -652,7 +653,7 @@ async fn mapped_legacy_audit_label_blocks_direct_duplicate_screening_post() {
 }
 
 #[tokio::test]
-async fn evaluate_refuses_two_label_rows_that_resolve_to_one_reviewer() {
+async fn audit_label_trigger_refuses_two_rows_that_resolve_to_one_reviewer() {
     let Some(pool) = database().await else { return };
     let f = Fixture::new(pool, true).await;
     let sample = f.draw().await;
@@ -677,7 +678,7 @@ async fn evaluate_refuses_two_label_rows_that_resolve_to_one_reviewer() {
     .execute(&f.pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
+    let duplicate_insert = sqlx::query("INSERT INTO ai_screening_audit_labels(project_id,cohort_id,report_id,actor_id,actor_user_id,decision)
         VALUES($1,$2,$3,$4,$5,'exclude')")
         .bind(f.project)
         .bind(f.cohort)
@@ -685,8 +686,11 @@ async fn evaluate_refuses_two_label_rows_that_resolve_to_one_reviewer() {
         .bind(user_id("reviewer-a").as_uuid().to_string())
         .bind(user_id("reviewer-a").as_uuid())
         .execute(&f.pool)
-        .await
-        .unwrap();
+        .await;
+    assert!(
+        duplicate_insert.is_err(),
+        "the database blocks a second row for the mapped reviewer"
+    );
 
     let controls: Vec<Uuid> = sqlx::query_scalar(
         "SELECT report_id FROM ai_screening_cohort_members WHERE cohort_id=$1 AND audit_control ORDER BY report_id",
@@ -718,7 +722,7 @@ async fn evaluate_refuses_two_label_rows_that_resolve_to_one_reviewer() {
         evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
             .await
             .is_err(),
-        "two rows from one resolved person do not make an independent reference"
+        "one row cannot complete an independent reference"
     );
 }
 
@@ -748,6 +752,130 @@ async fn finalize_rechecks_distinct_reviewers_after_mapping_changes() {
             .await
             .is_err(),
         "finalization revalidates reviewers after identity mappings change"
+    );
+    assert_eq!(f.status().await, "passed");
+}
+
+#[tokio::test]
+async fn mapping_change_reports_finalized_cohorts_it_invalidates() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    f.label_all(&sample, false).await;
+    assert!(
+        evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+            .await
+            .unwrap()
+            .passed
+    );
+    finalize_ai_first_cohort(&f.pool, f.project, f.cohort, true, &actor("owner"))
+        .await
+        .unwrap();
+
+    let changed = map_legacy_actor(
+        &f.pool,
+        "user",
+        &user_id("reviewer-b").as_uuid().to_string(),
+        user_id("reviewer-a"),
+        user_id("owner"),
+        "operator resolved an old reviewer identity",
+    )
+    .await
+    .unwrap();
+    assert_eq!(changed.affected_finalized_cohorts, vec![f.cohort]);
+
+    let metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM admin_audit_events WHERE event_type='legacy_actor.mapped' \
+         AND target_user_id=$1 ORDER BY occurred_at DESC LIMIT 1",
+    )
+    .bind(user_id("reviewer-a").as_uuid())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        metadata["affected_finalized_cohorts"],
+        serde_json::json!([f.cohort])
+    );
+    assert_eq!(f.status().await, "finalized", "history is not rewritten");
+}
+
+#[tokio::test]
+async fn mapping_lock_serializes_before_finalize_without_taking_project_lock_early() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    f.label_all(&sample, false).await;
+    assert!(
+        evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+            .await
+            .unwrap()
+            .passed
+    );
+
+    let mut mapping_tx = f.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(73003203::bigint)")
+        .fetch_one(&mut *mapping_tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO legacy_actor_mappings \
+         (legacy_actor_kind,legacy_actor_id,user_id,confirmed_by,source) \
+         VALUES('user',$1,$2,$3,'concurrent finalization test')",
+    )
+    .bind(user_id("reviewer-b").as_uuid().to_string())
+    .bind(user_id("reviewer-a").as_uuid())
+    .bind(user_id("owner").as_uuid())
+    .execute(&mut *mapping_tx)
+    .await
+    .unwrap();
+
+    let finalize_pool = f.pool.clone();
+    let project = f.project;
+    let cohort = f.cohort;
+    let finalize = tokio::spawn(async move {
+        finalize_ai_first_cohort(&finalize_pool, project, cohort, true, &actor("owner")).await
+    });
+    let shared_lock_waiting = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks \
+                 WHERE locktype='advisory' AND classid=0::oid AND objid=73003203::oid \
+                   AND objsubid=1 AND NOT granted)",
+            )
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+
+    let mut observer = f.pool.begin().await.unwrap();
+    let project_lock_available =
+        sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(f.project)
+            .fetch_optional(&mut *observer)
+            .await
+            .is_ok();
+    let _ = observer.rollback().await;
+    mapping_tx.commit().await.unwrap();
+
+    let finalized = finalize.await.unwrap();
+    assert!(
+        shared_lock_waiting,
+        "finalization must wait on the mapping lock"
+    );
+    assert!(
+        project_lock_available,
+        "finalization must take the shared lock before the project row lock"
+    );
+    assert!(
+        finalized.is_err(),
+        "after the mapping commits, finalization must see the duplicate identity"
     );
     assert_eq!(f.status().await, "passed");
 }

@@ -443,8 +443,14 @@ async fn an_exposure_before_the_decision_excludes_the_pair() {
 }
 
 #[tokio::test]
-async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
+async fn an_exposure_after_the_decision_or_for_a_proven_distinct_person_does_not_exclude() {
     let Some(pool) = database().await else { return };
+    let current_user = UserId::new(Uuid::parse_str(person().id()).expect("current user ID"));
+    let other_user = UserId::new(
+        Uuid::parse_str("00000000-0000-0000-0000-000000000002").expect("other user ID"),
+    );
+    insert_user(&pool, current_user, "current reviewer").await;
+    insert_user(&pool, other_user, "other reviewer").await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
 
@@ -458,7 +464,14 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "include",
     )
     .await;
-    decide(&pool, project_id, decided_first, ScreeningDecision::Include).await;
+    decide_as(
+        &pool,
+        project_id,
+        decided_first,
+        ScreeningDecision::Include,
+        Actor::authenticated_user(current_user),
+    )
+    .await;
     record_exposure(
         &pool,
         &NewExposure::new(
@@ -480,12 +493,18 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "title_abstract",
         ExposureSource::WorkflowRunOutput,
     );
-    for_someone_else.audience =
-        Some(Actor::new(ActorKind::User, "00000000-0000-0000-0000-000000000002").expect("actor"));
+    for_someone_else.audience = Some(Actor::authenticated_user(other_user));
     record_exposure(&pool, &for_someone_else)
         .await
         .expect("exposure for someone else");
-    decide(&pool, project_id, other_person, ScreeningDecision::Include).await;
+    decide_as(
+        &pool,
+        project_id,
+        other_person,
+        ScreeningDecision::Include,
+        Actor::authenticated_user(current_user),
+    )
+    .await;
 
     // Shown to the person who decides, before the decision: exposed.
     let shown_to_person = report(&pool, project_id, "Shown to this person").await;
@@ -503,15 +522,16 @@ async fn an_exposure_after_the_decision_or_for_someone_else_does_not_exclude() {
         "title_abstract",
         ExposureSource::WorkflowRunOutput,
     );
-    for_this_person.audience = Some(person());
+    for_this_person.audience = Some(Actor::authenticated_user(current_user));
     record_exposure(&pool, &for_this_person)
         .await
         .expect("exposure for this person");
-    decide(
+    decide_as(
         &pool,
         project_id,
         shown_to_person,
         ScreeningDecision::Include,
+        Actor::authenticated_user(current_user),
     )
     .await;
 
@@ -927,7 +947,7 @@ async fn an_automation_state_cannot_be_attributed_to_an_earlier_human_decision()
 }
 
 #[tokio::test]
-async fn an_unmapped_legacy_exposure_excludes_until_operator_non_identity() {
+async fn an_unmapped_legacy_exposure_stays_ambiguous_after_operator_non_identity() {
     let Some(pool) = database().await else { return };
     let user_id = UserId::new(Uuid::parse_str(person().id()).expect("canonical fixture ID"));
     let operator = UserId::new(Uuid::new_v4());
@@ -976,7 +996,6 @@ async fn an_unmapped_legacy_exposure_excludes_until_operator_non_identity() {
     let after = independent_reviewer_pairs(&pool, project_id, None)
         .await
         .expect("pairs after operator decision");
-    assert_eq!(after.exposed_excluded, 0);
-    assert_eq!(after.independent.len(), 1);
-    assert_eq!(after.independent[0].report_id, record);
+    assert_eq!(after.exposed_excluded, 1);
+    assert_eq!(after.independent.len(), 0);
 }

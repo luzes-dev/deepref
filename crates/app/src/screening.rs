@@ -190,6 +190,7 @@ async fn apply_screen_report(
     audit_reference: bool,
     origin: Option<&'static str>,
 ) -> Result<ScreeningStateSnapshot, ScreeningError> {
+    crate::legacy_actors::lock_identity_mappings_shared(tx).await?;
     sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
         .bind(command.project_id.as_uuid())
         .fetch_optional(&mut **tx)

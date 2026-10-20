@@ -6,10 +6,14 @@
 use deepref_domain::UserId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
+
+/// Serializes reviewer validation with operator changes to the legacy identity map.
+pub(crate) const IDENTITY_MAPPING_LOCK_KEY: i64 = 73_003_203;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +52,8 @@ pub struct LegacyActorDecision {
     pub operator_user_id: UserId,
     pub decided_at: chrono::DateTime<chrono::Utc>,
     pub source: String,
+    #[serde(default)]
+    pub affected_finalized_cohorts: Vec<Uuid>,
 }
 
 #[derive(Debug, Error)]
@@ -83,6 +89,7 @@ pub async fn map_legacy_actor(
     let kind = parse_label(actor_kind, actor_id, source)?;
     let source = source.trim();
     let mut tx = pool.begin().await?;
+    lock_identity_mappings_exclusive(&mut tx).await?;
     lock_legacy_actor_label(&mut tx, actor_id).await?;
     ensure_operator(&mut tx, operator_user_id).await?;
     ensure_user(&mut tx, user_id).await?;
@@ -115,6 +122,8 @@ pub async fn map_legacy_actor(
     .fetch_optional(&mut *tx)
     .await?;
 
+    let affected_finalized_cohorts = affected_finalized_cohorts(&mut tx, actor_id).await?;
+
     let (stored_user_id, operator, decided_at, stored_source) = if let Some(row) = inserted {
         insert_admin_audit(
             &mut tx,
@@ -127,6 +136,7 @@ pub async fn map_legacy_actor(
                 "legacy_actor_kind": kind.as_str(),
                 "legacy_actor_id": actor_id,
                 "source": source,
+                "affected_finalized_cohorts": affected_finalized_cohorts,
             }),
             AuditRequest::default(),
         )
@@ -165,6 +175,7 @@ pub async fn map_legacy_actor(
         operator_user_id: UserId::new(operator),
         decided_at,
         source: stored_source,
+        affected_finalized_cohorts,
     })
 }
 
@@ -182,6 +193,7 @@ pub async fn record_legacy_actor_non_identity(
     let kind = parse_label(actor_kind, actor_id, source)?;
     let source = source.trim();
     let mut tx = pool.begin().await?;
+    lock_identity_mappings_exclusive(&mut tx).await?;
     lock_legacy_actor_label(&mut tx, actor_id).await?;
     ensure_operator(&mut tx, operator_user_id).await?;
     ensure_user(&mut tx, user_id).await?;
@@ -226,6 +238,7 @@ pub async fn record_legacy_actor_non_identity(
                 "legacy_actor_kind": kind.as_str(),
                 "legacy_actor_id": actor_id,
                 "source": source,
+                "affected_finalized_cohorts": [],
             }),
             AuditRequest::default(),
         )
@@ -260,6 +273,7 @@ pub async fn record_legacy_actor_non_identity(
         operator_user_id: UserId::new(operator),
         decided_at,
         source: stored_source,
+        affected_finalized_cohorts: Vec::new(),
     })
 }
 
@@ -303,6 +317,7 @@ pub async fn list_legacy_actor_decisions(
                 operator_user_id: UserId::new(row.try_get("operator_user_id")?),
                 decided_at: row.try_get("decided_at")?,
                 source: row.try_get("source")?,
+                affected_finalized_cohorts: Vec::new(),
             })
         })
         .collect()
@@ -334,6 +349,46 @@ async fn lock_legacy_actor_label(
         .fetch_one(&mut **tx)
         .await?;
     Ok(())
+}
+
+pub(crate) async fn lock_identity_mappings_shared(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock_shared($1::bigint)")
+        .bind(IDENTITY_MAPPING_LOCK_KEY)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn lock_identity_mappings_exclusive(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1::bigint)")
+        .bind(IDENTITY_MAPPING_LOCK_KEY)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn affected_finalized_cohorts(
+    tx: &mut Transaction<'_, Postgres>,
+    actor_id: &str,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT c.id
+         FROM ai_screening_cohorts c
+         JOIN ai_screening_audit_labels l ON l.cohort_id=c.id
+         JOIN ai_screening_cohort_members m
+           ON m.cohort_id=l.cohort_id AND m.report_id=l.report_id
+         WHERE c.status='finalized' AND (m.sampled OR m.audit_control)
+           AND l.actor_id=$1
+           AND NOT ai_first_audit_has_two_distinct_reviewers(c.id,l.report_id)
+         ORDER BY c.id",
+    )
+    .bind(actor_id)
+    .fetch_all(&mut **tx)
+    .await
 }
 
 async fn ensure_operator(

@@ -210,6 +210,7 @@ pub async fn start_ai_first_cohort(
         .await
         .map_err(|e| AiFirstError::Refused(e.to_string()))?;
     let mut tx = pool.begin().await?;
+    crate::legacy_actors::lock_identity_mappings_shared(&mut tx).await?;
     lock_project(&mut tx, project).await?;
     let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_cohorts WHERE project_id=$1 AND status IN ('open','closed','auditing','passed'))")
         .bind(project).fetch_one(&mut *tx).await?;
