@@ -529,8 +529,8 @@ export const VISUAL_GET_ENDPOINTS: readonly VisualEndpoint[] = [
 	// Workspace shell: session, projects, imports, settings, notifications and dependency health.
 	{ path: '/api/me', query: '', body: { auth_enabled: false, user: null } },
 	{
-		path: '/api/health/dependencies',
-		query: `project_id=${VISUAL_PROJECT_ID}`,
+		path: `${projectPath}/health/dependencies`,
+		query: '',
 		body: dependencies
 	},
 	{ path: '/api/projects', query: 'limit=50', body: projectsPage },

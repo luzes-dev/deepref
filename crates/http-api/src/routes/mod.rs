@@ -50,6 +50,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(health::ready))
         .routes(routes!(health::dependencies))
         .routes(routes!(health::deprecated_health))
+        .routes(routes!(health::project_dependencies))
         .routes(routes!(auth::get_me))
         .routes(routes!(auth::login))
         .routes(routes!(auth::callback))
@@ -297,6 +298,16 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
                 }
             })
         })
+        .layer(axum::middleware::from_fn_with_state(
+            crate::authz::Pep {
+                mode: crate::authz::AuthzMode::for_runtime(
+                    config.runtime.auth_enabled,
+                    config.runtime.environment.is_development(),
+                ),
+                state: state.clone(),
+            },
+            crate::authz::enforce,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             crate::auth::SessionGate {
                 enabled: config.runtime.auth_enabled,

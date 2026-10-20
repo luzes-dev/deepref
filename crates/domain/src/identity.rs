@@ -98,6 +98,16 @@ impl Principal {
         Self::User(UserPrincipal { user_id })
     }
 
+    /// Work DeepRef starts itself. No request produces it.
+    pub const fn system() -> Self {
+        Self::System(SystemPrincipal)
+    }
+
+    /// A machine credential. No request produces it before handoff 11.
+    pub const fn service() -> Self {
+        Self::Service(ServicePrincipal)
+    }
+
     pub const fn user_id(&self) -> Option<UserId> {
         match self {
             Self::User(user) => Some(user.user_id),

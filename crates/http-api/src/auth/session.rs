@@ -79,6 +79,13 @@ fn access_for(path: &str) -> Access {
     }
 }
 
+/// Whether the session layer reads no session for this concrete path. The
+/// policy table's `Open` rows must match it exactly.
+#[cfg(test)]
+pub(crate) fn is_session_exempt(path: &str) -> bool {
+    access_for(path) == Access::Open
+}
+
 /// Machine-authenticated deliveries: a workflow's webhook and its inbound-email
 /// address. Callers are external services with no browser session; each route
 /// checks its private address token (and, for webhooks, the HMAC signature)

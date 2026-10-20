@@ -19,6 +19,14 @@ impl ApiConfig {
             !runtime.auth_enabled || runtime.workos.is_some(),
             "DEEPREF_AUTH_ENABLED requires WORKOS_CLIENT_ID, WORKOS_API_KEY, WORKOS_COOKIE_PASSWORD and WORKOS_WEBHOOK_SECRET"
         );
+        // Authorization is enforced for authenticated principals only. The
+        // bypass exists for a developer machine; a deployed API must never run
+        // without sign-in, so anything but an explicit development environment
+        // requires it.
+        anyhow::ensure!(
+            runtime.auth_enabled || runtime.environment.is_development(),
+            "DEEPREF_AUTH_ENABLED must be on unless APP_ENV=development: authorization cannot be bypassed in production"
+        );
         let settings = ApiSettings::from_source(get)?;
         let documents = DocumentConfig::from_source(get)?;
         let cors_origins = settings

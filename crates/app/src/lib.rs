@@ -13,6 +13,7 @@ mod assistant_host;
 mod assistant_plans;
 mod assistant_runs;
 mod audit_export;
+pub mod authorization;
 mod automations;
 mod autonomy;
 mod deduplication;
@@ -104,14 +105,14 @@ pub use assistant::{
     append_assistant_message, create_assistant_conversation, delete_assistant_conversation,
     get_assistant_conversation, list_assistant_conversations, list_assistant_messages,
 };
-pub use assistant_host::PostgresAssistantToolHost;
+pub use assistant_host::{HostAuthorization, PostgresAssistantToolHost};
 pub use assistant_plans::{
     AssistantPlanRecord, NewAssistantPlan, claim_assistant_plan, create_assistant_plan,
     finish_assistant_plan, get_assistant_plan, update_assistant_plan_results,
 };
 pub use assistant_runs::{
     AssistantAgentRunRecord, AssistantRunEventRecord, ClaimedAssistantAgentRun,
-    CompletedAssistantAgentRun, NewAssistantAgentRun, append_assistant_run_event,
+    CompletedAssistantAgentRun, NewAssistantAgentRun, RunPrincipal, append_assistant_run_event,
     begin_assistant_agent_run, complete_assistant_agent_run, create_assistant_agent_run,
     fail_assistant_agent_run, get_assistant_agent_run, list_assistant_run_events,
     submit_assistant_agent_run,
@@ -163,9 +164,10 @@ pub use jobs::{
 };
 pub use notifications::{
     MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
-    NotificationSeverity, NotificationUnreadSummary, list_notifications, mark_notifications_read,
+    NotificationSeverity, NotificationUnreadSummary, list_notifications,
+    list_notifications_visible_to, mark_notifications_read, mark_notifications_read_visible_to,
     record_notification, record_notification_in_transaction,
-    record_run_notification_once_in_transaction, unread_summary,
+    record_run_notification_once_in_transaction, unread_summary, unread_summary_visible_to,
 };
 pub use persistence::{
     IntegrityViolation, PersistenceError, PersistenceFailure, RetryPolicy, RetryReason, classify,

@@ -1146,6 +1146,17 @@ async fn scientific_writes_keep_the_header_label_as_legacy_attribution() {
     let session = sign_in(&h, "user_A", "a@example.org").await;
     let real = user_id(&h.pool, "user_A").await;
     let (project, study) = seed_study(&h.pool).await;
+    // The seeded project sits in the migration workspace; authorization (03b)
+    // needs the signed-in user to hold a grant on it.
+    sqlx::query(
+        "INSERT INTO project_access (id, project_id, user_id, role, grant_source)
+         VALUES (gen_random_uuid(), $1, $2, 'member', 'local')",
+    )
+    .bind(project)
+    .bind(real)
+    .execute(&h.pool)
+    .await
+    .unwrap();
     let label = [("x-actor-kind", "user"), ("x-actor-id", "alice")];
 
     // No session: 401 before actor extraction, whatever label is sent.

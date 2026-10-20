@@ -263,3 +263,20 @@ the previous release provisioned (no memberships) is onboarded by their next
 sign-in. Invitations bind only to the address the provider verified
 (`users.verified_email`, which must equal the current `primary_email`). WorkOS reconciliation is serialized per Organization
 and rejects any snapshot that began before `workspaces.workos_reconciled_through`.
+
+## Migration recovery: the denial-window index (handoff 03b)
+
+Migration 0100 builds `admin_audit_denial_window_idx` with
+`CREATE UNIQUE INDEX CONCURRENTLY`, outside a transaction. If it is interrupted
+(process killed, lock timeout, a duplicate key found while building), PostgreSQL
+leaves an INVALID index of that name and the next run of 0100 fails with
+"relation already exists". Recover by hand, then rerun the migrations:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS admin_audit_denial_window_idx;
+```
+
+Migration 0101 asserts the index is valid, ready and unique and refuses to
+continue otherwise, so a skipped or half-built index can never be accepted. The
+two migrations are unreleased; once released they are immutable and any repair
+is a new migration.

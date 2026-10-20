@@ -412,6 +412,13 @@ jobs:
         run: pnpm run generate:api:check
         env:
           SQLX_OFFLINE: "true"
+      # The policy table is the authorization coverage matrix: every route
+      # needs exactly one row, and docs/authorization-matrix.md must be fresh.
+      # It runs here because this job already builds deepref-http-api.
+      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
+        run: pnpm run generate:authz:check
+        env:
+          SQLX_OFFLINE: "true"
       - name: Prove drift check left the tree clean
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         run: git diff --exit-code

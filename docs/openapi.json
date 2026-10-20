@@ -259,22 +259,8 @@
         "tags": [
           "health"
         ],
+        "summary": "Deployment-wide status. Public like the other probes, so it takes no\nproject filter and carries no per-project data.",
         "operationId": "getDependencyStatus",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "query",
-            "description": "Check only this project's background jobs. Omit for the whole workspace.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "format": "uuid"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -6554,6 +6540,39 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/health/dependencies": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "The same probe narrowed to one project's jobs. The PEP requires\n`project:view` on the path's project.",
+        "operationId": "getProjectDependencyStatus",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DependencyStatus"
                 }
               }
             },
@@ -15303,6 +15322,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace to create the project in. Optional when the caller belongs to\nexactly one workspace that can hold projects; required otherwise. The\ncaller needs `project:create` there. Ignored when updating."
           }
         }
       },
@@ -16224,16 +16251,21 @@
       "EndpointsDto": {
         "type": "object",
         "required": [
-          "webhook_path",
-          "webhook_secret",
+          "credentials_visible",
           "signature_required",
-          "signature_header",
-          "email_path"
+          "signature_header"
         ],
         "properties": {
+          "credentials_visible": {
+            "type": "boolean",
+            "description": "Whether this response carries the credentials. They are capabilities\nthat start runs, so only a caller with `automation:manage` receives\nthem; anyone else who can view the workflow sees the settings alone."
+          },
           "email_path": {
-            "type": "string",
-            "description": "Path of the inbound e-mail address."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path of the inbound e-mail address. Absent without `automation:manage`."
           },
           "signature_header": {
             "type": "string",
@@ -16243,12 +16275,18 @@
             "type": "boolean"
           },
           "webhook_path": {
-            "type": "string",
-            "description": "Path of the webhook address, to be appended to the server address."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path of the webhook address, to be appended to the server address.\nAbsent without `automation:manage`."
           },
           "webhook_secret": {
-            "type": "string",
-            "description": "Shared secret used to sign webhook calls."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shared secret used to sign webhook calls. Absent without\n`automation:manage`."
           }
         }
       },
