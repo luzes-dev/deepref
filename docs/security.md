@@ -151,7 +151,7 @@ BUSINESS_DECISIONS fixes retention:
 | --- | --- |
 | Administrative and security audit (`admin_audit_events`) | 6 months |
 | `account.deletion_completed` (proof a deletion request was fulfilled) | 5 years, no content |
-| `fulfilled_account_deletions` (user id, completion time, normalized-email SHA-256 digests) | 5 years; no plaintext email |
+| `fulfilled_account_deletions` (user id, completion time, normalized-email HMAC-SHA256 digests) | 5 years; pseudonymous keyed data, no plaintext email |
 
 Archival is not needed: the rows are the record, and the purge removes them
 when their retention ends.
@@ -250,10 +250,12 @@ Per BUSINESS_DECISIONS and handoff 11:
      the operator recovery flow (as with 03a's global deactivation) and is
      listed in `workspaces_left_ownerless` in the command output. A sole
      non-owner membership never deletes a workspace;
-   - **workspace lock order**: reconciliation and deletion lock the workspace
-     row before locking any membership rows. Reconciliation releases that row
-     at transaction end; deletion never holds request or user locks while it
-     processes workspaces;
+   - **workspace lock order**: deletion locks the workspace row, then the
+     affected user rows in UUID order with `FOR KEY SHARE`, then invitations,
+     then memberships. It takes those user locks before touching invitations
+     because membership audit inserts reference those users. Reconciliation
+     locks the workspace row before memberships. Workspace cleanup runs in its
+     own transaction, outside the request/user lock transactions;
    - **finalize** (one transaction, request lock then user lock): anonymize
      the user (email and display name `Former member`, `verified_email`
      cleared, WorkOS link tombstoned as `deleted:<user uuid>`, `deleted_at`
@@ -283,11 +285,13 @@ never while holding either). Completion is due only from `requested` past 30
 days, or resuming `completing`; `completed` is never due, whatever happens to
 the five-year proof row.
 
-Membership writers, WorkOS reconciliation, and account-deletion workspace
-cleanup use **workspace row, then membership rows**. Reconciliation acquires
-`lock_workspace` before its `FOR UPDATE` membership scan. This makes its lock
-order match deletion, so neither transaction holds memberships while waiting
-for the workspace.
+The global lock order is: deletion request row before its user row; workspace
+row before affected user rows in UUID order, before invitation rows, before
+membership rows. Workspace deletion takes `FOR KEY SHARE` on its actor and
+membership users before deleting invitations, so it cannot hold an invitation
+while waiting for finalization's user lock. Reconciliation takes the workspace
+row before its `FOR UPDATE` membership scan. Finalization takes request, user,
+then session/invitation rows; it never holds a workspace lock.
 
 #### PII erasure
 
@@ -312,10 +316,26 @@ for the workspace.
 - Native `legacy_actor_mappings` and `legacy_actor_non_identities` keep their
   actor ids, user ids, operator ids and confirmation timestamps. Completion
   redacts their free-text `source` fields to `redacted`.
-- The fulfillment log stores lowercase hex SHA-256 digests of the normalized
-  primary and verified email addresses, never plaintext. Replays hash each
-  invitation's normalized address and compare the digest, even when a restore
-  has replaced the users row with an unrelated profile.
+- The five-year fulfillment log stores lowercase hex HMAC-SHA256 digests of
+  normalized primary and verified email addresses, never plaintext. These
+  values are pseudonymous and linkable under the same key; the log is not
+  contentless or anonymized. `DEEPREF_DELETION_DIGEST_KEY` is a `SecretString`
+  used only by `deepref-server accounts complete-deletions` for first
+  completion and restore replay. Production must provide it; a fixed default
+  is available only in `APP_ENV=development`. Keep it in the operator secret
+  store and inject it only into the completion/replay command. The key is
+  never sent to PostgreSQL. Replay computes invitation HMACs in process and
+  matches only invitation rows with `created_at` before the stored
+  `fulfilled_account_deletions.completed_at`, so a later registration using
+  the same address keeps its invitations.
+- Retired keys make existing digests unmatchable. If key rotation is needed,
+  retain a protected list of old keys so operators can replay earlier records;
+  multi-key rotation is not implemented.
+- Actual privilege separation for `redact_deleted_user_audit` also depends on
+  deployment roles: migrations must run as a function/table owner distinct
+  from the runtime role. The runtime role may receive only the constrained
+  function grant; running the application as the migration owner removes this
+  boundary.
 - Sessions are also purged 30 days after expiry or revocation
   (`deepref-server audit purge`, `session_rows_purged`).
 

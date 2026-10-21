@@ -19,8 +19,9 @@
 -- compliance log below (which is purged after five years).
 --
 -- `fulfilled_account_deletions` is the log of completed deletions: user id,
--- completion time, and (in 0117) normalized-email SHA-256 digests, never
--- plaintext addresses. It is kept five years per BUSINESS_DECISIONS. Restores
+-- completion time, and (in 0117) normalized-email HMAC-SHA256 digests, never
+-- plaintext addresses. The digests are pseudonymous, keyed data; the key is
+-- held outside PostgreSQL. It is kept five years per BUSINESS_DECISIONS. Restores
 -- replay it so a restored backup never brings deleted personal data back
 -- (docs/security.md, "Restore step").
 CREATE TABLE account_deletion_requests (

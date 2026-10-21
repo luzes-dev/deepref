@@ -1382,6 +1382,90 @@ async fn deleting_a_workspace_audits_each_removed_membership_and_ends_its_invita
 }
 
 #[tokio::test]
+async fn workspace_deletion_waits_for_audit_users_before_locking_invitations() {
+    let Some(pool) = database().await else { return };
+    let actor_id = sign_in_user(&pool, "delete-lock-actor").await;
+    let affected_user_id = sign_in_user(&pool, "delete-lock-member").await;
+    let actor = deepref_domain::UserId::new(actor_id);
+    let affected_user = deepref_domain::UserId::new(affected_user_id);
+    let workspace =
+        deepref_domain::WorkspaceId::new(personal_workspace(&pool, "delete-lock-actor").await);
+    add_workspace_member(
+        &pool,
+        actor,
+        workspace,
+        affected_user,
+        WorkspaceRole::Member,
+        AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    let email: String = sqlx::query_scalar("SELECT primary_email FROM users WHERE id = $1")
+        .bind(affected_user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let invitation_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO workspace_invitations
+           (id, workspace_id, email, role, invited_by, status, expires_at)
+         VALUES ($1, $2, $3, 'member', $4, 'pending', now() + interval '1 day')",
+    )
+    .bind(invitation_id)
+    .bind(workspace.as_uuid())
+    .bind(email)
+    .bind(actor_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // This transaction holds the same user lock that account finalization
+    // takes, then removes the matching invitation. Workspace deletion must
+    // wait for the user lock before taking that invitation row.
+    let mut finalization = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(affected_user_id)
+        .fetch_one(&mut *finalization)
+        .await
+        .unwrap();
+    let delete_pool = pool.clone();
+    let deletion = tokio::spawn(async move {
+        delete_workspace(&delete_pool, actor, workspace, AuditRequest::default()).await
+    });
+    wait_for_activity_lock(
+        &pool,
+        "SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR KEY SHARE",
+    )
+    .await;
+
+    sqlx::query("DELETE FROM workspace_invitations WHERE id = $1")
+        .bind(invitation_id)
+        .execute(&mut *finalization)
+        .await
+        .unwrap();
+    finalization.commit().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), deletion)
+        .await
+        .expect("workspace deletion finishes after finalization releases the user lock")
+        .unwrap()
+        .unwrap();
+    let workspace_count: i64 = sqlx::query_scalar("SELECT count(*) FROM workspaces WHERE id = $1")
+        .bind(workspace.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(workspace_count, 0);
+    let invitation_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM workspace_invitations WHERE id = $1")
+            .bind(invitation_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(invitation_count, 0);
+}
+
+#[tokio::test]
 async fn an_existing_member_without_the_onboarding_mark_gets_no_personal_workspace() {
     let Some(pool) = database().await else { return };
     let owner = sign_in_user(&pool, "owner").await;

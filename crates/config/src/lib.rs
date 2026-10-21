@@ -1,6 +1,7 @@
 mod ai;
 mod api;
 mod database;
+mod deletion_digest;
 mod document;
 mod environment;
 mod error;
@@ -24,6 +25,7 @@ pub use ai::{
 };
 pub use api::ApiSettings;
 pub use database::DatabaseConfig;
+pub use deletion_digest::DeletionDigestConfig;
 pub use document::{
     DEFAULT_MAX_DOCUMENT_BYTES, DocumentConfig, DocumentStorageBackend, MAX_DOCUMENT_BYTES,
 };

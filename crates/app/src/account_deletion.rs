@@ -15,7 +15,7 @@
 //!   legacy-decision sources, and redacts the PII in audit metadata;
 //! * writes the audit rows and the deletion-proof `account.deletion_completed`
 //!   row, logs the fulfillment in `fulfilled_account_deletions` (user id, time,
-//!   and normalized-address SHA-256 digests, never plaintext email), and moves
+//!   and normalized-address HMAC-SHA256 digests, never plaintext email), and moves
 //!   the request to its terminal `completed` state.
 //!
 //! # State machine and locking
@@ -49,6 +49,8 @@
 //! from migration 0111, which covers N-1 SQL and restores independently of the
 //! five-year `fulfilled_account_deletions` log.
 
+use std::collections::BTreeSet;
+
 use deepref_domain::{MembershipStatus, ProjectId, UserId, WorkspaceId, WorkspaceRole};
 use serde::Serialize;
 use serde_json::json;
@@ -56,6 +58,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::deletion_digest::hmac_normalized_email;
 use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
 use crate::project_audit::record_project_deleted;
 use crate::project_deletion::delete_project_in_transaction;
@@ -104,6 +107,8 @@ pub enum AccountDeletionError {
     CompletionInFlight,
     #[error("the account deletion has already completed and can no longer be cancelled")]
     AlreadyCompleted,
+    #[error("could not compute the account's deletion-address digest")]
+    DeletionDigest,
 }
 
 /// The state one deletion request is in (migration 0111).
@@ -330,6 +335,7 @@ pub struct CompletionReport {
 /// a second deletion (docs/security.md, "Restore step").
 pub async fn complete_account_deletions(
     pool: &PgPool,
+    deletion_digest_key: &str,
     audit: AuditRequest<'_>,
 ) -> Result<CompletionReport, AccountDeletionError> {
     let mut report = CompletionReport::default();
@@ -355,7 +361,7 @@ pub async fn complete_account_deletions(
                 WorkspaceOutcome::AlreadyGone => {}
             }
         }
-        let finalized = finalize_account(pool, &account, audit).await?;
+        let finalized = finalize_account(pool, &account, deletion_digest_key, audit).await?;
         if finalized.newly_fulfilled {
             report.completed += 1;
         } else if changed || finalized.changed {
@@ -614,6 +620,7 @@ struct FinalizeOutcome {
 async fn finalize_account(
     pool: &PgPool,
     account: &DueAccount,
+    deletion_digest_key: &str,
     audit: AuditRequest<'_>,
 ) -> Result<FinalizeOutcome, AccountDeletionError> {
     let user = account.user_id;
@@ -642,51 +649,54 @@ async fn finalize_account(
         }
         addresses
     };
-    // A replay uses the first completion's digests, not whichever profile is
-    // present after a restore. Normalize and deduplicate before binding the
-    // addresses; only their hashes are persisted in the fulfillment log.
-    let stored_email_sha256: Option<Vec<String>> = sqlx::query_scalar(
-        "SELECT email_sha256 FROM fulfilled_account_deletions WHERE user_id = $1",
+    // A replay uses the first completion's keyed digests and timestamp, not
+    // whichever profile is present after a restore. The HMAC key remains in
+    // process memory; only HMAC outputs are persisted.
+    let stored_email_hmacs: Option<(Vec<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT email_hmac_sha256, completed_at
+             FROM fulfilled_account_deletions WHERE user_id = $1",
     )
     .bind(user.as_uuid())
     .fetch_optional(&mut *tx)
     .await?;
-    let (newly_fulfilled, email_sha256) = if let Some(digests) = stored_email_sha256 {
-        (false, digests)
-    } else {
-        let normalized_addresses = normalize_invitation_emails(&addresses);
-        let digests: Vec<String> = sqlx::query_scalar(
-            "SELECT COALESCE(
-               array_agg(DISTINCT encode(digest(email, 'sha256'), 'hex')),
-               ARRAY[]::text[])
-             FROM unnest($1::text[]) AS normalized(email)",
-        )
-        .bind(&normalized_addresses)
-        .fetch_one(&mut *tx)
-        .await?;
-        let inserted: Option<Vec<String>> = sqlx::query_scalar(
-            "INSERT INTO fulfilled_account_deletions (user_id, email_sha256)
-             VALUES ($1, $2)
-             ON CONFLICT (user_id) DO NOTHING
-             RETURNING email_sha256",
-        )
-        .bind(user.as_uuid())
-        .bind(&digests)
-        .fetch_optional(&mut *tx)
-        .await?;
-        match inserted {
-            Some(stored) => (true, stored),
-            None => {
-                let stored: Vec<String> = sqlx::query_scalar(
-                    "SELECT email_sha256 FROM fulfilled_account_deletions WHERE user_id = $1",
-                )
-                .bind(user.as_uuid())
-                .fetch_one(&mut *tx)
-                .await?;
-                (false, stored)
+    let (newly_fulfilled, email_hmac_sha256, completed_at) =
+        if let Some((digests, completed_at)) = stored_email_hmacs {
+            (false, digests, completed_at)
+        } else {
+            let normalized_addresses = normalize_invitation_emails(&addresses);
+            let digests: Vec<String> = normalized_addresses
+                .iter()
+                .map(|email| {
+                    hmac_normalized_email(email, deletion_digest_key.as_bytes())
+                        .map_err(|_| AccountDeletionError::DeletionDigest)
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?
+                .into_iter()
+                .collect();
+            let inserted: Option<(Vec<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+                "INSERT INTO fulfilled_account_deletions (user_id, email_hmac_sha256)
+                     VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING
+                     RETURNING email_hmac_sha256, completed_at",
+            )
+            .bind(user.as_uuid())
+            .bind(&digests)
+            .fetch_optional(&mut *tx)
+            .await?;
+            match inserted {
+                Some((stored, completed_at)) => (true, stored, completed_at),
+                None => {
+                    let (stored, completed_at): (Vec<String>, chrono::DateTime<chrono::Utc>) =
+                        sqlx::query_as(
+                            "SELECT email_hmac_sha256, completed_at
+                         FROM fulfilled_account_deletions WHERE user_id = $1",
+                        )
+                        .bind(user.as_uuid())
+                        .fetch_one(&mut *tx)
+                        .await?;
+                    (false, stored, completed_at)
+                }
             }
-        }
-    };
+        };
 
     // The PII goes; the user id and everything that references it stays.
     // `deleted_at` is the durable marker the trigger of migration 0111 keeps,
@@ -733,11 +743,17 @@ async fn finalize_account(
         .await?
         .rows_affected();
 
-    // Invitation addresses: the pending ones are revoked (audited) and
-    // deleted, the historical rows keep their history under the tombstone
-    // `deleted-<invitation id>@invalid`. Replays match normalized invitation
-    // addresses against the durable digests, never the anonymized profile.
-    let invitations_scrubbed = scrub_user_invitations(&mut tx, user, &email_sha256, audit).await?;
+    // Invitation addresses created before first completion are scrubbed; later
+    // invitations for a re-registered account are beyond the stored timestamp.
+    let invitations_scrubbed = scrub_user_invitations(
+        &mut tx,
+        user,
+        &email_hmac_sha256,
+        completed_at,
+        deletion_digest_key,
+        audit,
+    )
+    .await?;
 
     // The native 0103 confirmation rows keep their ids, user references, and
     // confirmation facts; only free-text sources are redacted. Audit metadata

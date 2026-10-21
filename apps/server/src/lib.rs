@@ -142,17 +142,19 @@ async fn run_accounts(action: AccountsCommand) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
     let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
     let telemetry = config.runtime.telemetry.clone();
-    with_telemetry(telemetry, async move {
-        match action {
-            AccountsCommand::CompleteDeletions => {
+    match action {
+        AccountsCommand::CompleteDeletions => {
+            let deletion_digest =
+                deepref_config::DeletionDigestConfig::from_source(&|name| source.get(name))?;
+            with_telemetry(telemetry, async move {
                 println!(
                     "{}",
-                    deepref_http_api::complete_account_deletions(&config).await?
+                    deepref_http_api::complete_account_deletions(&config, &deletion_digest).await?
                 );
-            }
+                Ok(())
+            })
         }
-        Ok(())
-    })
+    }
     .await
 }
 

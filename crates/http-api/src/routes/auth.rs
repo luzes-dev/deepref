@@ -377,6 +377,9 @@ fn deletion_error(error: AccountDeletionError) -> ApiError {
             ApiError::NotFound("resource not found".to_owned())
         }
         AccountDeletionError::Workspace(error) => ApiError::Internal(anyhow::anyhow!(error)),
+        AccountDeletionError::DeletionDigest => {
+            ApiError::Internal(anyhow::anyhow!("account deletion digest failed"))
+        }
         // The completion has been claimed (or already ran): the deletion can
         // no longer be cancelled, and pretending otherwise would be a lie.
         AccountDeletionError::CompletionInFlight | AccountDeletionError::AlreadyCompleted => {

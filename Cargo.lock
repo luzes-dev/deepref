@@ -956,6 +956,7 @@ dependencies = [
  "deepref-documents",
  "deepref-domain",
  "deepref-review",
+ "hmac 0.13.0",
  "pgvector",
  "serde",
  "serde_json",

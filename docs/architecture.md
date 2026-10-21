@@ -296,7 +296,8 @@ one: `DROP INDEX CONCURRENTLY IF EXISTS <name>;` by hand, then rerun.
 The administrative/security audit (`admin_audit_events`) is retained 6 months
 and the proof that a deletion request was fulfilled (`account.deletion_completed`
 and `fulfilled_account_deletions`) 5 years; the fulfillment log contains only
-user/time identifiers and normalized-email SHA-256 digests, never plaintext,
+user/time identifiers and normalized-email HMAC-SHA256 digests, never
+plaintext. The HMACs are pseudonymous, linkable data, not a contentless log,
 per BUSINESS_DECISIONS. Retention is enforced by the append-only trigger
 (migration 0112): only `deepref-server audit purge`, running with the
 transaction-local `deepref.audit_purge` key, can delete, and only rows already
@@ -313,13 +314,21 @@ request before any destructive work, deletes a workspace only under
 `lock_workspace` after re-checking sole ownership, and finishes in one
 transaction that anonymizes the user, sets the durable `users.deleted_at`
 marker (held by a database trigger) and moves the request to `completed`.
-Logout uses the same user-before-session row order as finalization. The
-five-year fulfillment log stores normalized-email SHA-256 digests so replay
-can scrub invitations restored under the original address without consulting
-the anonymized profile. Audit PII redaction runs through the restricted
+Logout uses the same user-before-session row order as finalization. Workspace
+deletion locks the workspace, affected users in UUID order, invitations, then
+memberships; it takes user `FOR KEY SHARE` locks before invitation changes to
+match finalization's user-before-invitation order. The five-year fulfillment
+log stores normalized-email HMAC-SHA256 digests and the original completion
+timestamp so replay scrubs only older invitations without consulting the
+anonymized profile or touching re-signup invitations. The HMAC key is held
+outside PostgreSQL and is read only by the completion/replay command. Audit
+PII redaction runs through the restricted
 `redact_deleted_user_audit(user_id)` SECURITY DEFINER function; its gate is
 transaction-local and accepts only a deleted account or a request in
 `completing`. The 0117 trigger also checks the target user and deletion state.
+Actual function privilege separation requires migrations to run under an owner
+role distinct from the runtime role; a runtime role that owns the function
+does not get a meaningful boundary from the conditional `deepref_app` grant.
 Restore: re-import the `fulfilled_account_deletions` log and run
 `deepref-server accounts complete-deletions`, which replays every logged
 deletion idempotently.

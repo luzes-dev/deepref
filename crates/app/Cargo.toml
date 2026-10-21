@@ -13,6 +13,7 @@ chrono.workspace = true
 deepref-domain.workspace = true
 deepref-documents.workspace = true
 deepref-review.workspace = true
+hmac = "0.13"
 pgvector.workspace = true
 serde_json.workspace = true
 serde.workspace = true

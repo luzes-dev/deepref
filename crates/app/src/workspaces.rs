@@ -13,9 +13,9 @@
 //! a [`ReconciliationFinding`] instead of being resolved silently.
 //!
 //! Membership transactions take locks in this order: workspace row first,
-//! then membership rows. WorkOS reconciliation and account deletion use the
-//! same order, so neither can hold membership rows while waiting for the
-//! workspace row.
+//! then user rows needed by audit inserts in id order, then invitations, then
+//! membership rows. WorkOS reconciliation locks the workspace before touching
+//! membership rows.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -33,6 +33,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::deletion_digest::hmac_normalized_email;
 use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
 
 /// The deterministic migration workspace that holds every project created
@@ -82,6 +83,8 @@ pub enum WorkspaceError {
     InvitationExpired,
     #[error("the invitation was issued to a different address")]
     InvitationEmailMismatch,
+    #[error("could not compute the invitation deletion digest")]
+    DeletionDigest,
     #[error("the provider has not verified the account's email address")]
     InvitationEmailUnverified,
     #[error(
@@ -897,6 +900,28 @@ pub(crate) async fn delete_workspace_rows(
     workspace_id: WorkspaceId,
     audit: AuditRequest<'_>,
 ) -> Result<(), WorkspaceError> {
+    // Audit inserts below carry the acting user and every affected member as
+    // foreign keys. Lock those user rows before invitations so this path
+    // follows finalization's user-before-invitation order and cannot hold an
+    // invitation while waiting for finalization's user lock.
+    let member_user_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM workspace_memberships
+         WHERE workspace_id = $1 ORDER BY user_id",
+    )
+    .bind(workspace_id.as_uuid())
+    .fetch_all(&mut **tx)
+    .await?;
+    let user_ids: Vec<Uuid> = std::iter::once(actor.as_uuid())
+        .chain(member_user_ids)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let _locked_users =
+        sqlx::query("SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR KEY SHARE")
+            .bind(&user_ids)
+            .fetch_all(&mut **tx)
+            .await?;
+
     // Pending invitations end as revoked (audited); every invitation row is
     // then deleted with the workspace, its history living in the audit trail.
     let pending = sqlx::query(
@@ -1003,73 +1028,136 @@ pub(crate) async fn remove_membership_in_transaction(
 /// invitation addressed to the account is revoked (audited) and deleted, and
 /// every other invitation row that carries the address keeps its history under
 /// the tombstone `deleted-<invitation id>@invalid`. The parameter contains
-/// only SHA-256 digests of normalized account addresses, so replay does not
-/// depend on the restored profile. Returns how many rows changed.
+/// only keyed HMAC-SHA256 digests of normalized account addresses, so replay
+/// does not depend on the restored profile. The stored completion timestamp
+/// fences off invitations created after the original deletion. Returns how
+/// many rows changed.
 pub(crate) async fn scrub_user_invitations(
     tx: &mut Transaction<'_, Postgres>,
     actor: UserId,
-    email_sha256: &[String],
+    email_hmac_sha256: &[String],
+    completed_at: chrono::DateTime<chrono::Utc>,
+    digest_key: &str,
     audit: AuditRequest<'_>,
 ) -> Result<u64, WorkspaceError> {
-    let digests: Vec<String> = email_sha256
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    let digests: BTreeSet<String> = email_hmac_sha256.iter().cloned().collect::<BTreeSet<_>>();
     if digests.is_empty() {
         return Ok(0);
     }
-    let pending = sqlx::query(
-        "SELECT id, workspace_id, role FROM workspace_invitations
-         WHERE status = 'pending'
-           AND encode(digest(lower(btrim(email)), 'sha256'), 'hex') = ANY($1)
-         ORDER BY created_at, id",
+
+    // The HMAC key never crosses the SQL boundary. Read addresses from rows
+    // created before the original fulfillment, then compare their HMACs in
+    // process memory. The timestamp fence leaves every later re-signup's
+    // invitations untouched on replay.
+    let candidates = sqlx::query(
+        "SELECT id, email FROM workspace_invitations
+         WHERE created_at < $1 ORDER BY created_at, id",
     )
-    .bind(&digests)
+    .bind(completed_at)
     .fetch_all(&mut **tx)
     .await?;
-    for row in &pending {
+
+    let mut matching_ids = BTreeSet::new();
+    for row in &candidates {
         let id: Uuid = row.try_get("id")?;
-        let workspace_id = WorkspaceId::new(row.try_get("workspace_id")?);
-        let role: String = row.try_get("role")?;
-        let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
+        let email: String = row.try_get("email")?;
+        let Some(normalized) = normalize_invitation_email(&email) else {
+            continue;
+        };
+        let digest = hmac_normalized_email(&normalized, digest_key.as_bytes())
+            .map_err(|_| WorkspaceError::DeletionDigest)?;
+        if digests.contains(&digest) {
+            matching_ids.insert(id);
+        }
+    }
+    if matching_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let matching_ids: Vec<Uuid> = matching_ids.into_iter().collect();
+    // Lock only candidate rows, then recheck their current address and status
+    // before auditing or mutating them.
+    let matching = sqlx::query(
+        "SELECT id, workspace_id, role, status, email
+         FROM workspace_invitations
+         WHERE id = ANY($1) AND created_at < $2
+         ORDER BY created_at, id FOR UPDATE",
+    )
+    .bind(&matching_ids)
+    .bind(completed_at)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let mut pending = Vec::new();
+    let mut historical_ids = Vec::new();
+    for row in &matching {
+        let id: Uuid = row.try_get("id")?;
+        let email: String = row.try_get("email")?;
+        let Some(normalized) = normalize_invitation_email(&email) else {
+            continue;
+        };
+        let digest = hmac_normalized_email(&normalized, digest_key.as_bytes())
+            .map_err(|_| WorkspaceError::DeletionDigest)?;
+        if !digests.contains(&digest) {
+            continue;
+        }
+        let status: String = row.try_get("status")?;
+        if status == "pending" {
+            let workspace_id = WorkspaceId::new(row.try_get("workspace_id")?);
+            let role: String = row.try_get("role")?;
+            let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
+            pending.push((id, workspace_id, role));
+        } else {
+            historical_ids.push(id);
+        }
+    }
+
+    for (id, workspace_id, role) in &pending {
         write_tenancy_audit(
             tx,
-            TenancyEvent::InvitationRevoked(role, id),
+            TenancyEvent::InvitationRevoked(*role, *id),
             AuditPrincipal::User(actor),
             None,
-            Some(workspace_id),
+            Some(*workspace_id),
             None,
             audit,
         )
         .await?;
     }
-    let deleted = sqlx::query(
-        "DELETE FROM workspace_invitations
-         WHERE status = 'pending'
-           AND encode(digest(lower(btrim(email)), 'sha256'), 'hex') = ANY($1)",
-    )
-    .bind(&digests)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    let rewritten = sqlx::query(
-        "UPDATE workspace_invitations
-         SET email = 'deleted-' || id || '@invalid', updated_at = now()
-         WHERE status <> 'pending'
-           AND encode(digest(lower(btrim(email)), 'sha256'), 'hex') = ANY($1)",
-    )
-    .bind(&digests)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
+    let pending_ids: Vec<Uuid> = pending.iter().map(|(id, _, _)| *id).collect();
+    let deleted = if pending_ids.is_empty() {
+        0
+    } else {
+        sqlx::query(
+            "DELETE FROM workspace_invitations
+             WHERE id = ANY($1) AND status = 'pending' AND created_at < $2",
+        )
+        .bind(&pending_ids)
+        .bind(completed_at)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected()
+    };
+    let rewritten = if historical_ids.is_empty() {
+        0
+    } else {
+        sqlx::query(
+            "UPDATE workspace_invitations
+             SET email = 'deleted-' || id || '@invalid', updated_at = now()
+             WHERE id = ANY($1) AND status <> 'pending' AND created_at < $2",
+        )
+        .bind(&historical_ids)
+        .bind(completed_at)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected()
+    };
     Ok(deleted + rewritten)
 }
 
 /// Normalizes and deduplicates addresses before they cross the SQL boundary.
-/// The result is used only to derive SHA-256 digests for deletion replay; the
-/// original addresses are never persisted in the fulfillment log.
+/// The result is used only to derive keyed HMAC-SHA256 values for deletion
+/// replay; the original addresses are never persisted in the fulfillment log.
 pub(crate) fn normalize_invitation_emails(emails: &[String]) -> Vec<String> {
     emails
         .iter()

@@ -150,10 +150,14 @@ pub async fn audit_purge(config: &ApiConfig, dry_run: bool) -> anyhow::Result<St
 
 /// Completes every account deletion whose 30-day window has passed, and
 /// re-applies deletions a restore undid (11, BUSINESS_DECISIONS).
-pub async fn complete_account_deletions(config: &ApiConfig) -> anyhow::Result<String> {
+pub async fn complete_account_deletions(
+    config: &ApiConfig,
+    deletion_digest: &deepref_config::DeletionDigestConfig,
+) -> anyhow::Result<String> {
     let pool = database_pool(config).await?;
     let report = deepref_app::account_deletion::complete_account_deletions(
         &pool,
+        deletion_digest.expose_secret(),
         deepref_app::identity::AuditRequest::default(),
     )
     .await?;

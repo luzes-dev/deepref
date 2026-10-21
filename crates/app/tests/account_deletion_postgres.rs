@@ -28,6 +28,7 @@ const AUDIT: AuditRequest<'_> = AuditRequest {
     request_id: Some("0b0e0d0c-0000-4000-8000-000000000011"),
     session_ref: None,
 };
+const TEST_DELETION_DIGEST_KEY: &str = "deepref-test-deletion-digest-key-32-bytes";
 
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
@@ -325,7 +326,9 @@ async fn a_deletion_request_and_its_cancellation_are_each_audited_once() {
         "a fresh request is a fresh row"
     );
     age_request(&pool, user, 29).await;
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(
         report.completed, 0,
         "the restarted clock is not yet due at 29 days"
@@ -404,7 +407,9 @@ async fn completion_erases_the_personal_data_and_keeps_history() {
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
 
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report.completed, 1);
     assert_eq!(report.re_applied, 0);
     assert_eq!(report.workspaces_deleted, 1);
@@ -554,8 +559,8 @@ async fn completion_erases_the_personal_data_and_keeps_history() {
     .unwrap();
     assert_eq!(deactivated, "account_deletion");
 
-    // The fulfillment log keeps only identifiers, the time and a one-way
-    // normalized-address digest; it never stores plaintext email.
+    // The fulfillment log keeps only identifiers, the time and a keyed,
+    // normalized-address HMAC; it never stores plaintext email or the key.
     let logged = sqlx::query("SELECT * FROM fulfilled_account_deletions WHERE user_id = $1")
         .bind(user.as_uuid())
         .fetch_optional(&pool)
@@ -563,13 +568,15 @@ async fn completion_erases_the_personal_data_and_keeps_history() {
         .unwrap();
     let logged = logged.expect("fulfillment logged");
     assert_eq!(logged.columns().len(), 3);
-    let email_sha256: Vec<String> = logged.get("email_sha256");
-    let expected_digest: String =
-        sqlx::query_scalar("SELECT encode(digest('gone@example.org', 'sha256'), 'hex')")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(email_sha256, vec![expected_digest]);
+    let email_hmac_sha256: Vec<String> = logged.get("email_hmac_sha256");
+    assert_eq!(
+        email_hmac_sha256,
+        vec!["cb93892a5f160c4e2d3b0277d8a0b328684746155e629f6e275f92db22632da5"]
+    );
+    assert_ne!(
+        email_hmac_sha256[0], "623465a03597bc5e82ec2293361902ff9f0f6b90ae3aeb5e1740570cdc3adfb3",
+        "the stored value is keyed, not plain SHA-256"
+    );
 
     // Nothing anywhere still carries the email, the name or the WorkOS id.
     let leaks = personal_data_leaks(
@@ -631,7 +638,9 @@ async fn no_row_anywhere_holds_the_personal_data_after_completion() {
 
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
-    complete_account_deletions(&pool, AUDIT).await.unwrap();
+    complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
 
     let leaks = personal_data_leaks(
         &pool,
@@ -640,6 +649,7 @@ async fn no_row_anywhere_holds_the_personal_data_after_completion() {
             "gone@example.org",
             "Erased Person",
             &workos_id,
+            TEST_DELETION_DIGEST_KEY,
         ],
     )
     .await;
@@ -714,7 +724,9 @@ async fn cancellation_and_completion_cannot_both_win() {
             .unwrap(),
         DeletionCancellationOutcome::Cancelled
     );
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report, Default::default(), "a cancelled request is not due");
     let row = sqlx::query("SELECT status, primary_email FROM users WHERE id = $1")
         .bind(cancelled.as_uuid())
@@ -739,7 +751,9 @@ async fn cancellation_and_completion_cannot_both_win() {
         .await
         .unwrap();
     age_request(&pool, cancelled, 31).await;
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report.completed, 1);
     let refused = cancel_account_deletion(&pool, cancelled, AUDIT)
         .await
@@ -772,7 +786,9 @@ async fn cancellation_and_completion_cannot_both_win() {
         "{refused}"
     );
     // And the interrupted completion is resumed by the next run.
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report.completed, 1);
     assert_eq!(
         request_state(&pool, inflight).await.as_deref(),
@@ -848,7 +864,9 @@ async fn a_sole_non_owner_membership_never_deletes_a_workspace() {
 
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report.workspaces_deleted, 0, "not an owner: never deleted");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspaces WHERE id = $1")
@@ -895,7 +913,9 @@ async fn the_migration_workspace_survives_an_account_deletion() {
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
 
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report.completed, 1);
     assert_eq!(report.workspaces_deleted, 0);
     assert_eq!(
@@ -925,7 +945,9 @@ async fn n_1_sign_in_sql_cannot_resurrect_a_deleted_account() {
         .unwrap();
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
-    complete_account_deletions(&pool, AUDIT).await.unwrap();
+    complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
 
     // Even once the five-year compliance log is gone, the marker stands.
     sqlx::query("DELETE FROM fulfilled_account_deletions WHERE user_id = $1")
@@ -1011,10 +1033,14 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
 
-    let first = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let first = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(first.completed, 1);
     // Nothing is due any more, and the request is terminal.
-    let second = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let second = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(second.completed, 0);
     assert_eq!(
         second.re_applied, 0,
@@ -1026,6 +1052,13 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
         Some("completed"),
         "the request is never due again, whatever the proof row does"
     );
+    let original_completed_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "SELECT completed_at FROM fulfilled_account_deletions WHERE user_id = $1",
+    )
+    .bind(user.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     // A restore brings the personal data back (docs/security.md, "Restore
     // step"). A backup restore reloads tuples without firing triggers, so the
@@ -1062,8 +1095,21 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
     add_member(&pool, invitation_workspace, colleague, "owner").await;
     let restored_invitation =
         make_invitation(&pool, invitation_workspace, "gone@example.org", "pending").await;
+    // The restored tuple has its original creation time from the pre-deletion
+    // backup, even though the fixture reloads it after the first completion.
+    sqlx::query(
+        "UPDATE workspace_invitations
+         SET created_at = $2 - interval '1 second' WHERE id = $1",
+    )
+    .bind(restored_invitation)
+    .bind(original_completed_at)
+    .execute(&pool)
+    .await
+    .unwrap();
 
-    let third = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let third = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(third.completed, 0);
     assert_eq!(third.re_applied, 1);
     assert_eq!(third.workspaces_deleted, 1);
@@ -1095,6 +1141,72 @@ async fn completion_is_idempotent_and_reapplies_what_a_restore_undid() {
 }
 
 #[tokio::test]
+async fn replay_leaves_invitations_for_a_re_registered_email_untouched() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let deleted_user = make_user(&pool, Uuid::new_v4(), "Gone@Example.org", "Former Account").await;
+    request_account_deletion(&pool, deleted_user, AUDIT)
+        .await
+        .unwrap();
+    age_request(&pool, deleted_user, 31).await;
+    complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
+    let completed_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "SELECT completed_at FROM fulfilled_account_deletions WHERE user_id = $1",
+    )
+    .bind(deleted_user.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // A new identity can use the old address after the original deletion.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let new_user = make_user(&pool, Uuid::new_v4(), "gone@example.org", "New Account").await;
+    let workspace_owner = make_user(
+        &pool,
+        Uuid::new_v4(),
+        "owner@example.org",
+        "Workspace Owner",
+    )
+    .await;
+    let workspace = make_workspace(&pool, Uuid::new_v4(), "new-account-workspace").await;
+    add_member(&pool, workspace, workspace_owner, "owner").await;
+    let invitation = make_invitation(&pool, workspace, "gone@example.org", "pending").await;
+    let invitation_created_at: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT created_at FROM workspace_invitations WHERE id = $1")
+            .bind(invitation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(invitation_created_at > completed_at);
+
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
+    assert_eq!(report.completed, 0);
+    assert_eq!(report.re_applied, 0);
+
+    let (status, email): (String, String) =
+        sqlx::query_as("SELECT status, primary_email FROM users WHERE id = $1")
+            .bind(new_user.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "active");
+    assert_eq!(email, "gone@example.org");
+    let (invitation_status, invitation_email): (String, String) =
+        sqlx::query_as("SELECT status, email FROM workspace_invitations WHERE id = $1")
+            .bind(invitation)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(invitation_status, "pending");
+    assert_eq!(invitation_email, "gone@example.org");
+}
+
+#[tokio::test]
 async fn the_replay_reapplies_cleanup_even_when_the_profile_is_unchanged() {
     let Some(pool) = database().await else {
         return;
@@ -1106,7 +1218,9 @@ async fn the_replay_reapplies_cleanup_even_when_the_profile_is_unchanged() {
 
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 31).await;
-    complete_account_deletions(&pool, AUDIT).await.unwrap();
+    complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
 
     // A restore brings back only auxiliary rows: a session and a recreated
     // solely-owned workspace (invitation addresses are replayed from the
@@ -1123,7 +1237,9 @@ async fn the_replay_reapplies_cleanup_even_when_the_profile_is_unchanged() {
     let project = Uuid::new_v4();
     make_project(&pool, project, recreated, "recreated project").await;
 
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report.completed, 0);
     assert_eq!(report.re_applied, 1, "the logged deletion is replayed");
     assert_eq!(report.workspaces_deleted, 1);
@@ -1159,7 +1275,9 @@ async fn completion_waits_the_full_grace_period() {
     request_account_deletion(&pool, user, AUDIT).await.unwrap();
     age_request(&pool, user, 29).await;
 
-    let report = complete_account_deletions(&pool, AUDIT).await.unwrap();
+    let report = complete_account_deletions(&pool, TEST_DELETION_DIGEST_KEY, AUDIT)
+        .await
+        .unwrap();
     assert_eq!(report, Default::default());
     let row = sqlx::query("SELECT status, primary_email FROM users WHERE id = $1")
         .bind(user.as_uuid())
@@ -1219,8 +1337,9 @@ async fn logout_and_finalization_serialize_without_a_deadlock() {
     wait_for_lock_wait(&pool, &["UPDATE user_sessions"]).await;
 
     let completion_pool = pool.clone();
-    let completion =
-        tokio::spawn(async move { complete_account_deletions(&completion_pool, AUDIT).await });
+    let completion = tokio::spawn(async move {
+        complete_account_deletions(&completion_pool, TEST_DELETION_DIGEST_KEY, AUDIT).await
+    });
     wait_for_lock_wait(
         &pool,
         &[

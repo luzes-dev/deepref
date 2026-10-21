@@ -1,12 +1,13 @@
 -- phase: expand
 -- Account deletion replay needs to recognize restored invitations without
--- retaining the original addresses. Store only lowercase hexadecimal SHA-256
--- digests of normalized email addresses in the five-year fulfillment log.
+-- retaining the original addresses. Store only lowercase hexadecimal
+-- HMAC-SHA256 digests of normalized email addresses in the five-year
+-- fulfillment log; the key stays in the completion/replay process.
 ALTER TABLE fulfilled_account_deletions
-  ADD COLUMN email_sha256 text[] NOT NULL DEFAULT ARRAY[]::text[];
+  ADD COLUMN email_hmac_sha256 text[] NOT NULL DEFAULT ARRAY[]::text[];
 
-COMMENT ON COLUMN fulfilled_account_deletions.email_sha256 IS
-  'Lowercase hex SHA-256 digests of normalized account addresses, used to scrub invitations after restore; never plaintext email.';
+COMMENT ON COLUMN fulfilled_account_deletions.email_hmac_sha256 IS
+  'Lowercase hex HMAC-SHA256 digests of normalized account addresses, used to scrub invitations after restore; keyed with DEEPREF_DELETION_DIGEST_KEY held outside PostgreSQL; never plaintext email.';
 
 -- The append-only trigger still allows purge only for rows past retention.
 -- Redaction is now authorized by one SECURITY DEFINER function, rather than

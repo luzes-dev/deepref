@@ -20,6 +20,7 @@ pub mod authorization;
 mod automations;
 mod autonomy;
 mod deduplication;
+mod deletion_digest;
 mod documents;
 pub mod durable_runs;
 mod extraction;
