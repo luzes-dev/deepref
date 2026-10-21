@@ -110,15 +110,12 @@ pnpm --filter @deepref/web exec prettier --write <modified-files>
 pnpm --filter @deepref/ui exec prettier --write <modified-files>
 ```
 
-For Rust changes, run:
+For Rust changes, run `just diagnose rust`; the probe manifest owns the exact commands.
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo nextest run --workspace --lib --bins --locked
-cargo xtask boundaries
-```
+For database changes, point `DATABASE_URL` and `TEST_DATABASE_URL` at a disposable PostgreSQL instance, set `DEEPREF_REQUIRE_DATABASE=1`, and run `just diagnose integration`. Keep the configured parallel PostgreSQL test group; the development database is not a test fixture.
 
-For database changes, point `DATABASE_URL` and `TEST_DATABASE_URL` at a disposable PostgreSQL instance, set `DEEPREF_REQUIRE_DATABASE=1`, and run `cargo nextest run --workspace --tests --locked`. Keep the configured parallel PostgreSQL test group; the development database is not a test fixture.
+For SQL macro changes, run `cargo xtask sqlx prepare`, commit `.sqlx/`, and verify the integration probe group. Finish metadata preparation before offline builds. For API contract changes, regenerate with `pnpm generate:api` and verify `pnpm generate:api:check`.
 
-For SQL macro changes, run `cargo xtask sqlx prepare`, commit `.sqlx/`, and verify `cargo xtask sqlx check`. Finish metadata preparation before offline builds. For API contract changes, regenerate with `pnpm generate:api` and verify `pnpm generate:api:check`.
+### CI diagnostics
+
+For CI-facing changes, complete a diagnostic probe pass before editing individual failures. Fix the full failed set as one batch, use `just diagnose-failed` for iteration, then run `just diagnose-full` before handoff. Blocked probes are dependency-blocked, not additional failures. See [`docs/ci-diagnostics.md`](docs/ci-diagnostics.md) for blocked-probe and report semantics; [`scripts/ci/diagnostics.toml`](scripts/ci/diagnostics.toml) is the probe source of truth.

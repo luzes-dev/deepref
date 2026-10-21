@@ -27,18 +27,20 @@ jobs:
           sccache: local-bundle
       - name: Set up Node.js
         uses: ./.github/actions/setup-node
-      - name: Verify generated API artifacts
-        run: pnpm run generate:api:check
-        env:
-          SQLX_OFFLINE: "true"
-      # The authorization policy table must cover every route and its generated
-      # documentation must stay in sync with the API.
-      - name: Verify authorization coverage artifacts
-        run: pnpm run generate:authz:check
-        env:
-          SQLX_OFFLINE: "true"
-      - name: Prove drift check left the tree clean
-        run: git diff --exit-code
+      # Generation checks are independent; clean-tree verification depends on
+      # both completing successfully.
+      - name: Probe generated API artifacts
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check codegen.api
+      - name: Probe authorization coverage artifacts
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check codegen.authz
+      - name: Probe clean tree
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check codegen.clean-tree
+      - name: Gate codegen
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate codegen
       - name: Show sccache statistics
         if: always()
         run: |
@@ -47,3 +49,11 @@ jobs:
             "${SCCACHE_PATH:-sccache}" --show-stats
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-codegen
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7

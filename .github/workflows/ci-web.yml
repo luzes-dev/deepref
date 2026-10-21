@@ -2,6 +2,13 @@ name: CI / Web
 
 on:
   workflow_call:
+    outputs:
+      web-result:
+        description: Aggregate result of the independently probed Web checks.
+        value: ${{ jobs.web-gate.outputs.result }}
+      fallow-result:
+        description: Result of the Fallow analysis that consumes web coverage.
+        value: ${{ github.event_name != 'pull_request' && 'success' || jobs.fallow.outputs.result }}
 
 permissions:
   contents: read
@@ -26,31 +33,100 @@ jobs:
             apps/web/.cache/prettier
           key: web-lint-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/web/.prettierrc', 'apps/web/eslint.config.*') }}-${{ github.sha }}
           restore-keys: web-lint-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/web/.prettierrc', 'apps/web/eslint.config.*') }}-
-      - name: Lint
-        run: pnpm run lint
-      - name: Type-check
-        run: pnpm run check
-      - name: Run web coverage
-        run: pnpm --filter @deepref/web test:coverage
-      - name: Run UI package tests
-        run: pnpm --filter @deepref/ui test
+      # One shared Node install, five independent probes.  A lint failure must
+      # not hide a type error, a test failure, or a broken build.
+      - name: Probe lint
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check web.lint
+      - name: Probe type-check
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check web.check
+      - name: Probe web coverage
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check web.coverage
+      - name: Probe UI tests
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check web.ui-tests
+      - name: Probe web build
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check web.build
       - name: Upload web coverage artifact
+        if: always() && hashFiles('apps/web/coverage/coverage-final.json') != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-coverage-${{ github.sha }}
           path: apps/web/coverage/
+          if-no-files-found: ignore
           retention-days: 14
-      - name: Build
-        run: pnpm run build
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-web
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
-  # Fallow consumes the web coverage artifact and only runs on pull requests,
-  # matching the required Fallow status check.
+  web-gate:
+    name: Gate Web
+    needs: web
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      result: ${{ steps.gate.outputs.result }}
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download diagnostic artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ci-diagnostics-web
+          path: diagnostics-artifacts
+          merge-multiple: true
+      - name: Merge and gate Web diagnostics
+        id: gate
+        if: always()
+        env:
+          WEB_JOB_RESULT: ${{ needs.web.result }}
+        run: |
+          status=0
+          if [[ "$WEB_JOB_RESULT" != success ]]; then
+            echo "::error::Web probe job did not complete successfully ($WEB_JOB_RESULT)"
+            status=1
+          fi
+          mkdir -p diagnostics-artifacts
+          python3 scripts/ci/diagnose.py --output target/ci-diagnostics merge diagnostics-artifacts || status=1
+          python3 scripts/ci/diagnose.py --output target/ci-diagnostics gate web || status=1
+          if [[ "$status" -eq 0 ]]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+      - name: Upload consolidated diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-web-gate
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Fallow needs only the coverage artifact.  It is deliberately not gated on
+  # the overall Web result, so a lint failure with valid coverage still yields
+  # an independently evaluated Fallow check.
   fallow:
     name: TypeScript quality
-    if: github.event_name == 'pull_request'
     needs: web
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      result: ${{ steps.gate.outputs.result }}
     steps:
       - name: Checkout trusted source with history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,15 +135,44 @@ jobs:
           fetch-depth: 0
       - name: Set up Node.js
         uses: ./.github/actions/setup-node
+      - name: Download Web diagnostic results
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ci-diagnostics-web
+          path: target/ci-diagnostics
+          merge-multiple: true
       - name: Download web coverage artifact
+        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: web-coverage-${{ github.sha }}
           path: apps/web/coverage
-      - name: Gate new TypeScript quality issues
+      - name: Probe Fallow audit
+        continue-on-error: true
         env:
           FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}
-          FALLOW_COVERAGE: apps/web/coverage/coverage-final.json
-        run: pnpm run quality:ts:audit
-      - name: Scan TypeScript security candidates
-        run: pnpm run quality:ts:security
+        run: python3 scripts/ci/diagnose.py run-check fallow.audit
+      - name: Probe Fallow security
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check fallow.security
+      - name: Gate Fallow
+        id: gate
+        if: always()
+        run: |
+          status=0
+          python3 scripts/ci/diagnose.py gate fallow || status=1
+          if [[ "$status" -eq 0 ]]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-fallow
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7

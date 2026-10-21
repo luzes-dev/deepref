@@ -11,8 +11,6 @@ jobs:
     name: Browser tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      E2E_SKIP_WEB_BUILD: "1"
     steps:
       - name: Checkout trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +39,22 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Build web preview bundle
-        run: pnpm --filter @deepref/web exec vite build
-      - name: Run browser tests
-        run: pnpm --filter @deepref/web test:e2e
+      # Browser tests consume the preview build.  If the build fails, the
+      # browser probe is blocked rather than run against a known-broken tree.
+      - name: Probe preview build
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check e2e.build
+      - name: Probe browser tests
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check e2e.browser
+      - name: Gate browser lane
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate e2e
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-e2e
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7

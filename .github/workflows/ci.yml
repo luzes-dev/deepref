@@ -87,6 +87,7 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'docs/openapi.json'
+              - 'docs/authorization-matrix.md'
               - 'scripts/check-api-codegen.sh'
               - '.github/workflows/ci.yml'
               - '.github/workflows/ci-codegen.yml'
@@ -109,7 +110,6 @@ jobs:
               - '.github/workflows/ci-integration.yml'
               - '.github/actions/setup-rust/**'
             containers-pr:
-              - 'scripts/ci/**'
               - 'docker/**'
               - 'docker-bake.hcl'
               - 'apps/web/Dockerfile'
@@ -208,8 +208,8 @@ jobs:
       - name: Verify Web checks
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          WEB_RESULT: ${{ needs.web-checks.result }}
-        run: bash scripts/ci/check-required-results.sh Web "changed paths=$CHANGES_RESULT" "Web checks=$WEB_RESULT"
+          WEB_RESULT: ${{ needs.web-checks.result == 'skipped' && 'skipped' || needs.web-checks.outputs.web-result }}
+        run: bash scripts/ci/check-required-results.sh Web "changed paths=$CHANGES_RESULT" "Web probes=$WEB_RESULT"
 
   fallow-required:
     name: Fallow
@@ -225,8 +225,8 @@ jobs:
       - name: Verify Fallow
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          WEB_RESULT: ${{ needs.web-checks.result }}
-        run: bash scripts/ci/check-required-results.sh Fallow "changed paths=$CHANGES_RESULT" "Web checks=$WEB_RESULT"
+          WEB_RESULT: ${{ needs.web-checks.result == 'skipped' && 'skipped' || needs.web-checks.outputs.fallow-result }}
+        run: bash scripts/ci/check-required-results.sh Fallow "changed paths=$CHANGES_RESULT" "Fallow probes=$WEB_RESULT"
 
   codegen-required:
     name: OpenAPI and Orval drift
@@ -279,3 +279,67 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CONTAINERS_RESULT: ${{ needs.containers-checks.result }}
         run: bash scripts/ci/check-required-results.sh Docker "changed paths=$CHANGES_RESULT" "Container builds=$CONTAINERS_RESULT"
+
+  # Observability, not another merge policy.  Every lane uploads its probe
+  # results; this job merges whatever reached the run and publishes one compact
+  # summary.  The required checks above remain authoritative.
+  ci-diagnostics:
+    name: CI diagnostics
+    if: always()
+    needs:
+      - changes
+      - rust-checks
+      - web-checks
+      - codegen-checks
+      - integration-checks
+      - e2e-checks
+      - containers-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download lane diagnostics
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ci-diagnostics-*
+          path: ci-diagnostics-artifacts
+      - name: Merge diagnostic reports
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUST_RESULT: ${{ needs.rust-checks.result }}
+          WEB_RESULT: ${{ needs.web-checks.result }}
+          CODEGEN_RESULT: ${{ needs.codegen-checks.result }}
+          INTEGRATION_RESULT: ${{ needs.integration-checks.result }}
+          E2E_RESULT: ${{ needs.e2e-checks.result }}
+        run: |
+          mkdir -p ci-diagnostics-artifacts
+          groups=()
+          [[ "$RUST_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group rust)
+          if [[ "$WEB_RESULT" != skipped || "$CHANGES_RESULT" != success ]]; then
+            groups+=(--expect-group web)
+            [[ "$GITHUB_EVENT_NAME" != pull_request ]] || groups+=(--expect-group fallow)
+          fi
+          [[ "$CODEGEN_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group codegen)
+          [[ "$INTEGRATION_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group integration)
+          [[ "$E2E_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group e2e)
+          python3 scripts/ci/diagnose.py --output ci-diagnostics merge ci-diagnostics-artifacts "${groups[@]}"
+      - name: Publish diagnostic summary
+        if: always()
+        run: |
+          if test -f ci-diagnostics/report.md; then
+            cat ci-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No diagnostic lane artifacts were available for this run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload aggregate diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics
+          path: ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
