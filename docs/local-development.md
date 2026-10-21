@@ -174,6 +174,22 @@ mise exec -- just test-e2e
 mise exec -- just codegen-check
 ```
 
+With `DATABASE_URL` and `TEST_DATABASE_URL` pointing to a disposable migrated
+database, run the focused inbox suite with:
+
+```bash
+DEEPREF_REQUIRE_DATABASE=1 cargo nextest run -p deepref-worker --test inbox_processor --locked
+```
+
+The inbox lock-compatibility regression holds a real handler transaction open,
+checks the inbox row with `FOR UPDATE NOWAIT`, and renews its claim before
+releasing the handler. It awaits handler completion rather than inferring it
+from effect visibility. Healthy processor fixtures use the production shutdown
+budget; only the blocked-drain regression overrides it to 100 ms and asserts
+abort, handler cancellation, and rollback. Processor heartbeat and ownership loss
+are covered separately. Keep the configured parallel PostgreSQL test group when
+running the full integration diagnostics.
+
 Create a feature branch only from a clean worktree:
 
 ```bash
