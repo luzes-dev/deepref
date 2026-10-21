@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Reviewer 6: Testing, CI/CD, Build/Deploy, Observability, DX, Docs, Config
 
 Repo: /home/luzes/Code/deepref @ b0ad219 (main, clean). Review date 2026-10-10.

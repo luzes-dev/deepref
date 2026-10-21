@@ -24,10 +24,9 @@
 		respond "ok" 200
 	}
 
-	# The API container listens on 0.0.0.0 with DEEPREF_ALLOW_NETWORK_BIND=1 (set in
-	# docker/rust-service.Dockerfile) so that this proxy can reach it. Neither this
-	# proxy nor the API authenticates anyone: put an authenticating proxy in front of
-	# this site before exposing it beyond a trusted machine.
+	# In local development or container deployment, the API container listens on
+	# 0.0.0.0 with DEEPREF_ALLOW_NETWORK_BIND=1 (set in docker/rust-service.Dockerfile)
+	# so that this proxy can reach it.
 	# The browser's Host header is forwarded unchanged, and the API rejects hosts
 	# outside its allow-list (loopback bind port plus API_CORS_ORIGINS authorities), so
 	# API_CORS_ORIGINS must list this site's public origin.

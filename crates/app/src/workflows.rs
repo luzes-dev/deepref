@@ -81,6 +81,8 @@ pub enum WorkflowError {
     RunFinished,
     #[error("stored workflow value is invalid: {0}")]
     InvalidStoredValue(String),
+    #[error("workflow file storage failed")]
+    ObjectStorage(#[source] deepref_documents::DocumentStoreError),
 }
 
 fn project_uuid(project_id: ProjectId) -> Uuid {
@@ -2475,59 +2477,6 @@ pub async fn find_exclusion_reason(
     .bind(name.trim())
     .fetch_optional(pool)
     .await?)
-}
-
-/// A stored export file.
-#[derive(Debug, Clone)]
-pub struct WorkflowFile {
-    pub id: Uuid,
-    pub name: String,
-    pub content_type: String,
-    pub content: Vec<u8>,
-}
-
-pub async fn create_workflow_file(
-    pool: &PgPool,
-    project_id: Uuid,
-    run_id: Uuid,
-    node_id: &str,
-    name: &str,
-    content_type: &str,
-    content: &[u8],
-) -> Result<Uuid, WorkflowError> {
-    Ok(sqlx::query_scalar(
-        "INSERT INTO workflow_files (project_id, run_id, node_id, name, content_type, content)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
-    )
-    .bind(project_id)
-    .bind(run_id)
-    .bind(node_id)
-    .bind(name)
-    .bind(content_type)
-    .bind(content)
-    .fetch_one(pool)
-    .await?)
-}
-
-pub async fn get_workflow_file(
-    pool: &PgPool,
-    project_id: ProjectId,
-    file_id: Uuid,
-) -> Result<WorkflowFile, WorkflowError> {
-    let row = sqlx::query(
-        "SELECT id, name, content_type, content FROM workflow_files WHERE project_id=$1 AND id=$2",
-    )
-    .bind(project_uuid(project_id))
-    .bind(file_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(WorkflowError::NotFound)?;
-    Ok(WorkflowFile {
-        id: row.get("id"),
-        name: row.get("name"),
-        content_type: row.get("content_type"),
-        content: row.get("content"),
-    })
 }
 
 /// Create a notification for a workflow run (blocks write through the shared

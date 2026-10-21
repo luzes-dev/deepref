@@ -13,6 +13,7 @@ AS $$
     WHEN 'parse_document' THEN 'documents'
     WHEN 'run_deduplication' THEN 'documents'
     WHEN 'durable_run_step' THEN 'workflow'
+    WHEN 'backfill_workflow_files' THEN 'workflow'
     WHEN 'work_fetch_requested' THEN 'integration'
     WHEN 'pmid_import' THEN 'integration'
     WHEN 'recompute_metrics' THEN 'projection'

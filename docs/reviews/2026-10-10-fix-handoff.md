@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Fix handoff: whole-application review, 2026-10-10
 
 You are applying the fixes from the DeepRef whole-application review. This file is the work order:
