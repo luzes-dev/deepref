@@ -320,8 +320,11 @@ async fn handle_backfill_workflow_files_job(
         project_id: Uuid,
     }
     let payload: BackfillPayload = serde_json::from_value(job.payload.clone())?;
+    let project_id = job
+        .project_id()
+        .ok_or_else(|| anyhow::anyhow!("workflow file backfill job is not project-scoped"))?;
     anyhow::ensure!(
-        payload.project_id == job.project_id.as_uuid(),
+        payload.project_id == project_id.as_uuid(),
         "workflow file backfill payload names a different project than its job"
     );
     let store = match document_store {
@@ -331,12 +334,12 @@ async fn handle_backfill_workflow_files_job(
     let report = deepref_app::backfill_workflow_files(
         pool,
         &store,
-        job.project_id,
+        project_id,
         deepref_app::WORKFLOW_FILE_BACKFILL_BATCH,
     )
     .await?;
     tracing::info!(
-        project_id = %job.project_id.as_uuid(),
+        project_id = %project_id.as_uuid(),
         migrated = report.migrated,
         failed = report.failed,
         remaining = report.remaining,
@@ -753,7 +756,7 @@ async fn handle_job_with_document_services_inner(
             )
             .bind(payload.step_id)
             .bind(payload.run_id)
-            .bind(job.project_id.as_uuid())
+            .bind(job.require_project()?.as_uuid())
             .fetch_optional(&pool)
             .await?;
             let (handler, status) =
@@ -836,7 +839,7 @@ async fn handle_durable_recipe_step(
     payload: DurableStepJobPayload,
 ) -> anyhow::Result<DeliveryAction> {
     let run_id = deepref_application::AutomationRunId::new(payload.run_id)?;
-    let project_id = job.project_id;
+    let project_id = job.require_project()?;
     let step = if payload.handler_kind == deepref_domain::jobs::DurableHandlerKind::Review {
         let run = deepref_app::get_leased_automation_run(pool, project_id, run_id, lease).await?;
         run.steps

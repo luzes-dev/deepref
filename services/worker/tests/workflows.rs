@@ -54,7 +54,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             return;
         };
         assert_eq!(
-            job.project_id.as_uuid(),
+            job.project_id().expect("project-scoped test job").as_uuid(),
             project,
             "unexpected job from another project"
         );
@@ -65,7 +65,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             &job.lease("workflow-test"),
             None,
             &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| match name {
-                "APP_ENV" => Some("local".into()),
+                "APP_ENV" => Some("development".into()),
                 "DEEPREF_WORKFLOW_NICHE_NODES" => Some("true".into()),
                 _ => None,
             })
@@ -481,7 +481,13 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
         .await
         .expect("claim")
         .expect("the test step is queued");
-    assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
+    assert_eq!(
+        claim
+            .project_id()
+            .expect("project-scoped test job")
+            .as_uuid(),
+        project.as_uuid()
+    );
     let node_run_id =
         Uuid::parse_str(claim.payload["step_id"].as_str().expect("payload")).expect("uuid");
     assert!(matches!(
@@ -548,7 +554,13 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
         .await
         .expect("claim")
         .expect("the notification step is queued");
-    assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
+    assert_eq!(
+        claim
+            .project_id()
+            .expect("project-scoped test job")
+            .as_uuid(),
+        project.as_uuid()
+    );
     let node_run_id =
         Uuid::parse_str(claim.payload["step_id"].as_str().expect("payload")).expect("uuid");
     match begin_node_execution(pool, node_run_id, &claim.lease("wait-test"))
@@ -781,7 +793,7 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
     let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
     let lease = job.lease("fence-worker");
     let runtime = deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
-        (name == "APP_ENV").then(|| "local".into())
+        (name == "APP_ENV").then(|| "development".into())
     })
     .expect("local runtime configuration");
     let metadata = deepref_worker::metadata::MetadataClients::default();
@@ -872,7 +884,7 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
     assert_eq!(second.id, first.id);
     let live = second.lease("fence-worker");
     let runtime = deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
-        (name == "APP_ENV").then(|| "local".into())
+        (name == "APP_ENV").then(|| "development".into())
     })
     .expect("local runtime configuration");
     let metadata = deepref_worker::metadata::MetadataClients::default();
@@ -1090,7 +1102,7 @@ async fn parked_queued_graph_fails_before_network_and_never_queues_successors() 
         .expect("claim")
         .expect("queued node");
     let runtime = deepref_config::RuntimeConfig::from_source("parked-test", &|name| {
-        (name == "APP_ENV").then(|| "local".into())
+        (name == "APP_ENV").then(|| "development".into())
     })
     .expect("default-off runtime");
     let metadata = deepref_worker::metadata::MetadataClients::default();

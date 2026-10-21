@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT delivery_state, claim_generation FROM outbox_events WHERE event_id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "delivery_state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "delivery_state"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "claim_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "claim_generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0eaa447003ae6fece0cd186e938f42810f821a1792765fc7a76eedcbd96b8811"
+}

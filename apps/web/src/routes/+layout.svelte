@@ -8,6 +8,7 @@
 	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { QueryClientProvider } from '@tanstack/svelte-query';
+	import AuthGate from '#lib/features/auth/AuthGate.svelte';
 	import NotificationsWatcher from '#lib/features/notifications/NotificationsWatcher.svelte';
 	import SettingsDialog from '#lib/features/settings/SettingsDialog.svelte';
 
@@ -24,11 +25,13 @@
 
 <ModeWatcher />
 <QueryClientProvider client={queryClient}>
-	<PageFrame>
-		{@render children()}
-	</PageFrame>
-	<SettingsDialog />
-	<NotificationsWatcher />
+	<AuthGate>
+		<PageFrame>
+			{@render children()}
+		</PageFrame>
+		<SettingsDialog />
+		<NotificationsWatcher />
+	</AuthGate>
 	<!-- Top placement keeps confirmations off the sticky decision bars at the bottom. -->
 	<Toaster position="top-center" offset={56} closeButton />
 </QueryClientProvider>

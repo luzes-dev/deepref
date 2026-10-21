@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs\n           SET state = 'queued',\n               attempts = greatest(attempts - 1, 0),\n               available_at = now(),\n               lease_owner = NULL,\n               leased_until = NULL,\n               lease_renewed_at = NULL\n           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND claim_seq = $3\n             AND leased_until > now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "82edcc3e4fbecb67a51a93fd4724cb730fc8d7649652a1197728f7fc9189ed86"
+}

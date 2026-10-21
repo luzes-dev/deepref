@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE integration_inbox_events\n           SET processing_state = CASE\n                 WHEN $3::boolean OR attempts >= max_attempts THEN 'quarantined'\n                 ELSE 'failed' END,\n             quarantine_reason = CASE\n                 WHEN $3::boolean OR attempts >= max_attempts THEN $4\n                 ELSE NULL END,\n             last_error = $4,\n             next_attempt_at = now() + ($5::double precision * interval '1 millisecond'),\n             lease_owner = NULL, lease_expires_at = NULL\n           WHERE id = $1 AND lease_owner = $2 AND processing_state = 'processing'\n             AND lease_expires_at > clock_timestamp() AND claim_generation = $6\n           RETURNING processing_state",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "processing_state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "processing_state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Bool",
+        "Text",
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1c201d82bc81e1e433f9551a199de7f056321b1ce70fc477744ad37419dad804"
+}

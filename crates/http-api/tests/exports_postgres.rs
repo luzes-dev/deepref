@@ -24,12 +24,12 @@ async fn database() -> Option<PgPool> {
 fn api_config() -> ApiConfig {
     let runtime = deepref_config::RuntimeConfig::from_map(
         "deepref-api-exports-test",
-        &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
+        &HashMap::from([("APP_ENV".to_owned(), "development".to_owned())]),
     )
     .expect("local test runtime should parse");
     ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local test document configuration"),
         runtime,
@@ -271,8 +271,8 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .expect("automation definition step should insert");
     sqlx::query(
         "INSERT INTO jobs
-         (id,project_id,kind,payload,state,attempts,max_attempts,available_at,dedupe_key,created_at,completed_at)
-         VALUES ($1,$2,'durable_run_step',$3,'completed',2,4,now(),$4,now() - interval '5 minutes',now() - interval '4 minutes')",
+         (id,project_id,kind,workload_class,payload,state,attempts,max_attempts,available_at,dedupe_key,created_at,completed_at)
+         VALUES ($1,$2,'durable_run_step','workflow',$3,'completed',2,4,now(),$4,now() - interval '5 minutes',now() - interval '4 minutes')",
     )
     .bind(automation_job_id)
     .bind(project_id)
@@ -503,8 +503,8 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .expect("other automation definition should insert");
     sqlx::query(
         "INSERT INTO jobs
-         (id,project_id,kind,payload,state,attempts,max_attempts,available_at,dedupe_key)
-         VALUES ($1,$2,'durable_run_step','{}'::jsonb,'queued',0,4,now(),$3)",
+         (id,project_id,kind,workload_class,payload,state,attempts,max_attempts,available_at,dedupe_key)
+         VALUES ($1,$2,'durable_run_step','workflow','{}'::jsonb,'queued',0,4,now(),$3)",
     )
     .bind(other_automation_job_id)
     .bind(other_project_id)

@@ -20,6 +20,7 @@ use deepref_ai::{
     AssistantToolOutput, AssistantToolResult, AssistantTurnInput, BoundedAgentJson,
     run_assistant_react_turn,
 };
+use deepref_domain::authorization::Resource;
 use deepref_domain::{
     Actor, DocumentBlockId, DocumentId, ProjectId, RecordId, ReportId, ScreeningStage, StudyDesign,
     StudyId,
@@ -39,7 +40,6 @@ use super::{
 };
 use crate::{
     error::{ApiError, ErrorResponse},
-    routes::actor::extract_actor,
     state::AppState,
 };
 const MAX_BLOCK_TEXT_CHARS: usize = 2_000;
@@ -358,11 +358,12 @@ pub(crate) async fn list_tools(
 pub(crate) async fn execute_tool(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<Value>,
 ) -> Result<Json<AssistantToolResponse>, ApiError> {
     validate_project_id(project_id)?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
@@ -935,6 +936,8 @@ struct ConversationAgentDispatcher {
     project_id: ProjectId,
     state: AppState,
     actor: Actor,
+    /// The authenticated principal, `None` only with authentication off.
+    principal: Option<deepref_domain::Principal>,
 }
 
 impl AssistantDispatcher for ConversationAgentDispatcher {
@@ -947,7 +950,26 @@ impl AssistantDispatcher for ConversationAgentDispatcher {
         let project_id = self.project_id;
         let state = self.state.clone();
         let actor = self.actor.clone();
+        let principal = self.principal;
         Box::pin(async move {
+            // Authorized at dispatch with the authenticated principal, on every
+            // call: membership removal or a role downgrade ends a running turn's
+            // tools on the next one.
+            crate::authz::authorize_audited(
+                &state,
+                principal,
+                deepref_app::authorization::assistant_tool_permission(tool_name),
+                Resource::Project(project_id),
+            )
+            .await
+            .map_err(|error| match error {
+                deepref_application::authorization::AuthzError::Denied(_) => {
+                    AgentToolError::Forbidden
+                }
+                deepref_application::authorization::AuthzError::Store(_) => {
+                    AgentToolError::ExecutionFailed
+                }
+            })?;
             dispatch_assistant_tool(project_id, &state, actor, tool_name, args).await
         })
     }
@@ -1124,12 +1146,15 @@ type AssistantSseState = (
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn chat(
     State(state): State<AppState>,
+    session: Option<crate::auth::CurrentSession>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<AssistantChatRequestDto>,
 ) -> Result<Response, ApiError> {
+    let principal = session.map(|session| session.0.principal);
     validate_project_id(project_id)?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
@@ -1153,6 +1178,7 @@ pub(crate) async fn chat(
             actor,
             body.conversation_id,
             user_message,
+            principal,
         )
         .await
         .map(|dto| (StatusCode::ACCEPTED, Json(dto)).into_response());
@@ -1191,6 +1217,7 @@ pub(crate) async fn chat(
             project_id: turn_project_id,
             state: turn_state.clone(),
             actor: actor.clone(),
+            principal,
         };
         let input = AssistantTurnInput {
             project_id: turn_project_id,

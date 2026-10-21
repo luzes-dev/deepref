@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE integration_inbox_events\n           SET processing_state = 'received', attempts = 0, next_attempt_at = now(),\n               quarantine_reason = NULL, last_error = NULL,\n               lease_owner = NULL, lease_expires_at = NULL\n           WHERE id = $1 AND processing_state = 'quarantined'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6818c2f43df12700a9def2589338c89b06a5d325ff00d9887230198063e77fe1"
+}

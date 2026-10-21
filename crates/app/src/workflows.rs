@@ -1247,13 +1247,14 @@ pub async fn advance_run_in_transaction(
         .await?;
         if let Some(node_run_id) = node_run_id {
             sqlx::query(
-                "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key,available_at)
-                 VALUES ($1,$2,$3,$4,0,$5,$6, now() + ($7::double precision * interval '1 second'))
+                "INSERT INTO jobs (id,project_id,kind,workload_class,payload,priority,max_attempts,dedupe_key,available_at)
+                 VALUES ($1,$2,$3,$4,$5,0,$6,$7, now() + ($8::double precision * interval '1 second'))
                  ON CONFLICT (dedupe_key) DO NOTHING",
             )
             .bind(Uuid::new_v4())
             .bind(project_id)
             .bind(crate::durable_runs::DURABLE_RUN_STEP_JOB_KIND)
+            .bind(crate::durable_runs::DURABLE_RUN_STEP_WORKLOAD_CLASS)
             .bind(json!({ "run_id": run_id, "step_id": node_run_id, "handler_kind": "workflow" }))
             .bind(NODE_MAX_ATTEMPTS)
             .bind(format!("workflow_step:{node_run_id}"))
@@ -1830,10 +1831,11 @@ async fn finish_node(
         .execute(&mut *tx).await?;
     if let Some((delay_secs, poll)) = wait {
         sqlx::query(
-            "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key,available_at)
-             VALUES ($1,$2,$3,$4,0,$5,$6,now()+($7::double precision * interval '1 second'))
+            "INSERT INTO jobs (id,project_id,kind,workload_class,payload,priority,max_attempts,dedupe_key,available_at)
+             VALUES ($1,$2,$3,$4,$5,0,$6,$7,now()+($8::double precision * interval '1 second'))
              ON CONFLICT (dedupe_key) DO NOTHING",
         ).bind(Uuid::new_v4()).bind(project_id).bind(crate::durable_runs::DURABLE_RUN_STEP_JOB_KIND)
+            .bind(crate::durable_runs::DURABLE_RUN_STEP_WORKLOAD_CLASS)
             .bind(json!({"run_id":run_id,"step_id":node_run_id,"handler_kind":"workflow"}))
             .bind(NODE_MAX_ATTEMPTS).bind(format!("workflow_step:{node_run_id}:wait:{poll}"))
             .bind(delay_secs as f64).execute(&mut *tx).await?;

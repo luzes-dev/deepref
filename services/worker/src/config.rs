@@ -1,6 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use deepref_config::{DocumentConfig, RuntimeConfig, WorkerSettings};
+use deepref_domain::WorkloadClass;
 use tokio::sync::Semaphore;
 
 use crate::metadata::MetadataClients;
@@ -9,7 +10,12 @@ use crate::metadata::MetadataClients;
 pub struct WorkerConfig {
     pub runtime: RuntimeConfig,
     pub documents: DocumentConfig,
+    /// Default concurrency for pools without an explicit setting.
     pub concurrency: usize,
+    /// Concurrency per workload pool.
+    pub pool_concurrency: HashMap<WorkloadClass, usize>,
+    /// Largest batch one claim statement may return.
+    pub claim_batch_max: usize,
     pub claim_lease: Duration,
     pub reconciler_interval: Duration,
     pub grobid_url: Option<String>,
@@ -28,6 +34,8 @@ impl WorkerConfig {
             runtime,
             documents: DocumentConfig::from_source(get)?,
             concurrency: settings.concurrency,
+            pool_concurrency: settings.pool_concurrency,
+            claim_batch_max: settings.claim_batch_max,
             claim_lease: settings.claim_lease,
             reconciler_interval: settings.reconciler_interval,
             grobid_url: settings.grobid_url,

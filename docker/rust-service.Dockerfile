@@ -144,9 +144,11 @@ COPY --from=builder --chown=65532:65532 /build/target/release/deepref-server /us
 WORKDIR /app
 # The binary binds 127.0.0.1 by default and refuses a non-loopback address
 # without DEEPREF_ALLOW_NETWORK_BIND. The container must listen on 0.0.0.0 to be
-# reachable at all. The API has no authentication: run this image only behind an
-# authenticating proxy, and never publish its port directly.
+# reachable at all. The API refuses to start with APP_ENV=production unless
+# DEEPREF_AUTH_ENABLED is on (and the WorkOS settings are present): central
+# authorization cannot be bypassed outside development.
 ENV HOME=/tmp \
+    APP_ENV=production \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     RUST_LOG=info \
     API_BIND_ADDR=0.0.0.0:8080 \
@@ -174,6 +176,7 @@ COPY --from=builder --chown=65532:65532 /build/target/release/deepref-server /us
 
 WORKDIR /app
 ENV HOME=/tmp \
+    APP_ENV=production \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     RUST_LOG=info
 USER 65532:65532

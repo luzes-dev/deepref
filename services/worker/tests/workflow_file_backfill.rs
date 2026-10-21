@@ -119,9 +119,14 @@ async fn a_job_whose_worker_died_is_requeued_and_finishes_the_remaining_files() 
         .expect("job");
 
     // The worker moved two files, then died without settling the job.
-    deepref_app::backfill_workflow_files(&pool, &store, job.project_id, 2)
-        .await
-        .unwrap();
+    deepref_app::backfill_workflow_files(
+        &pool,
+        &store,
+        job.project_id().expect("project-scoped job"),
+        2,
+    )
+    .await
+    .unwrap();
     sqlx::query("UPDATE jobs SET leased_until = now() - interval '1 minute', available_at = now() WHERE id=$1")
         .bind(job.id)
         .execute(&pool)
@@ -176,9 +181,10 @@ async fn a_payload_naming_another_project_is_refused() {
     let (project, _, _) = legacy_files(&pool, 1).await;
     let job = deepref_application::jobs::ClaimedJob {
         id: Uuid::new_v4(),
-        project_id: project.into(),
+        scope: deepref_application::jobs::JobScope::Project(project.into()),
         kind: deepref_domain::JobKind::BackfillWorkflowFiles,
         payload: serde_json::json!({ "project_id": Uuid::new_v4() }),
+        claim_seq: 1,
         attempts: 1,
         max_attempts: 5,
     };

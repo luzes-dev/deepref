@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../../../../tests/e2e-test';
+import type { Page } from '@playwright/test';
 import type { AiProposalDto } from '#lib/api/generated/models/index.js';
 
 const project = {

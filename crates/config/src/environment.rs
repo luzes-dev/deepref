@@ -2,61 +2,78 @@ use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
 
-/// The variable that selects the deployment environment.
+/// The variable that selects the runtime environment.
 pub const APP_ENV: &str = "APP_ENV";
+
+/// The dotenv files read in development, in precedence order.
+const DEVELOPMENT_DOTENV_FILES: [&str; 2] = [".env.local", ".env"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Environment {
-    Local,
     Development,
-    Staging,
     Production,
 }
 
 impl Environment {
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "local" => Ok(Self::Local),
             "development" | "dev" => Ok(Self::Development),
-            "staging" => Ok(Self::Staging),
             "production" | "prod" => Ok(Self::Production),
+            "local" => Err(ConfigError::Invalid {
+                name: APP_ENV,
+                reason: "local was removed; use development".into(),
+            }),
+            "staging" => Err(ConfigError::Invalid {
+                name: APP_ENV,
+                reason: "staging is not a runtime environment; use production for any deployed \
+                         service and development for a developer machine"
+                    .into(),
+            }),
             value => Err(ConfigError::Invalid {
                 name: APP_ENV,
-                reason: format!("unsupported environment {value:?}"),
+                reason: format!("unsupported environment {value:?}; use development or production"),
             }),
         }
     }
 
-    /// Resolves `APP_ENV`. An unset variable means `production`, so a deploy
-    /// that forgets it keeps every hosted fail-fast guard. Local development
-    /// opts in with `APP_ENV=local` (`.env.example`, `just`, Process Compose).
+    /// Resolves `APP_ENV`. An unset or blank variable is a startup error: no
+    /// default is safe for both a developer machine and a hosted deploy.
     pub fn from_app_env(value: Option<&str>) -> Result<Self, ConfigError> {
-        value.map_or(Ok(Self::Production), Self::parse)
+        match value.map(str::trim) {
+            None | Some("") => Err(ConfigError::AppEnvMissing),
+            Some(value) => Self::parse(value),
+        }
     }
 
-    pub const fn is_local(self) -> bool {
-        matches!(self, Self::Local)
+    pub const fn is_development(self) -> bool {
+        matches!(self, Self::Development)
     }
 }
 
 /// Loads `.env.local` and then `.env` from the working directory (or any
 /// ancestor), but only when the process environment already says
-/// `APP_ENV=local`. Hosted environments never read files from the working
+/// `APP_ENV=development`. Production never reads files from the working
 /// directory. Variables already present in the process environment always win,
 /// and because `.env.local` is read first it takes precedence over `.env`.
 /// Missing files are not an error. Returns whether the files were considered.
-pub fn load_local_dotenv_files() -> bool {
-    let load = dotenv_allowed(std::env::var(APP_ENV).ok().as_deref());
-    if load {
-        let _ = dotenvy::from_filename(".env.local");
-        let _ = dotenvy::from_filename(".env");
+pub fn load_development_dotenv_files() -> bool {
+    let files = dotenv_files(std::env::var(APP_ENV).ok().as_deref());
+    for file in files {
+        let _ = dotenvy::from_filename(file);
     }
-    load
+    !files.is_empty()
 }
 
-fn dotenv_allowed(app_env: Option<&str>) -> bool {
-    app_env.is_some_and(|value| Environment::parse(value).is_ok_and(Environment::is_local))
+fn dotenv_files(app_env: Option<&str>) -> &'static [&'static str] {
+    let development = app_env.is_some_and(|value| {
+        Environment::from_app_env(Some(value)).is_ok_and(Environment::is_development)
+    });
+    if development {
+        &DEVELOPMENT_DOTENV_FILES
+    } else {
+        &[]
+    }
 }
 
 #[cfg(test)]
@@ -64,20 +81,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unset_app_env_defaults_to_production() {
+    fn unset_or_blank_app_env_is_an_error_never_a_default() {
         assert!(matches!(
             Environment::from_app_env(None),
-            Ok(Environment::Production)
+            Err(ConfigError::AppEnvMissing)
+        ));
+        assert!(matches!(
+            Environment::from_app_env(Some("  ")),
+            Err(ConfigError::AppEnvMissing)
         ));
     }
 
     #[test]
-    fn dotenv_files_load_only_for_an_explicit_local_environment() {
-        assert!(dotenv_allowed(Some("local")));
-        assert!(dotenv_allowed(Some(" LOCAL ")));
-        assert!(!dotenv_allowed(None));
-        assert!(!dotenv_allowed(Some("production")));
-        assert!(!dotenv_allowed(Some("development")));
-        assert!(!dotenv_allowed(Some("bogus")));
+    fn only_development_and_production_are_accepted() {
+        for (value, expected) in [
+            ("development", Environment::Development),
+            (" DEV ", Environment::Development),
+            ("production", Environment::Production),
+            ("Prod", Environment::Production),
+        ] {
+            assert_eq!(Environment::parse(value).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn removed_environments_name_their_replacement() {
+        let local = Environment::parse("local").unwrap_err().to_string();
+        assert!(local.contains("use development"), "{local}");
+        let staging = Environment::parse("staging").unwrap_err().to_string();
+        assert!(staging.contains("use production"), "{staging}");
+        assert!(Environment::parse("test").is_err());
+    }
+
+    #[test]
+    fn dotenv_files_load_only_for_an_explicit_development_environment() {
+        assert_eq!(dotenv_files(Some("development")), [".env.local", ".env"]);
+        assert_eq!(dotenv_files(Some(" DEV ")), [".env.local", ".env"]);
+        for other in [
+            None,
+            Some("production"),
+            Some("prod"),
+            Some("local"),
+            Some("staging"),
+            Some("bogus"),
+            Some(""),
+        ] {
+            assert!(dotenv_files(other).is_empty(), "{other:?}");
+        }
     }
 }
