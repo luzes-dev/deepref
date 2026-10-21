@@ -65,13 +65,22 @@ pub async fn run_with_provider_reconcilers(
 }
 
 /// Schedule the platform-scoped usage export replay while export is enabled.
-/// The job itself re-checks the switch, so an in-flight schedule after a
-/// disable emits nothing. While disabled no job row is created at all.
+/// Both the deployment switch and the durable activation flag must be set: a
+/// job kind an older binary cannot decode is dead-lettered by its claim, so
+/// nothing is scheduled before `deepref-server ai-usage enable-export`. The
+/// job itself re-checks both gates, so an in-flight schedule after a disable
+/// emits nothing. While disabled no job row is created at all.
 pub async fn enqueue_ai_usage_export_replay_job(
     pool: &PgPool,
     usage_export: &UsageExportConfig,
 ) -> anyhow::Result<u64> {
     if !usage_export.enabled {
+        return Ok(0);
+    }
+    if !deepref_app::ai_usage_rollout_gates(pool)
+        .await?
+        .export_activated
+    {
         return Ok(0);
     }
     let minute = chrono::Utc::now().format("%Y%m%d%H%M").to_string();
@@ -90,7 +99,17 @@ pub async fn enqueue_ai_usage_export_replay_job(
     Ok(1)
 }
 
-async fn enqueue_ai_usage_reconciliation_jobs(pool: &PgPool) -> anyhow::Result<u64> {
+/// Schedule workspace usage recovery only once `enable-hard-caps` has flipped
+/// the durable rollout gate. The kind is unknown to N-1 binaries, and their
+/// claim would dead-letter it, so it is never scheduled into a fleet that
+/// still runs them.
+pub async fn enqueue_ai_usage_reconciliation_jobs(pool: &PgPool) -> anyhow::Result<u64> {
+    if !deepref_app::ai_usage_rollout_gates(pool)
+        .await?
+        .hard_caps_enforced
+    {
+        return Ok(0);
+    }
     let workspace_ids =
         sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM workspaces ORDER BY id")
             .fetch_all(pool)

@@ -87,6 +87,30 @@ impl std::fmt::Display for WorkloadClass {
 }
 
 impl JobKind {
+    /// Every job kind, in declaration order. This is the set of kinds the
+    /// running binary decodes: claiming is capability-aware and the worker
+    /// heartbeat declares it, so a job kind an older binary cannot decode is
+    /// never dead-lettered by a claim and never scheduled onto one.
+    pub const ALL: [Self; 12] = [
+        Self::WorkFetchRequested,
+        Self::RecomputeMetrics,
+        Self::ImportDeduplication,
+        Self::PmidImport,
+        Self::DurableRunStep,
+        Self::AssistantAgentRun,
+        Self::RecomputePrisma,
+        Self::RetrieveDocument,
+        Self::ParseDocument,
+        Self::AiUsageReconcile,
+        Self::AiUsageExportReplay,
+        Self::BackfillWorkflowFiles,
+    ];
+
+    /// Persisted spellings of [`JobKind::ALL`].
+    pub fn known_kinds() -> Vec<&'static str> {
+        Self::ALL.iter().map(|kind| kind.as_str()).collect()
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::WorkFetchRequested => "work_fetch_requested",
@@ -258,6 +282,7 @@ mod tests {
         for (kind, class) in [
             (JobKind::AssistantAgentRun, WorkloadClass::Ai),
             (JobKind::AiUsageReconcile, WorkloadClass::Ai),
+            (JobKind::AiUsageExportReplay, WorkloadClass::Ai),
             (JobKind::RetrieveDocument, WorkloadClass::Documents),
             (JobKind::ParseDocument, WorkloadClass::Documents),
             (JobKind::ImportDeduplication, WorkloadClass::Documents),
@@ -291,6 +316,19 @@ mod tests {
             "not_a_class".parse::<WorkloadClass>(),
             Err(InvalidWorkloadClass(_))
         ));
+    }
+
+    #[test]
+    fn job_kind_capability_lists_are_the_decodable_kinds() {
+        let known = JobKind::known_kinds();
+        assert_eq!(known.len(), JobKind::ALL.len());
+        for kind in JobKind::ALL {
+            assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
+            assert_eq!(
+                known.iter().filter(|name| **name == kind.as_str()).count(),
+                1
+            );
+        }
     }
 
     #[test]

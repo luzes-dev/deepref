@@ -1,6 +1,9 @@
 use deepref_domain::WorkloadClass;
 use uuid::Uuid;
 
+/// Quiet window `ai-usage enable-export` checks without `--quiet-window-seconds`.
+const DEFAULT_EXPORT_QUIET_WINDOW_SECONDS: u64 = 300;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Serve,
@@ -29,6 +32,13 @@ pub enum AiUsageCommand {
         quiet_window_seconds: u64,
     },
     DisableHardCaps {
+        operator_user_id: Uuid,
+    },
+    EnableExport {
+        operator_user_id: Uuid,
+        quiet_window_seconds: u64,
+    },
+    DisableExport {
         operator_user_id: Uuid,
     },
     Resolve {
@@ -195,6 +205,35 @@ impl Command {
                     operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
                 }))
             }
+            [command, action, operator_user_id]
+                if command == "ai-usage" && action == "enable-export" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::EnableExport {
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                    quiet_window_seconds: DEFAULT_EXPORT_QUIET_WINDOW_SECONDS,
+                }))
+            }
+            [command, action, flag, seconds, operator_user_id]
+                if command == "ai-usage"
+                    && action == "enable-export"
+                    && flag == "--quiet-window-seconds" =>
+            {
+                let quiet_window_seconds = seconds
+                    .parse::<u64>()
+                    .map_err(|error| anyhow::anyhow!("invalid quiet window: {error}"))?;
+                anyhow::ensure!(quiet_window_seconds > 0, "quiet window must be positive");
+                Ok(Self::AiUsage(AiUsageCommand::EnableExport {
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                    quiet_window_seconds,
+                }))
+            }
+            [command, action, operator_user_id]
+                if command == "ai-usage" && action == "disable-export" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::DisableExport {
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                }))
+            }
             [
                 command,
                 action,
@@ -303,7 +342,7 @@ impl Command {
                 }))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
             ),
         }
     }

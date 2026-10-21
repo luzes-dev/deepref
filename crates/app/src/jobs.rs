@@ -18,12 +18,18 @@ use uuid::Uuid;
 /// project. The batch is bounded by `LIMIT $4`; callers must never pass an
 /// unbounded limit or loop. The database advances `claim_seq` for each claim;
 /// business attempts remain independently refundable.
+///
+/// Claims are capability-aware: only the job kinds this binary decodes are
+/// ever claimed. A kind a binary cannot decode would fail claim decoding and
+/// be dead-lettered, so unknown kinds stay queued for a deployment that
+/// understands them instead of being destroyed by this one.
 const CLAIM: &str = r#"
 WITH candidate AS (
   SELECT id
   FROM jobs
   WHERE state = 'queued' AND available_at <= now()
     AND attempts < max_attempts
+    AND kind = ANY($5)
     AND (cardinality($3::text[]) = 0 OR workload_class = ANY($3))
   ORDER BY priority DESC, available_at ASC, id ASC
   FOR UPDATE SKIP LOCKED
@@ -143,11 +149,13 @@ pub async fn claim_jobs(
     limit: usize,
 ) -> anyhow::Result<Vec<ClaimedJob>> {
     let pools: Vec<String> = pools.iter().map(|pool| pool.as_str().to_owned()).collect();
+    let kinds = JobKind::known_kinds();
     let rows = sqlx::query(CLAIM)
         .bind(owner)
         .bind(lease.as_millis() as i64)
         .bind(&pools)
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .bind(&kinds)
         .fetch_all(pool)
         .await?;
     let mut claimed = Vec::with_capacity(rows.len());
@@ -398,6 +406,31 @@ async fn release_job_until(
     }
     transaction.commit().await?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Park every queued job of one kind in a state no claim accepts, before a
+/// rollback can expose it to a binary that would dead-letter the kind it
+/// cannot decode. Runs in the caller's transaction; `reason` names the
+/// operator action on the parked rows. Parked rows keep their payload and
+/// identity; they are cancelled work awaiting operator review, never silently
+/// discarded. Running jobs are untouched: they were already claimed by a
+/// binary that understood the kind. Returns the number of parked rows.
+pub async fn park_queued_jobs(
+    tx: &mut Transaction<'_, Postgres>,
+    kind: &JobKind,
+    reason: &str,
+) -> sqlx::Result<u64> {
+    let rows = sqlx::query(
+        "UPDATE jobs
+         SET state = 'failed', last_error = $2, available_at = now(),
+             lease_owner = NULL, leased_until = NULL, lease_renewed_at = NULL
+         WHERE kind = $1 AND state = 'queued'",
+    )
+    .bind(kind.as_str())
+    .bind(reason)
+    .execute(&mut **tx)
+    .await?;
+    Ok(rows.rows_affected())
 }
 
 /// PostgreSQL implementation of the durable execution lifecycle

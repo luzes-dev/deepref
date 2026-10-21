@@ -848,6 +848,13 @@ async fn handle_ai_usage_export_replay_job(
         tracing::debug!("AI usage export is disabled; the replay job emits nothing");
         return Ok(DeliveryAction::Ack);
     }
+    if !deepref_app::ai_usage_rollout_gates(pool)
+        .await?
+        .export_activated
+    {
+        tracing::debug!("AI usage export is not activated; the replay job emits nothing");
+        return Ok(DeliveryAction::Ack);
+    }
     let counters = deepref_application::usage_export::UsageExportCounters::default();
     for _ in 0..EXPORT_REPLAY_JOB_MAX_BATCHES {
         let summary = deepref_app::replay_usage_facts(

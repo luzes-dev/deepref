@@ -3,10 +3,12 @@ use deepref_ai::{
     UsagePriceSnapshot, UsageReservation, UsageReservationRequest, UsageTopUpRequest,
     ZeroLiabilityProof,
 };
-use deepref_domain::{ProjectId, UserId, WorkspaceId};
+use deepref_domain::{JobKind, ProjectId, UserId, WorkspaceId};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::jobs::park_queued_jobs;
 
 /// Default monthly AI budget (US$5.00) in micro-dollars; mirrors the column
 /// default in migration 0027.
@@ -34,6 +36,8 @@ pub enum AiUsageError {
     InvalidBackfillBatchSize,
     #[error("AI hard caps cannot be enabled: {0}")]
     HardCapsGate(String),
+    #[error("AI usage export cannot be enabled: {0}")]
+    UsageExportGate(String),
     #[error("AI usage reservation was not found or is already terminal")]
     ReservationNotResolvable,
     #[error("AI usage resolution is invalid")]
@@ -1576,6 +1580,16 @@ pub async fn enable_ai_hard_caps(
             "an AI job is queued or running".to_owned(),
         ));
     }
+    // The workspace recovery kind starts being scheduled from here on. An N-1
+    // binary dead-letters a job kind it cannot decode, so every live worker
+    // must already understand it.
+    let unprepared = live_workers_without_kind(&mut tx, &JobKind::AiUsageReconcile).await?;
+    if !unprepared.is_empty() {
+        return Err(AiUsageError::HardCapsGate(format!(
+            "live workers do not decode the ai_usage_reconcile job kind: {}",
+            unprepared.join(", ")
+        )));
+    }
     sqlx::query(
         "UPDATE ai_usage_rollout_state
          SET ai_hard_caps_enforced = true, hard_caps_enabled_at = now(), updated_at = now()
@@ -1610,17 +1624,173 @@ pub async fn disable_ai_hard_caps(pool: &PgPool, operator: UserId) -> Result<(),
     )
     .execute(&mut *tx)
     .await?;
+    // Rolling back stops scheduling the recovery kind and parks its queued
+    // jobs, so an N-1 binary cannot claim and dead-letter a kind it does not
+    // decode. Running jobs are untouched.
+    let parked_jobs = park_queued_jobs(
+        &mut tx,
+        &JobKind::AiUsageReconcile,
+        "parked by ai-usage disable-hard-caps",
+    )
+    .await?;
     sqlx::query(
         "INSERT INTO admin_audit_events
          (id, event_type, principal_kind, principal_user_id, metadata)
-         VALUES ($1, 'ai.hard_caps_disabled', 'user', $2, '{}'::jsonb)",
+         VALUES ($1, 'ai.hard_caps_disabled', 'user', $2, $3)",
     )
     .bind(Uuid::new_v4())
     .bind(operator.as_uuid())
+    .bind(serde_json::json!({"parked_jobs": parked_jobs}))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// A worker heartbeats every 15 s; one seen within this window is live. The
+/// window matches `/health/dependencies`.
+const LIVE_WORKER_WINDOW_SECONDS: f64 = 60.0;
+
+/// Live workers whose binary does not declare `kind` among the job kinds it
+/// decodes. A heartbeat without the declaration belongs to a binary that
+/// predates capability reporting and is treated as understanding nothing new.
+async fn live_workers_without_kind(
+    tx: &mut Transaction<'_, Postgres>,
+    kind: &JobKind,
+) -> Result<Vec<String>, AiUsageError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT owner FROM worker_heartbeats
+         WHERE seen_at > now() - make_interval(secs => $1::double precision)
+           AND (known_job_kinds IS NULL OR NOT ($2 = ANY(known_job_kinds)))
+         ORDER BY owner",
+    )
+    .bind(LIVE_WORKER_WINDOW_SECONDS)
+    .bind(kind.as_str())
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// The durable AI usage rollout gates. Both are set and cleared by operator
+/// commands that check N-1 activity first; job kinds an older binary cannot
+/// decode are scheduled only while their gate is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AiUsageRolloutGates {
+    /// `ai_usage_reconcile` is scheduled only while this is set.
+    pub hard_caps_enforced: bool,
+    /// `ai_usage_export_replay` is scheduled only while this is set.
+    pub export_activated: bool,
+}
+
+pub async fn ai_usage_rollout_gates(pool: &PgPool) -> Result<AiUsageRolloutGates, AiUsageError> {
+    let row = sqlx::query(
+        "SELECT ai_hard_caps_enforced, ai_usage_export_activated
+         FROM ai_usage_rollout_state WHERE singleton",
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AiUsageError::Reconciliation)?;
+    Ok(AiUsageRolloutGates {
+        hard_caps_enforced: row.get("ai_hard_caps_enforced"),
+        export_activated: row.get("ai_usage_export_activated"),
+    })
+}
+
+/// Activate the usage export rollout gate. `ai_usage_export_replay` jobs are
+/// scheduled only while this is set, so a binary that cannot decode the kind
+/// never sees one: an N-1 claim dead-letters kinds it does not know. The
+/// caller confirms the documented precondition — every deployed worker binary
+/// decodes `ai_usage_export_replay` — and this command verifies it for the
+/// live fleet and for N-1 AI activity through the quiet window.
+pub async fn enable_ai_usage_export(
+    pool: &PgPool,
+    operator: UserId,
+    quiet_window_seconds: u64,
+) -> Result<(), AiUsageError> {
+    let seconds = i64::try_from(quiet_window_seconds)
+        .ok()
+        .filter(|seconds| (1..=2_592_000).contains(seconds))
+        .ok_or(AiUsageError::InvalidResolution)?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT singleton FROM ai_usage_rollout_state WHERE singleton FOR UPDATE")
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AiUsageError::UsageExportGate("rollout state is missing".to_owned()))?;
+    let last_legacy: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT last_legacy_ledger_insert_at FROM ai_usage_rollout_state WHERE singleton",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if last_legacy
+        .is_some_and(|inserted| inserted > chrono::Utc::now() - chrono::Duration::seconds(seconds))
+    {
+        return Err(AiUsageError::UsageExportGate(
+            "an N-1 ledger insert occurred within the quiet window".to_owned(),
+        ));
+    }
+    let unprepared = live_workers_without_kind(&mut tx, &JobKind::AiUsageExportReplay).await?;
+    if !unprepared.is_empty() {
+        return Err(AiUsageError::UsageExportGate(format!(
+            "live workers do not decode the ai_usage_export_replay job kind: {}",
+            unprepared.join(", ")
+        )));
+    }
+    sqlx::query(
+        "UPDATE ai_usage_rollout_state
+         SET ai_usage_export_activated = true, ai_usage_export_activated_at = now(), updated_at = now()
+         WHERE singleton",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO admin_audit_events
+         (id, event_type, principal_kind, principal_user_id, metadata)
+         VALUES ($1, 'ai.usage_export_enabled', 'user', $2, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(operator.as_uuid())
+    .bind(serde_json::json!({"quiet_window_seconds": quiet_window_seconds}))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Deactivate the usage export rollout gate before a rollback. Scheduling
+/// stops and every queued replay job is parked in a state no claim accepts, so
+/// an N-1 binary can never claim and dead-letter the kind. Rollback requires
+/// this command first.
+pub async fn disable_ai_usage_export(pool: &PgPool, operator: UserId) -> Result<u64, AiUsageError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT singleton FROM ai_usage_rollout_state WHERE singleton FOR UPDATE")
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AiUsageError::UsageExportGate("rollout state is missing".to_owned()))?;
+    sqlx::query(
+        "UPDATE ai_usage_rollout_state
+         SET ai_usage_export_activated = false, ai_usage_export_deactivated_at = now(),
+             updated_at = now()
+         WHERE singleton",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let parked_jobs = park_queued_jobs(
+        &mut tx,
+        &JobKind::AiUsageExportReplay,
+        "parked by ai-usage disable-export",
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO admin_audit_events
+         (id, event_type, principal_kind, principal_user_id, metadata)
+         VALUES ($1, 'ai.usage_export_disabled', 'user', $2, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(operator.as_uuid())
+    .bind(serde_json::json!({"parked_jobs": parked_jobs}))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(parked_jobs)
 }
 
 pub async fn resolve_ai_usage_reservation(

@@ -229,6 +229,43 @@ pub async fn ai_usage_export_replay(
     }))?)
 }
 
+/// Activate the usage export rollout gate after checking the live worker
+/// fleet decodes the replay job kind and the N-1 quiet window.
+pub async fn ai_usage_enable_export(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+    quiet_window_seconds: u64,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    deepref_app::enable_ai_usage_export(
+        &pool,
+        deepref_domain::UserId::new(operator_user_id),
+        quiet_window_seconds,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_usage_export_activated": true,
+        "quiet_window_seconds": quiet_window_seconds,
+    }))?)
+}
+
+/// Deactivate the usage export rollout gate and park queued replay jobs, so a
+/// rollback can never expose the job kind to a binary that would dead-letter
+/// it. Rollback requires this command first.
+pub async fn ai_usage_disable_export(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let parked_jobs =
+        deepref_app::disable_ai_usage_export(&pool, deepref_domain::UserId::new(operator_user_id))
+            .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_usage_export_activated": false,
+        "parked_jobs": parked_jobs,
+    }))?)
+}
+
 pub async fn ai_usage_enable_hard_caps(
     config: &ApiConfig,
     operator_user_id: Uuid,

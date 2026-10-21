@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use deepref_domain::WorkloadClass;
+use deepref_domain::{JobKind, WorkloadClass};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -141,25 +141,33 @@ async fn record_worker_heartbeat_inner(
     owner: &str,
     pool_capacities: Option<serde_json::Value>,
 ) -> anyhow::Result<()> {
+    // Every heartbeat declares the job kinds this binary decodes, so an
+    // operator command can prove the fleet understands a kind before a rollout
+    // schedules work of it.
+    let known_job_kinds = JobKind::known_kinds();
     let mut tx = pool.begin().await?;
     match pool_capacities {
         Some(pool_capacities) => {
             sqlx::query(
-                "INSERT INTO worker_heartbeats (owner,pool_capacities) VALUES ($1,$2)
+                "INSERT INTO worker_heartbeats (owner,pool_capacities,known_job_kinds) VALUES ($1,$2,$3)
                  ON CONFLICT (owner) DO UPDATE
-                 SET seen_at=now(), pool_capacities=EXCLUDED.pool_capacities",
+                 SET seen_at=now(), pool_capacities=EXCLUDED.pool_capacities,
+                     known_job_kinds=EXCLUDED.known_job_kinds",
             )
             .bind(owner)
             .bind(pool_capacities)
+            .bind(&known_job_kinds)
             .execute(&mut *tx)
             .await?;
         }
         None => {
             sqlx::query(
-                "INSERT INTO worker_heartbeats (owner) VALUES ($1)
-                 ON CONFLICT (owner) DO UPDATE SET seen_at=now()",
+                "INSERT INTO worker_heartbeats (owner,known_job_kinds) VALUES ($1,$2)
+                 ON CONFLICT (owner) DO UPDATE
+                 SET seen_at=now(), known_job_kinds=EXCLUDED.known_job_kinds",
             )
             .bind(owner)
+            .bind(&known_job_kinds)
             .execute(&mut *tx)
             .await?;
         }
