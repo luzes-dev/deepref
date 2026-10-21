@@ -1129,6 +1129,7 @@ name = "deepref-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "deepref-config",
  "deepref-domain",
  "deepref-http-api",

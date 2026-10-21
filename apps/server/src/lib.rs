@@ -113,6 +113,9 @@ async fn run_ai_usage(action: AiUsageCommand) -> anyhow::Result<()> {
             AiUsageCommand::Reconcile { workspace_id } => {
                 deepref_http_api::ai_usage_reconcile(&config, workspace_id).await?
             }
+            AiUsageCommand::ExportReplay { since, limit } => {
+                deepref_http_api::ai_usage_export_replay(&config, since, limit).await?
+            }
             AiUsageCommand::WaiveOverage {
                 workspace_id,
                 operator_user_id,

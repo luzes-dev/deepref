@@ -39,6 +39,11 @@ pub enum AiUsageCommand {
     Reconcile {
         workspace_id: Option<Uuid>,
     },
+    /// Emit usage fact export events from retained usage facts.
+    ExportReplay {
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        limit: Option<i64>,
+    },
     WaiveOverage {
         workspace_id: Uuid,
         operator_user_id: Uuid,
@@ -119,6 +124,39 @@ impl Command {
             [command, action, workspace_id] if command == "ai-usage" && action == "reconcile" => {
                 Ok(Self::AiUsage(AiUsageCommand::Reconcile {
                     workspace_id: Some(parse_uuid(workspace_id, "workspace UUID")?),
+                }))
+            }
+            [command, action] if command == "ai-usage" && action == "export-replay" => {
+                Ok(Self::AiUsage(AiUsageCommand::ExportReplay {
+                    since: None,
+                    limit: None,
+                }))
+            }
+            [command, action, flag, since]
+                if command == "ai-usage" && action == "export-replay" && flag == "--since" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::ExportReplay {
+                    since: Some(parse_since(since)?),
+                    limit: None,
+                }))
+            }
+            [command, action, flag, limit]
+                if command == "ai-usage" && action == "export-replay" && flag == "--limit" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::ExportReplay {
+                    since: None,
+                    limit: Some(parse_limit(limit)?),
+                }))
+            }
+            [command, action, since_flag, since, limit_flag, limit]
+                if command == "ai-usage"
+                    && action == "export-replay"
+                    && since_flag == "--since"
+                    && limit_flag == "--limit" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::ExportReplay {
+                    since: Some(parse_since(since)?),
+                    limit: Some(parse_limit(limit)?),
                 }))
             }
             [command, action] if command == "ai-usage" && action == "backfill" => {
@@ -265,7 +303,7 @@ impl Command {
                 }))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
             ),
         }
     }
@@ -320,6 +358,20 @@ impl LegacyActorFields {
 
 fn parse_uuid(value: &str, name: &str) -> anyhow::Result<Uuid> {
     Uuid::parse_str(value).map_err(|error| anyhow::anyhow!("invalid {name}: {error}"))
+}
+
+fn parse_since(value: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|time| time.with_timezone(&chrono::Utc))
+        .map_err(|error| anyhow::anyhow!("invalid --since timestamp: {error}"))
+}
+
+fn parse_limit(value: &str) -> anyhow::Result<i64> {
+    let limit = value
+        .parse::<i64>()
+        .map_err(|error| anyhow::anyhow!("invalid replay limit: {error}"))?;
+    anyhow::ensure!(limit > 0, "replay limit must be positive");
+    Ok(limit)
 }
 
 #[cfg(test)]
@@ -582,6 +634,80 @@ mod tests {
                 "--pool".into(),
                 "ai".into(),
                 "extra".into()
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_usage_export_replay_flags() {
+        assert_eq!(
+            Command::parse(["ai-usage".into(), "export-replay".into()]).unwrap(),
+            Command::AiUsage(AiUsageCommand::ExportReplay {
+                since: None,
+                limit: None,
+            })
+        );
+        let since = "2026-10-01T00:00:00Z";
+        let expected = chrono::DateTime::parse_from_rfc3339(since)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "export-replay".into(),
+                "--since".into(),
+                since.into(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::ExportReplay {
+                since: Some(expected),
+                limit: None,
+            })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "export-replay".into(),
+                "--limit".into(),
+                "25".into(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::ExportReplay {
+                since: None,
+                limit: Some(25),
+            })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "export-replay".into(),
+                "--since".into(),
+                since.into(),
+                "--limit".into(),
+                "25".into(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::ExportReplay {
+                since: Some(expected),
+                limit: Some(25),
+            })
+        );
+        assert!(
+            Command::parse([
+                "ai-usage".into(),
+                "export-replay".into(),
+                "--since".into(),
+                "yesterday".into(),
+            ])
+            .is_err()
+        );
+        assert!(
+            Command::parse([
+                "ai-usage".into(),
+                "export-replay".into(),
+                "--limit".into(),
+                "0".into(),
             ])
             .is_err()
         );
