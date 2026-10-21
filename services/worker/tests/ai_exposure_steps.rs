@@ -82,6 +82,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             })
             .expect("local runtime configuration"),
             &deepref_worker::metadata::MetadataClients::default(),
+            &deepref_documents::DocumentStore::memory(),
         )
         .await
         .expect("step")

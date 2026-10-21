@@ -308,6 +308,51 @@ impl<'a> JobServices<'a> {
     }
 }
 
+async fn handle_backfill_workflow_files_job(
+    pool: &sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    document_store: Option<Arc<DocumentStore>>,
+    config: &crate::config::WorkerConfig,
+) -> anyhow::Result<DeliveryAction> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct BackfillPayload {
+        project_id: Uuid,
+    }
+    let payload: BackfillPayload = serde_json::from_value(job.payload.clone())?;
+    let project_id = job
+        .project_id()
+        .ok_or_else(|| anyhow::anyhow!("workflow file backfill job is not project-scoped"))?;
+    anyhow::ensure!(
+        payload.project_id == project_id.as_uuid(),
+        "workflow file backfill payload names a different project than its job"
+    );
+    let store = match document_store {
+        Some(store) => store,
+        None => Arc::new(DocumentStore::from_config(&config.documents)?),
+    };
+    let report = deepref_app::backfill_workflow_files(
+        pool,
+        &store,
+        project_id,
+        deepref_app::WORKFLOW_FILE_BACKFILL_BATCH,
+    )
+    .await?;
+    tracing::info!(
+        project_id = %project_id.as_uuid(),
+        migrated = report.migrated,
+        failed = report.failed,
+        remaining = report.remaining,
+        "workflow file backfill pass finished"
+    );
+    anyhow::ensure!(
+        report.failed == 0,
+        "{} workflow file(s) could not be moved to object storage",
+        report.failed
+    );
+    Ok(DeliveryAction::Ack)
+}
+
 async fn handle_retrieve_document_job(
     pool: &sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
@@ -728,6 +773,10 @@ async fn handle_job_with_document_services_inner(
             }
             match payload.handler_kind {
                 deepref_domain::jobs::DurableHandlerKind::Workflow => {
+                    let store = match document_store {
+                        Some(store) => store,
+                        None => Arc::new(DocumentStore::from_config(&config.documents)?),
+                    };
                     crate::workflows::handle_step(
                         &pool,
                         job,
@@ -735,6 +784,7 @@ async fn handle_job_with_document_services_inner(
                         ai_gateway.clone(),
                         &config.runtime,
                         &config.metadata,
+                        &store,
                     )
                     .await
                 }
@@ -763,6 +813,9 @@ async fn handle_job_with_document_services_inner(
         }
         deepref_domain::JobKind::ParseDocument => {
             handle_parse_document_job(&pool, job, document_store, document_parser, config).await
+        }
+        deepref_domain::JobKind::BackfillWorkflowFiles => {
+            handle_backfill_workflow_files_job(&pool, job, document_store, config).await
         }
     }
 }

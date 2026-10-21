@@ -15,6 +15,7 @@ pub enum JobKind {
     RecomputePrisma,
     RetrieveDocument,
     ParseDocument,
+    BackfillWorkflowFiles,
 }
 
 /// Workload class of a durable job: the pool a worker serves and the unit of
@@ -95,6 +96,7 @@ impl JobKind {
             Self::RecomputePrisma => "recompute_prisma",
             Self::RetrieveDocument => "retrieve_document",
             Self::ParseDocument => "parse_document",
+            Self::BackfillWorkflowFiles => "backfill_workflow_files",
         }
     }
 
@@ -110,7 +112,7 @@ impl JobKind {
                 WorkloadClass::Documents
             }
             // Durable automation, workflow and review step dispatch.
-            Self::DurableRunStep => WorkloadClass::Workflow,
+            Self::DurableRunStep | Self::BackfillWorkflowFiles => WorkloadClass::Workflow,
             // External provider traffic, bounded by provider rate limits.
             Self::WorkFetchRequested | Self::PmidImport => WorkloadClass::Integration,
             // Derived read-model recomputes.
@@ -157,6 +159,7 @@ impl std::str::FromStr for JobKind {
             "recompute_prisma" => Ok(Self::RecomputePrisma),
             "retrieve_document" => Ok(Self::RetrieveDocument),
             "parse_document" => Ok(Self::ParseDocument),
+            "backfill_workflow_files" => Ok(Self::BackfillWorkflowFiles),
             _ => Err(InvalidJobKind(value.to_owned())),
         }
     }
@@ -225,6 +228,7 @@ mod tests {
             JobKind::RecomputePrisma,
             JobKind::RetrieveDocument,
             JobKind::ParseDocument,
+            JobKind::BackfillWorkflowFiles,
         ] {
             assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
@@ -247,6 +251,7 @@ mod tests {
             (JobKind::ParseDocument, WorkloadClass::Documents),
             (JobKind::ImportDeduplication, WorkloadClass::Documents),
             (JobKind::DurableRunStep, WorkloadClass::Workflow),
+            (JobKind::BackfillWorkflowFiles, WorkloadClass::Workflow),
             (JobKind::WorkFetchRequested, WorkloadClass::Integration),
             (JobKind::PmidImport, WorkloadClass::Integration),
             (JobKind::RecomputeMetrics, WorkloadClass::Projection),

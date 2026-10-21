@@ -140,6 +140,61 @@ Inbox receipt accepts bodies up to 256 KiB. Processed payloads expire after
 expired payloads with NULL while retaining `(provider, provider_event_id)` and
 processing evidence for deduplication. No purge scheduler is installed.
 
+## Object storage and blob inventory
+
+PostgreSQL keeps metadata and provenance; object storage keeps bytes. All object
+access goes through `deepref_documents::DocumentStore`, which wraps the
+`object_store` crate. Development uses the filesystem backend
+(`DOCUMENT_STORAGE_BACKEND=local`, allowed only when `APP_ENV=development`); production
+configures an S3-compatible bucket with an HTTPS endpoint. Domain and
+application code never see a provider type. Object keys are built by
+`ObjectKey` from stable identifiers only, never from a user-provided filename:
+`documents/{document_id}` for uploaded PDFs and
+`projects/{project_id}/workflow-runs/{run_id}/files/{file_id}` for workflow
+export files. Authorization is checked before a key is derived or read; the key
+layout is not an access boundary. The workspace prefix from the SaaS tenancy
+program is added with that gate.
+
+Inventory of binary and large-text columns in `crates/app/migrations/`:
+
+| Column | Holds | Status |
+| ------ | ----- | ------ |
+| `workflow_files.content bytea` (0028, up to 16 MiB) | Workflow export files (RIS, CSV, ...) | Moving to object storage, see below |
+| `document_blocks.text` (0006) | Parsed text of one PDF block, indexed by the generated `search_vector` for full-text search | Stays: it is searched in place and each value is a single block, not a file body |
+| `documents` rows (0006, 0013) | Metadata and an object key for the PDF; the PDF bytes are already in object storage | No change |
+| `document_references.raw`, `fetched_unresolved_reference_facts.raw_unstructured`, `unresolved_references.raw_unstructured` | One citation string each | Short text, stays |
+| `jsonb` payload and `raw` columns (`records.raw`, `reports.raw`, `works.raw`, dead-letter `payload`, `trigger_data`, review artifact `payload`) | Normalized or provider JSON | Relational data, out of scope |
+| `assistant_messages.content` (0023), `notifications.body` (0024, at most 500 characters) | Chat and notification text | Stays |
+
+`workflow_files.content` is the only column holding file bodies. It moves in
+stages. Migration `0084` adds nullable `storage_key`, `content_sha256` and
+`byte_size` (all null or all set) and keeps `content bytea NOT NULL`.
+
+- **Dual write.** `create_workflow_file` writes the object first, then inserts
+  the row with both `content` and the reference. If the insert fails the object
+  is removed; a crash between the two leaves only an unreferenced object, never
+  a row pointing at nothing.
+- **Read.** `get_workflow_file` prefers the object and checks its size and
+  SHA-256 against the row. A null key, a missing object, an unreadable object
+  or a mismatch is logged and served from `content`; the result reports which
+  case applied (`WorkflowFileSource`).
+- **Backfill.** The durable job kind `backfill_workflow_files` is scheduled
+  per project by the worker reconciler for rows without a key. It uploads
+  `content` under the row's deterministic key, reads the object back, compares
+  its SHA-256 with `content`, and only then sets the reference. It is idempotent
+  and resumable: rows are selected by their missing reference, so a run that
+  died resumes with what is left, and an object left by a dead run is
+  overwritten and verified again.
+
+Dropping `NOT NULL` on `content`, switching writers to object-only, and dropping
+the column follow in later releases once old binaries have drained. Cleanup of
+objects for deleted projects, replaced files and failed writes through durable
+jobs is not implemented yet.
+
+Assistant SSE (`crates/http-api/src/routes/assistant/run_events.rs`) replays
+persisted run events from PostgreSQL by `after_seq`, so a stream can reconnect
+to any API replica and needs no pub/sub.
+
 ## AI foundation and evidence grounding
 
 `deepref-ai` is the provider-neutral seam for structured AI work. It owns typed
@@ -260,6 +315,7 @@ chosen by the caller. This table is the normative mapping:
 | `parse_document`       | `documents`    | CPU/memory-bound PDF parsing                              |
 | `run_deduplication`    | `documents`    | CPU/memory-bound deduplication of imported record corpora |
 | `durable_run_step`     | `workflow`     | durable automation, workflow and review step dispatch      |
+| `backfill_workflow_files` | `workflow`     | workflow export file copy to object storage                |
 | `work_fetch_requested` | `integration`  | external metadata provider traffic, rate-limit bounded     |
 | `pmid_import`          | `integration`  | external PubMed provider traffic, rate-limit bounded       |
 | `recompute_metrics`    | `projection`   | derived read-model recomputes                             |
