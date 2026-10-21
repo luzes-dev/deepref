@@ -223,6 +223,20 @@ fn map_usage_error(error: deepref_app::AiUsageError) -> ApiError {
         deepref_app::AiUsageError::ProjectNotFound => {
             ApiError::NotFound("project not found".to_owned())
         }
+        deepref_app::AiUsageError::WorkspaceNotFound => {
+            ApiError::NotFound("workspace not found".to_owned())
+        }
+        deepref_app::AiUsageError::InvalidOperator => {
+            ApiError::BadRequest("operator identity is invalid".to_owned())
+        }
+        deepref_app::AiUsageError::NoOverageBlock => ApiError::Conflict {
+            code: "ai_overage_not_active".to_owned(),
+            message: "workspace has no active AI overage block".to_owned(),
+            details: serde_json::Value::Null,
+        },
+        deepref_app::AiUsageError::Reconciliation => {
+            ApiError::Internal(anyhow::anyhow!("AI usage reconciliation failed"))
+        }
         deepref_app::AiUsageError::InvalidBudget => {
             ApiError::BadRequest("budget must be between 0 and 100000 USD".to_owned())
         }
@@ -305,14 +319,23 @@ pub(crate) async fn get_ai_budget(
 pub(crate) async fn update_ai_budget(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<UpdateAiBudgetRequest>,
 ) -> Result<Json<AiBudgetDto>, ApiError> {
     if !body.monthly_budget_usd.is_finite() {
         return Err(ApiError::BadRequest("budget must be a number".to_owned()));
     }
     let micros = (body.monthly_budget_usd * 1_000_000.0).round() as i64;
+    deepref_app::set_ai_usage_cap(
+        &state.pool,
+        deepref_app::AiUsageLimitScope::Project(deepref_domain::ProjectId::new(project_id)),
+        micros,
+        request_actor.user_id,
+    )
+    .await
+    .map_err(map_usage_error)?;
     Ok(Json(budget_dto(
-        deepref_app::set_ai_budget(&state.pool, project_id, micros)
+        deepref_app::get_ai_budget(&state.pool, project_id)
             .await
             .map_err(map_usage_error)?,
     )))

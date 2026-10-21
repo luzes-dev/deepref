@@ -67,6 +67,7 @@ impl AiGateway for ExcludingGateway {
                 .to_string(),
                 input_tokens: 1,
                 output_tokens: 1,
+                reasoning_tokens: 0,
                 cost_micros: None,
                 served_model: Some("fixture-served-model".into()),
                 system_fingerprint: Some("fixture-system-v1".into()),

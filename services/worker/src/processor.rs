@@ -749,13 +749,20 @@ async fn handle_job_with_document_services_inner(
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
-            crate::assistant::handle_assistant_agent_run(
+            crate::assistant::handle_assistant_agent_run(&pool, job, lease, &config.runtime.ai)
+                .await
+        }
+        deepref_domain::JobKind::AiUsageReconcile => {
+            let workspace_id = job.scope.workspace_id().ok_or_else(|| {
+                anyhow::anyhow!("AI usage reconciliation requires a workspace-scoped job")
+            })?;
+            deepref_app::reconcile_ai_usage_workspace(
                 &pool,
-                job,
-                &lease.owner,
-                &config.runtime.ai,
+                workspace_id,
+                "unavailable-at-recovery",
             )
-            .await
+            .await?;
+            Ok(DeliveryAction::Ack)
         }
         deepref_domain::JobKind::RecomputePrisma => Ok(DeliveryAction::Ack),
         deepref_domain::JobKind::RetrieveDocument => {
@@ -1560,10 +1567,16 @@ async fn execute_review_ai_node_with_context(
                 &SystemClock,
                 &UuidProvider,
             );
+            let mut usage_context =
+                deepref_ai::service_usage_context(run.snapshot.id.as_uuid(), "review-worker");
+            usage_context.job_id = Some(lease.id);
+            usage_context.attempt_fence = Some(lease.claim_seq);
+            usage_context.step_id = Some(attempt_id.to_string());
             let execution = AiExecutionContext {
                 parent_automation_run_id: Some(run.snapshot.id.as_uuid()),
                 node_fingerprint: Some(input_fingerprint.to_string()),
                 proposal_persistence: ProposalPersistence::Skip,
+                usage_context: Some(usage_context),
             };
             let executed = match run
                 .task

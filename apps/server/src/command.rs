@@ -15,7 +15,25 @@ pub enum Command {
     Migrate,
     BackfillProjectWorkspaces,
     LegacyActor(LegacyActorCommand),
+    AiUsage(AiUsageCommand),
     PrintOpenApi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiUsageCommand {
+    Reconcile {
+        workspace_id: Option<Uuid>,
+    },
+    WaiveOverage {
+        workspace_id: Uuid,
+        operator_user_id: Uuid,
+    },
+    SetCap {
+        scope_kind: String,
+        scope_id: Option<Uuid>,
+        limit_micros: i64,
+        operator_user_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +90,49 @@ impl Command {
             [command, action] if command == "legacy-actor" && action == "list" => {
                 Ok(Self::LegacyActor(LegacyActorCommand::List))
             }
+            [command, action] if command == "ai-usage" && action == "reconcile" => {
+                Ok(Self::AiUsage(AiUsageCommand::Reconcile {
+                    workspace_id: None,
+                }))
+            }
+            [command, action, workspace_id] if command == "ai-usage" && action == "reconcile" => {
+                Ok(Self::AiUsage(AiUsageCommand::Reconcile {
+                    workspace_id: Some(parse_uuid(workspace_id, "workspace UUID")?),
+                }))
+            }
+            [command, action, workspace_id, operator_user_id]
+                if command == "ai-usage" && action == "waive-overage" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::WaiveOverage {
+                    workspace_id: parse_uuid(workspace_id, "workspace UUID")?,
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                }))
+            }
+            [
+                command,
+                action,
+                scope_kind,
+                scope_id,
+                limit_micros,
+                operator_user_id,
+            ] if command == "ai-usage" && action == "set-cap" => {
+                let scope_id = match (scope_kind.as_str(), scope_id.as_str()) {
+                    ("platform", "-") => None,
+                    ("workspace" | "project", value) => Some(parse_uuid(value, "scope UUID")?),
+                    ("platform", _) => anyhow::bail!("platform scope id must be '-'"),
+                    _ => anyhow::bail!("scope must be platform, workspace or project"),
+                };
+                let limit_micros = limit_micros
+                    .parse::<i64>()
+                    .map_err(|error| anyhow::anyhow!("invalid limit micros: {error}"))?;
+                anyhow::ensure!(limit_micros >= 0, "limit micros must be nonnegative");
+                Ok(Self::AiUsage(AiUsageCommand::SetCap {
+                    scope_kind: scope_kind.clone(),
+                    scope_id,
+                    limit_micros,
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                }))
+            }
             [
                 command,
                 action,
@@ -97,7 +158,7 @@ impl Command {
                 }))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage reconcile [workspace-uuid]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
             ),
         }
     }
@@ -176,6 +237,53 @@ mod tests {
         assert_eq!(
             Command::parse(["migrate".into()]).unwrap(),
             Command::Migrate
+        );
+        assert_eq!(
+            Command::parse(["ai-usage".into(), "reconcile".into()]).unwrap(),
+            Command::AiUsage(AiUsageCommand::Reconcile { workspace_id: None })
+        );
+        let workspace_id = Uuid::from_u128(55);
+        let operator_user_id = Uuid::from_u128(56);
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "waive-overage".into(),
+                workspace_id.to_string(),
+                operator_user_id.to_string(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::WaiveOverage {
+                workspace_id,
+                operator_user_id,
+            })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "set-cap".into(),
+                "platform".into(),
+                "-".into(),
+                "1000000".into(),
+                operator_user_id.to_string(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::SetCap {
+                scope_kind: "platform".to_owned(),
+                scope_id: None,
+                limit_micros: 1_000_000,
+                operator_user_id,
+            })
+        );
+        assert!(
+            Command::parse([
+                "ai-usage".into(),
+                "set-cap".into(),
+                "platform".into(),
+                workspace_id.to_string(),
+                "1".into(),
+                operator_user_id.to_string(),
+            ])
+            .is_err()
         );
         assert_eq!(
             Command::parse(["backfill-project-workspaces".into()]).unwrap(),

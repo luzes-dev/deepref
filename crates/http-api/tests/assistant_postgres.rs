@@ -475,6 +475,7 @@ impl AiGateway for ProposalGateway {
                 output_json: proposal_output(input, fixture).to_string(),
                 input_tokens: 1,
                 output_tokens: 1,
+                reasoning_tokens: 0,
                 cost_micros: Some(1),
                 served_model: None,
                 system_fingerprint: None,

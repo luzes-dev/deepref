@@ -15,6 +15,7 @@ pub enum JobKind {
     RecomputePrisma,
     RetrieveDocument,
     ParseDocument,
+    AiUsageReconcile,
 }
 
 /// Workload class of a durable job: the pool a worker serves and the unit of
@@ -95,6 +96,7 @@ impl JobKind {
             Self::RecomputePrisma => "recompute_prisma",
             Self::RetrieveDocument => "retrieve_document",
             Self::ParseDocument => "parse_document",
+            Self::AiUsageReconcile => "ai_usage_reconcile",
         }
     }
 
@@ -102,8 +104,8 @@ impl JobKind {
     /// stored on the job row at enqueue so claims can filter by pool.
     pub const fn workload_class(self) -> WorkloadClass {
         match self {
-            // Model calls, bounded by provider and usage limits.
-            Self::AssistantAgentRun => WorkloadClass::Ai,
+            // Model calls and workspace-scoped usage recovery.
+            Self::AssistantAgentRun | Self::AiUsageReconcile => WorkloadClass::Ai,
             // The document pipeline: full-text retrieval feeds parsing, and
             // corpus deduplication is CPU/memory-bound local processing.
             Self::RetrieveDocument | Self::ParseDocument | Self::ImportDeduplication => {
@@ -157,6 +159,7 @@ impl std::str::FromStr for JobKind {
             "recompute_prisma" => Ok(Self::RecomputePrisma),
             "retrieve_document" => Ok(Self::RetrieveDocument),
             "parse_document" => Ok(Self::ParseDocument),
+            "ai_usage_reconcile" => Ok(Self::AiUsageReconcile),
             _ => Err(InvalidJobKind(value.to_owned())),
         }
     }
@@ -225,6 +228,7 @@ mod tests {
             JobKind::RecomputePrisma,
             JobKind::RetrieveDocument,
             JobKind::ParseDocument,
+            JobKind::AiUsageReconcile,
         ] {
             assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
@@ -243,6 +247,7 @@ mod tests {
     fn every_job_kind_maps_to_one_workload_class() {
         for (kind, class) in [
             (JobKind::AssistantAgentRun, WorkloadClass::Ai),
+            (JobKind::AiUsageReconcile, WorkloadClass::Ai),
             (JobKind::RetrieveDocument, WorkloadClass::Documents),
             (JobKind::ParseDocument, WorkloadClass::Documents),
             (JobKind::ImportDeduplication, WorkloadClass::Documents),

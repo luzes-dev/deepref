@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 pub mod command;
 
-pub use command::{Command, LegacyActorCommand};
+pub use command::{AiUsageCommand, Command, LegacyActorCommand};
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
@@ -55,6 +55,8 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
 
         Command::LegacyActor(action) => run_legacy_actor(action).await,
 
+        Command::AiUsage(action) => run_ai_usage(action).await,
+
         Command::PrintOpenApi => {
             println!(
                 "{}",
@@ -63,6 +65,44 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+async fn run_ai_usage(action: AiUsageCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    with_telemetry(telemetry, async move {
+        let output = match action {
+            AiUsageCommand::Reconcile { workspace_id } => {
+                deepref_http_api::ai_usage_reconcile(&config, workspace_id).await?
+            }
+            AiUsageCommand::WaiveOverage {
+                workspace_id,
+                operator_user_id,
+            } => {
+                deepref_http_api::ai_usage_waive_overage(&config, workspace_id, operator_user_id)
+                    .await?
+            }
+            AiUsageCommand::SetCap {
+                scope_kind,
+                scope_id,
+                limit_micros,
+                operator_user_id,
+            } => {
+                deepref_http_api::ai_usage_set_cap(
+                    &config,
+                    &scope_kind,
+                    scope_id,
+                    limit_micros,
+                    operator_user_id,
+                )
+                .await?
+            }
+        };
+        println!("{output}");
+        Ok(())
+    })
+    .await
 }
 
 async fn run_legacy_actor(action: LegacyActorCommand) -> anyhow::Result<()> {

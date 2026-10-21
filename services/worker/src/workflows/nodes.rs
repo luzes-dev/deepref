@@ -4,7 +4,8 @@
 
 use chrono::Utc;
 use deepref_ai::{
-    AiGateway, CompletionRequest, ModelProfile, ModelRouter, ScreeningStage as AiStage,
+    AiGateway, AiUsageContext, CompletionRequest, ModelProfile, ModelRouter,
+    ScreeningStage as AiStage, UsagePrincipal,
 };
 use deepref_app::{
     AiProposalError, ExposureSource, NewExposure, NodeExecution, NodeOutcome, PostgresAiStore,
@@ -1296,6 +1297,25 @@ async fn ai_prompt(context: &Context<'_>) -> NodeResult {
     );
     let request = CompletionRequest {
         project_id: Some(project(context)),
+        usage_context: Some(AiUsageContext {
+            workspace_id: None,
+            principal: Some(
+                if context.execution.actor_kind == "user" {
+                    uuid::Uuid::parse_str(&context.execution.actor_id)
+                        .ok()
+                        .map(deepref_domain::UserId::new)
+                        .map(UsagePrincipal::User)
+                        .unwrap_or_else(|| UsagePrincipal::Service("workflow-worker".to_owned()))
+                } else {
+                    UsagePrincipal::Service("workflow-worker".to_owned())
+                },
+            ),
+            run_id: context.execution.run_id,
+            step_id: Some(context.execution.node_run_id.to_string()),
+            job_id: Some(context.execution.job_id),
+            attempt_fence: Some(context.execution.claim_seq),
+            run_limit_micros: None,
+        }),
         route,
         system_prompt: "You help with a systematic review. Answer only from the information given. Reply with JSON matching the requested schema.".to_owned(),
         user_prompt: format!("{instructions}\n\nInformation:\n{payload}"),

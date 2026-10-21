@@ -327,12 +327,14 @@ async fn exhausted_budget_fails_the_run_without_an_answer() {
     assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
     let run = run_record(&pool, run_id).await;
     assert_eq!(run.status, deepref_ai::AssistantAgentRunStatus::Failed);
-    assert!(
+    assert_eq!(
         run.error
             .as_ref()
             .and_then(|error| error.get("code"))
-            .and_then(Value::as_str)
-            == Some("ai_budget_exceeded")
+            .and_then(Value::as_str),
+        Some("ai_budget_exceeded"),
+        "unexpected assistant failure: {:?}",
+        run.error
     );
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",

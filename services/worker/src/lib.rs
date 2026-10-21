@@ -57,16 +57,18 @@ async fn build_ai_gateway(
         );
         return Ok(Arc::new(RoutedGateway::default()));
     };
-    let prices = deepref_ai::PriceBook::new(ai_config.price_overrides.iter().map(|price| {
-        (
-            price.provider.clone(),
-            price.model.clone(),
-            deepref_ai::ModelPrice {
-                input_micros_per_million_tokens: price.input_micros_per_million_tokens,
-                output_micros_per_million_tokens: price.output_micros_per_million_tokens,
-            },
-        )
-    }));
+    let prices =
+        deepref_ai::PriceBook::new(ai_config.model_price_table().into_iter().map(|price| {
+            (
+                price.provider,
+                price.model,
+                deepref_ai::ModelPrice {
+                    input_micros_per_million_tokens: price.input_micros_per_million_tokens,
+                    output_micros_per_million_tokens: price.output_micros_per_million_tokens,
+                    reasoning_micros_per_million_tokens: price.reasoning_micros_per_million_tokens,
+                },
+            )
+        }));
     let routes =
         deepref_app::ensure_default_model_routes(pool, provider.id(), &ai_config.default_model)
             .await?;
