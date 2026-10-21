@@ -24,6 +24,12 @@ jobs:
       # runner disk (lld dies with SIGBUS); the lane never reads debuginfo.
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
+      # Checkout first so the diagnostic gate can still record blocked probes if
+      # a later setup step (Postgres, toolchain, sqlx-cli) fails.
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Free runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -46,10 +52,6 @@ jobs:
           done
           echo "Postgres did not become ready in time" >&2
           exit 1
-      - name: Checkout trusted source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
       - name: Set up Rust
         uses: ./.github/actions/setup-rust
         with:
@@ -111,20 +113,22 @@ jobs:
       # shared 4-core runner, and a single runner cannot interleave CPU-heavy
       # link work underneath an already CPU-heavy build+test tail. Serial
       # steps are kept because they stream nextest progress in the job UI.
-      - name: Apply database migrations
-        env:
-          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-        run: |
-          cargo sqlx migrate run \
-            --source crates/app/migrations \
-            --database-url "$DATABASE_URL" \
-            --no-dotenv
-      - name: Verify SQLx offline query metadata against live database
-        env:
-          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-        run: cargo xtask sqlx check
-      - name: Run integration tests
-        run: cargo nextest run --workspace --tests --locked --profile ci
+      #
+      # Keep-going applies to independent siblings after migrations succeed;
+      # it does not pretend this single runner can execute Cargo-heavy work in
+      # parallel.
+      - name: Probe database migrations
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.migrations
+      - name: Probe SQLx metadata
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.sqlx
+      - name: Probe integration tests
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.tests
+      - name: Gate integration
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate integration
       - name: Show sccache statistics
         if: always()
         run: |
@@ -133,3 +137,11 @@ jobs:
             "${SCCACHE_PATH:-sccache}" --show-stats
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-integration
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7

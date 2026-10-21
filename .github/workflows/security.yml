@@ -29,30 +29,20 @@ jobs:
       # packs are fetched anonymously at run time and are therefore mutable:
       # a new rule release can surface a finding without a workflow change, so
       # review Security job logs when a scan starts failing.
-      - name: Scan Rust, TypeScript, and JavaScript
-        shell: bash
-        run: |
-          set -o pipefail
-          status=0
-          docker run --rm \
-            --volume "$PWD:/src" \
-            --workdir /src \
-            semgrep/semgrep:1.181.0@sha256:81474464c1f07483ba0682a44787fd93c91397419762a04abe2bafaae396304b \
-            semgrep scan \
-              --config p/rust \
-              --config p/typescript \
-              --config p/javascript \
-              --metrics=off \
-              --disable-version-check \
-              --error \
-              --text 2>&1 | tee semgrep.txt || status=$?
-          {
-            echo '### Semgrep Community Edition'
-            echo '```text'
-            cat semgrep.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
+      - name: Probe Semgrep
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.semgrep
+      - name: Gate SAST
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate security-sast
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-security-sast
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
   dependencies:
     name: Dependency policy
@@ -74,8 +64,6 @@ jobs:
           tool: cargo-deny@0.20.2,cargo-shear@1.13.4
           checksum: true
           fallback: none
-      - run: cargo deny --locked check
-      - run: cargo shear --deny-warnings
       - name: Install OSV-Scanner
         env:
           OSV_SCANNER_VERSION: v2.7.0
@@ -88,11 +76,33 @@ jobs:
           echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check
           install -m 0755 "$RUNNER_TEMP/osv-scanner" "$RUNNER_TEMP/bin/osv-scanner"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Scan Cargo.lock and pnpm-lock.yaml
-        run: osv-scanner scan source --recursive --config osv-scanner.toml --format=table .
       - name: Set up Node.js
         uses: ./.github/actions/setup-node
-      - run: pnpm audit --audit-level high
+      # Each dependency policy probe runs even when a sibling fails.  The gate
+      # below restores the strict result expected by the Security check.
+      - name: Probe cargo-deny
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.cargo-deny
+      - name: Probe cargo-shear
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.cargo-shear
+      - name: Probe OSV-Scanner
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.osv
+      - name: Probe pnpm audit
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.pnpm-audit
+      - name: Gate dependency policy
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate security-dependencies
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-security-dependencies
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
   secrets:
     name: Secret scanning / Gitleaks
@@ -117,16 +127,20 @@ jobs:
           tar --extract --gzip --file "$RUNNER_TEMP/gitleaks.tar.gz" \
             --directory "$RUNNER_TEMP/bin" gitleaks
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Scan Git history
-        run: |
-          gitleaks git \
-            --config .gitleaks.toml \
-            --redact \
-            --no-color \
-            --verbose \
-            --exit-code 1 \
-            --log-opts="--all" \
-            .
+      - name: Probe Git history
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.gitleaks
+      - name: Gate secret scanning
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate security-secrets
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-security-secrets
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
   configuration-security:
     name: Configuration security / Trivy
@@ -152,20 +166,25 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       # Trivy's config scanner covers Dockerfiles and supported IaC formats.
       # It does not parse compose.yaml or docker-bake.hcl, so those are checked
-      # by the compose validation step below and by the reproducible container
+      # by the compose validation probe below and by the reproducible container
       # build's `docker buildx bake --print`.
-      - name: Scan Dockerfiles and supported configuration
-        run: |
-          trivy config \
-            --severity MEDIUM,HIGH,CRITICAL \
-            --exit-code 1 \
-            --format table \
-            --skip-dirs .git \
-            --skip-dirs node_modules \
-            --skip-dirs target \
-            .
-      - name: Validate compose configuration
-        run: docker compose -f compose.yaml config --quiet
+      - name: Probe Trivy configuration
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.trivy
+      - name: Probe compose configuration
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.compose-config
+      - name: Gate configuration security
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate security-configuration
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-security-configuration
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
   repository-policy:
     name: Workflow and shell policy
@@ -176,26 +195,70 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Require immutable action references
-        run: python3 scripts/ci/check-action-pins.py
-      - name: Run actionlint
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-      - name: Run ShellCheck
-        run: |
-          mapfile -t scripts < <(git ls-files '*.sh')
-          if [ "${#scripts[@]}" -gt 0 ]; then shellcheck "${scripts[@]}"; fi
+      - name: Probe immutable action references
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.action-pins
+      - name: Probe immutable action reference policy tests
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.action-pins-tests
+      - name: Probe diagnostic runner tests
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.diagnostics-tests
+      - name: Probe actionlint
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.actionlint
+      - name: Probe ShellCheck
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check security.shellcheck
+      - name: Gate repository policy
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate security-policy
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-security-policy
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
   security-required:
     name: Security
     if: always()
     needs: [semgrep, dependencies, secrets, configuration-security, repository-policy]
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
       - name: Checkout trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Download diagnostic artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ci-diagnostics-security-*
+          path: security-diagnostics-artifacts
+      - name: Merge security diagnostics
+        run: |
+          mkdir -p security-diagnostics-artifacts
+          python3 scripts/ci/diagnose.py --output ci-diagnostics-security merge security-diagnostics-artifacts
+      - name: Publish security diagnostic summary
+        if: always()
+        run: |
+          if test -f ci-diagnostics-security/report.md; then
+            cat ci-diagnostics-security/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No security diagnostic artifacts were available for this run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload aggregate security diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-security
+          path: ci-diagnostics-security
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify security checks
         env:
           SEMGREP_RESULT: ${{ needs.semgrep.result }}

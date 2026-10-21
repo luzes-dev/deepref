@@ -44,22 +44,24 @@ jobs:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
-      - name: Validate Cargo workspace architecture
+      # The fmt lane carries three independent policy probes.  They share one
+      # checkout and toolchain, but each failure is collected before the gate.
+      - name: Probe workspace boundaries
         if: matrix.command == 'fmt'
-        run: |
-          cargo xtask boundaries
-          cargo test -p xtask --locked
-      - name: Run check
-        env:
-          COMMAND: ${{ matrix.command }}
-          SQLX_OFFLINE: "true"
-        run: |
-          case "$COMMAND" in
-            fmt) cargo fmt --all -- --check ;;
-            clippy) cargo clippy --workspace --lib --bins --tests --examples --locked -- -D warnings ;;
-            test) cargo nextest run --workspace --lib --bins --examples --locked ;;
-            doctest) cargo test --doc --workspace --locked ;;
-          esac
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check rust.boundaries
+      - name: Probe xtask tests
+        if: matrix.command == 'fmt'
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check rust.xtask-tests
+      - name: Probe formatting
+        if: matrix.command == 'fmt'
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check rust.fmt
+      - name: Probe ${{ matrix.command }}
+        if: matrix.command != 'fmt'
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check rust.${{ matrix.command }}
       # sccache runs against local disk storage shipped as ONE cache bundle per
       # run: the ghac backend stores one GitHub cache entry per compiled object,
       # blows past GitHub's save rate limit, and every concurrent writer loses
@@ -81,6 +83,49 @@ jobs:
             "${SCCACHE_PATH:-sccache}" --show-stats
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-rust-${{ matrix.command }}
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Every matrix job uploads only its own probe results.  This small job merges
+  # them, marks probes that never ran as blocked, and restores the strict lane
+  # result that the probes deliberately relaxed with continue-on-error.
+  gate:
+    name: Gate Rust
+    needs: checks
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download diagnostic artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ci-diagnostics-rust-*
+          path: diagnostics-artifacts
+          merge-multiple: true
+      - name: Merge and gate Rust diagnostics
+        run: |
+          mkdir -p diagnostics-artifacts
+          python3 scripts/ci/diagnose.py --output target/ci-diagnostics merge diagnostics-artifacts
+          python3 scripts/ci/diagnose.py --output target/ci-diagnostics gate rust
+      - name: Upload consolidated diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-rust
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
 
   coverage:
     name: Coverage
