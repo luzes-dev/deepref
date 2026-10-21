@@ -255,6 +255,7 @@ ON CONFLICT (scope_kind, scope_id) DO NOTHING;
 INSERT INTO ai_usage_period_buckets (scope_kind, scope_id, workspace_id, project_id, period_start, limit_micros)
 SELECT 'project', p.id, p.workspace_id, p.id, date_trunc('month', now() AT TIME ZONE 'UTC')::date, lim.limit_micros
 FROM projects p JOIN ai_usage_limits lim ON lim.scope_kind = 'project' AND lim.scope_id = p.id
+WHERE p.workspace_id IS NOT NULL
 ON CONFLICT DO NOTHING;
 INSERT INTO ai_usage_period_buckets (scope_kind, scope_id, workspace_id, period_start, limit_micros)
 SELECT 'workspace', l.scope_id, l.scope_id, date_trunc('month', now() AT TIME ZONE 'UTC')::date, l.limit_micros
@@ -289,6 +290,7 @@ CREATE OR REPLACE FUNCTION ai_usage_ledger_count_legacy_spend()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_workspace_id uuid;
+  v_project_workspace_id uuid;
   v_period date;
   v_platform_limit bigint;
   v_workspace_limit bigint;
@@ -302,12 +304,15 @@ BEGIN
   UPDATE ai_usage_rollout_state
   SET last_legacy_ledger_insert_at = now(), updated_at = now()
   WHERE singleton;
-  -- N-1 writes only the legacy ledger columns. The BEFORE trigger fills this
-  -- tenant for live project writes, while the lookup also covers older rows
-  -- whose workspace identity was absent when this function was installed.
-  v_workspace_id := COALESCE(NEW.workspace_id, (
-    SELECT p.workspace_id FROM projects p WHERE p.id = NEW.project_id
-  ));
+  -- A legacy budget write can already own this row. Lock it before any
+  -- hierarchy bucket so it follows project → platform → workspace → project.
+  IF NEW.project_id IS NOT NULL THEN
+    SELECT p.workspace_id INTO v_project_workspace_id FROM projects p
+    WHERE p.id = NEW.project_id FOR NO KEY UPDATE;
+  END IF;
+  -- N-1 writes only legacy ledger columns. Prefer the locked current tenant;
+  -- the fallback covers ledger rows whose project has already been removed.
+  v_workspace_id := COALESCE(v_project_workspace_id, NEW.workspace_id);
   v_period := COALESCE(NEW.period_start, date_trunc('month', NEW.created_at AT TIME ZONE 'UTC')::date);
   INSERT INTO ai_usage_period_buckets (scope_kind, scope_id, period_start, limit_micros)
   SELECT 'platform', scope_id, v_period, limit_micros FROM ai_usage_limits
@@ -405,15 +410,16 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     INSERT INTO ai_usage_limits (scope_kind, scope_id, limit_micros)
     VALUES ('project', NEW.id, NEW.ai_monthly_budget_micros) ON CONFLICT DO NOTHING;
-    IF NEW.workspace_id IS NOT NULL THEN
-      INSERT INTO ai_usage_limits (scope_kind, scope_id, limit_micros)
-      VALUES ('workspace', NEW.workspace_id, 0) ON CONFLICT DO NOTHING;
-      INSERT INTO ai_usage_period_buckets
-        (scope_kind, scope_id, workspace_id, period_start, limit_micros)
-      SELECT 'workspace', NEW.workspace_id, NEW.workspace_id, v_period, limit_micros
-      FROM ai_usage_limits WHERE scope_kind = 'workspace' AND scope_id = NEW.workspace_id
-      ON CONFLICT DO NOTHING;
+    IF NEW.workspace_id IS NULL THEN
+      RETURN NEW;
     END IF;
+    INSERT INTO ai_usage_limits (scope_kind, scope_id, limit_micros)
+    VALUES ('workspace', NEW.workspace_id, 0) ON CONFLICT DO NOTHING;
+    INSERT INTO ai_usage_period_buckets
+      (scope_kind, scope_id, workspace_id, period_start, limit_micros)
+    SELECT 'workspace', NEW.workspace_id, NEW.workspace_id, v_period, limit_micros
+    FROM ai_usage_limits WHERE scope_kind = 'workspace' AND scope_id = NEW.workspace_id
+    ON CONFLICT DO NOTHING;
     INSERT INTO ai_usage_period_buckets
       (scope_kind, scope_id, workspace_id, project_id, period_start, limit_micros)
     VALUES ('project', NEW.id, NEW.workspace_id, NEW.id, v_period, NEW.ai_monthly_budget_micros)
@@ -421,6 +427,11 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  IF NEW.workspace_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  -- UPDATE already holds the project row lock before this AFTER trigger
+  -- reaches the hierarchy buckets, including a NULL → assigned transition.
   -- Project budget writes use the same bucket order as admissions. A child
   -- update never changes workspace or platform allowance.
   INSERT INTO ai_usage_limits (scope_kind, scope_id, limit_micros)

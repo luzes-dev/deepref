@@ -817,14 +817,20 @@ impl AiGateway for Script {
         &self,
         request: CompletionRequest,
     ) -> Result<crate::PreparedCompletionRequest, AiError> {
-        let body = serde_json::to_vec(&serde_json::json!({
-            "model": request.route.model.clone(),
-            "system_prompt": request.system_prompt.clone(),
-            "user_prompt": request.user_prompt.clone(),
-            "evidence": request.evidence.clone(),
-            "schema": request.schema.clone(),
-            "max_tokens": request.route.parameters.max_tokens,
-        }))
+        let dialect = ProviderDialect::from_id(&request.route.provider).ok_or_else(|| {
+            AiError::UnsupportedUsageRoute {
+                provider: request.route.provider.clone(),
+                model: request.route.model.clone(),
+            }
+        })?;
+        let body = serde_json::to_vec(&structured_request_body(
+            dialect,
+            &request.route,
+            &request.system_prompt,
+            &request.user_prompt,
+            &request.evidence,
+            &request.schema,
+        ))
         .map_err(|_| AiError::UnboundedInput)?;
         Ok(crate::PreparedCompletionRequest::new(request, body))
     }

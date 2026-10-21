@@ -24,6 +24,13 @@ pub async fn delete_project_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
+    // Share the project lifecycle lock with final settlement. If deletion
+    // detaches first, the last liability settlement collects the buckets; if
+    // settlement finishes first, this transaction sees no pending liability.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(project_id.to_string())
+        .execute(&mut **tx)
+        .await?;
     let workspace_id: Option<Uuid> =
         sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1 FOR UPDATE")
             .bind(project_id)

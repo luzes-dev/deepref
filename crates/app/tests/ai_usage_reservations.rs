@@ -18,8 +18,9 @@ use std::{
 use deepref_ai::{
     AiError, AiFuture, AiGateway, AiUsageContext, CompletionRequest, GatewayCompletion,
     MeteredGateway, ModelParameters, ModelProfile, PreparedCompletionRequest, PriceBook,
-    ResolvedModel, UsageLedger, UsageObservation, UsagePriceSnapshot, UsagePrincipal,
-    UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof,
+    ProviderDialect, ResolvedModel, UsageLedger, UsageObservation, UsagePriceSnapshot,
+    UsagePrincipal, UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof,
+    structured_request_body,
 };
 use deepref_app::{
     AiUsageLimitScope, AiUsageResolution, PostgresUsageLedger, backfill_ai_usage_legacy,
@@ -36,13 +37,20 @@ struct CountingGateway(Arc<AtomicUsize>);
 
 impl AiGateway for CountingGateway {
     fn prepare(&self, request: CompletionRequest) -> Result<PreparedCompletionRequest, AiError> {
-        let body = serde_json::to_vec(&serde_json::json!({
-            "model": request.route.model.clone(),
-            "system_prompt": request.system_prompt.clone(),
-            "user_prompt": request.user_prompt.clone(),
-            "schema": request.schema.clone(),
-            "max_tokens": request.route.parameters.max_tokens,
-        }))
+        let dialect = ProviderDialect::from_id(&request.route.provider).ok_or_else(|| {
+            AiError::UnsupportedUsageRoute {
+                provider: request.route.provider.clone(),
+                model: request.route.model.clone(),
+            }
+        })?;
+        let body = serde_json::to_vec(&structured_request_body(
+            dialect,
+            &request.route,
+            &request.system_prompt,
+            &request.user_prompt,
+            &request.evidence,
+            &request.schema,
+        ))
         .map_err(|_| AiError::UnboundedInput)?;
         Ok(PreparedCompletionRequest::new(request, body))
     }
@@ -713,6 +721,156 @@ async fn project_deletion_keeps_buckets_until_open_reservation_settles() {
         .fetch_one(&pool)
         .await
         .expect("historical fact survives project deletion"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn project_detach_and_last_settlement_serialize_and_reconcile_sweeps_terminal_buckets() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let (project, workspace) = fixture(&pool).await;
+    set_limits(&pool, project, workspace, 10_000).await;
+    let run_id = Uuid::new_v4();
+    let ledger = PostgresUsageLedger::new(&pool);
+    let reservation = ledger
+        .reserve(request(project, run_id, 100, 0, 1_000))
+        .await
+        .expect("project reservation opens");
+    let reservation_id = reservation.id;
+    let observation = UsageObservation {
+        input_tokens: Some(100),
+        output_tokens: Some(0),
+        reasoning_tokens: Some(0),
+        commercial_units: None,
+        provider_request_id: Some("detach-race-request".to_owned()),
+        provider_response_id: Some("detach-race-response".to_owned()),
+    };
+    ledger
+        .observe(&reservation, observation.clone())
+        .await
+        .expect("observation persists before delete race");
+
+    let mut delete_tx = pool
+        .begin()
+        .await
+        .expect("project delete transaction begins");
+    assert!(
+        delete_project_in_transaction(&mut delete_tx, project.as_uuid())
+            .await
+            .expect("project detaches while its observation is open")
+    );
+    let settling_ledger = PostgresUsageLedger::new(&pool);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut settlement = tokio::spawn(async move {
+        let _ = started_tx.send(());
+        settling_ledger
+            .settle(&reservation, observation, "test-price-v1")
+            .await
+    });
+    started_rx.await.expect("settlement task starts");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting_on_lifecycle_lock: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                   SELECT 1 FROM pg_stat_activity
+                   WHERE wait_event_type = 'Lock'
+                     AND query LIKE '%pg_advisory_xact_lock(hashtextextended%')",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("PostgreSQL reports lock wait");
+            if waiting_on_lifecycle_lock {
+                break;
+            }
+            assert!(
+                !settlement.is_finished(),
+                "settlement must wait for the in-flight detach transaction"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("settlement blocks on project lifecycle lock");
+    delete_tx.commit().await.expect("project detach commits");
+    tokio::time::timeout(Duration::from_secs(5), &mut settlement)
+        .await
+        .expect("settlement resumes after detach")
+        .expect("settlement task joins")
+        .expect("settlement completes and collects detached buckets");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ai_usage_detached_projects WHERE project_id=$1",
+        )
+        .bind(project.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("detach marker is checked"),
+        0
+    );
+
+    // Recreate a stale terminal detach to exercise the periodic reconciler
+    // sweep independently of the normal settlement cleanup.
+    let period: chrono::NaiveDate =
+        sqlx::query_scalar("SELECT date_trunc('month', now() AT TIME ZONE 'UTC')::date")
+            .fetch_one(&pool)
+            .await
+            .expect("current UTC month");
+    sqlx::query(
+        "INSERT INTO ai_usage_detached_projects (project_id, workspace_id)
+         VALUES ($1, $2)",
+    )
+    .bind(project.as_uuid())
+    .bind(workspace.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("stale detach marker is inserted");
+    sqlx::query(
+        "INSERT INTO ai_usage_period_buckets
+           (scope_kind, scope_id, workspace_id, project_id, run_budget_id, period_start, limit_micros)
+         VALUES ('project', $1, $2, $1, NULL, $3, 1000),
+                ('run', $4, $2, $1, $4, DATE '0001-01-01', 1000)",
+    )
+    .bind(project.as_uuid())
+    .bind(workspace.as_uuid())
+    .bind(period)
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("stale project and run buckets are inserted");
+    deepref_app::reconcile_ai_usage_workspace(&pool, workspace, "test-price-v1")
+        .await
+        .expect("workspace reconciliation sweeps terminal detached buckets");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ai_usage_period_buckets
+             WHERE project_id=$1 AND scope_kind IN ('project', 'run')",
+        )
+        .bind(project.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("reconciler bucket cleanup is checked"),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ai_usage_detached_projects WHERE project_id=$1",
+        )
+        .bind(project.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("reconciler detach cleanup is checked"),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ai_usage_ledger WHERE reservation_id=$1"
+        )
+        .bind(reservation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("settled fact survives the lifecycle sweep"),
         1
     );
 }
@@ -1740,6 +1898,70 @@ async fn creating_a_project_keeps_its_default_child_limit_below_unchanged_parent
 }
 
 #[tokio::test]
+async fn workspace_less_historical_project_gets_buckets_when_workspace_is_assigned() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let (_, workspace) = fixture(&pool).await;
+    let historical_project = Uuid::new_v4();
+    let mut tx = pool
+        .begin()
+        .await
+        .expect("historical project transaction begins");
+    // The current application trigger fills a missing workspace at INSERT;
+    // disable it briefly to model a row that predates workspace assignment.
+    sqlx::query("ALTER TABLE projects DISABLE TRIGGER projects_workspace_default_trigger")
+        .execute(&mut *tx)
+        .await
+        .expect("historical project fixture can bypass the current workspace default");
+    sqlx::query(
+        "INSERT INTO projects (id, name, workspace_id)
+         VALUES ($1, 'workspace-less historical project', NULL)",
+    )
+    .bind(historical_project)
+    .execute(&mut *tx)
+    .await
+    .expect("historical project can exist without a workspace");
+    sqlx::query("ALTER TABLE projects ENABLE TRIGGER projects_workspace_default_trigger")
+        .execute(&mut *tx)
+        .await
+        .expect("workspace default is restored");
+    tx.commit()
+        .await
+        .expect("workspace-less historical row is committed");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ai_usage_period_buckets
+             WHERE scope_kind='project' AND scope_id=$1",
+        )
+        .bind(historical_project)
+        .fetch_one(&pool)
+        .await
+        .expect("workspace-less project bucket count is checked"),
+        0,
+        "an unassigned project must not create a bucket that violates the workspace constraint"
+    );
+    sqlx::query("UPDATE projects SET workspace_id=$2 WHERE id=$1")
+        .bind(historical_project)
+        .bind(workspace.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("assigning the historical project initializes its usage hierarchy");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM ai_usage_period_buckets
+             WHERE scope_kind='project' AND scope_id=$1 AND workspace_id=$2",
+        )
+        .bind(historical_project)
+        .bind(workspace.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("assigned project bucket count is checked"),
+        1
+    );
+}
+
+#[tokio::test]
 async fn operator_cap_changes_and_overage_waivers_are_audited() {
     let Some(pool) = database().await else {
         return;
@@ -1899,4 +2121,78 @@ async fn n_minus_one_ledger_inserts_are_included_in_new_reservation_counters() {
             .1,
         50
     );
+}
+
+#[tokio::test]
+async fn legacy_project_write_overlapping_set_cap_uses_project_before_bucket_locks() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let (project, workspace) = fixture(&pool).await;
+    set_limits(&pool, project, workspace, 10_000).await;
+    let operator = operator(&pool).await;
+    let mut legacy_tx = pool.begin().await.expect("legacy write transaction begins");
+    let legacy_backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *legacy_tx)
+        .await
+        .expect("legacy transaction backend is identified");
+    sqlx::query("SELECT 1 FROM projects WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(project.as_uuid())
+        .fetch_one(&mut *legacy_tx)
+        .await
+        .expect("legacy path owns its project row before hierarchy buckets");
+
+    let cap_pool = pool.clone();
+    let cap_task = tokio::spawn(async move {
+        set_ai_usage_cap(
+            &cap_pool,
+            AiUsageLimitScope::Project(project),
+            9_000,
+            operator,
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let cap_waits_on_legacy_project: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                   SELECT 1 FROM pg_stat_activity
+                   WHERE wait_event_type = 'Lock'
+                     AND $1 = ANY(pg_blocking_pids(pid)))",
+            )
+            .bind(legacy_backend_pid)
+            .fetch_one(&pool)
+            .await
+            .expect("PostgreSQL reports set-cap lock wait");
+            if cap_waits_on_legacy_project {
+                break;
+            }
+            assert!(
+                !cap_task.is_finished(),
+                "set-cap should wait on the project row before taking hierarchy buckets"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("set-cap is blocked on the project row");
+
+    sqlx::query(
+        "INSERT INTO ai_usage_ledger
+           (project_id, profile, provider, model, purpose, input_tokens, output_tokens, cost_micros)
+         VALUES ($1, 'reasoning', 'legacy-provider', 'legacy-model', 'structured', 1, 0, 1)",
+    )
+    .bind(project.as_uuid())
+    .execute(&mut *legacy_tx)
+    .await
+    .expect("legacy trigger obtains hierarchy buckets without deadlocking");
+    legacy_tx
+        .commit()
+        .await
+        .expect("legacy ledger transaction commits");
+    tokio::time::timeout(Duration::from_secs(5), cap_task)
+        .await
+        .expect("set-cap resumes after the project row is released")
+        .expect("set-cap task joins")
+        .expect("set-cap finishes without a deadlock");
 }

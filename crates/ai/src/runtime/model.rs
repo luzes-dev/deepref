@@ -9,7 +9,11 @@
 //! The `ModelContract` used by calibration is derived from the same route,
 //! so routing identity and agent execution cannot drift apart.
 
-use rig_core::{DynModel, operation::Completion, providers::openai::OpenAIConfig};
+use rig_core::{
+    DynModel,
+    operation::Completion,
+    providers::openai::{OpenAIConfig, wire::Route},
+};
 
 use crate::{AiError, ResolvedModel};
 
@@ -50,6 +54,7 @@ impl AgentModelFactory for OpenAiCompatModelFactory {
         }
         let client = OpenAIConfig::new(self.api_key.clone())
             .with_base_url(self.base_url.clone())
+            .with_route(Route::Chat)
             .client();
         Ok(client.completion(route.model.clone()).erase())
     }

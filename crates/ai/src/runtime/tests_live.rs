@@ -248,8 +248,13 @@ async fn budget_exhaustion_mid_turn_aborts_the_turn() {
 async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     let ledger = FakeLedger::default();
     let turn = vec![
+        MockStreamEvent::RequestId("req-assistant-1".to_owned()),
         MockStreamEvent::text("Done.".to_owned()),
-        MockStreamEvent::final_response(Usage::new().input_tokens(100).output_tokens(10)),
+        MockStreamEvent::FinalResponse(rig_core::operation::Finish {
+            usage: Usage::new().input_tokens(100).output_tokens(10),
+            response_id: Some("resp-assistant-1".to_owned()),
+            ..Default::default()
+        }),
     ];
     let (outcome, _) = run_script(
         vec![turn],
@@ -272,6 +277,14 @@ async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     assert_eq!(request.model, "glm-5.3-flash");
     assert_eq!(observation.input_tokens, Some(100));
     assert_eq!(observation.output_tokens, Some(10));
+    assert_eq!(
+        observation.provider_request_id.as_deref(),
+        Some("req-assistant-1")
+    );
+    assert_eq!(
+        observation.provider_response_id.as_deref(),
+        Some("resp-assistant-1")
+    );
     assert_eq!(
         request
             .price

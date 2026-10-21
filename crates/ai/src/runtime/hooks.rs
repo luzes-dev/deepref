@@ -22,6 +22,7 @@ use crate::{
         context::DeepRefAgentContext,
         tools::{PlanCollector, ToolHostScope},
     },
+    usage::observe_or_hold,
 };
 use rig_agent::agent::{
     AgentHook, CompletionCallAction, CompletionCallEvent, DispatchAction, DispatchEvent,
@@ -114,6 +115,8 @@ impl DeepRefHooks {
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
         reasoning_tokens: Option<u64>,
+        provider_request_id: Option<String>,
+        provider_response_id: Option<String>,
     ) -> Result<(), AiError> {
         if let Ok(mut usage) = self.usage.lock() {
             if let Some(input_tokens) = input_tokens {
@@ -131,13 +134,11 @@ impl DeepRefHooks {
             output_tokens,
             reasoning_tokens,
             commercial_units: None,
-            provider_request_id: None,
-            provider_response_id: None,
+            provider_request_id,
+            provider_response_id,
         };
         observation.validate()?;
-        self.ledger
-            .observe(&reservation, observation.clone())
-            .await?;
+        observe_or_hold(self.ledger.as_ref(), &reservation, observation.clone()).await?;
         if !observation.has_token_usage() {
             tracing::warn!("assistant AI usage counters are missing; reservation remains held");
             return Ok(());
@@ -245,7 +246,18 @@ impl AgentHook for DeepRefHooks {
             // leaves `request.model` unset unless a per-call override exists.
             // Freeze that effective model in the accounted request identity.
             request.model = Some(hooks.scope.context.route.model.clone());
-            let input_bound = match assistant_input_bound_tokens(&request) {
+            let capabilities = match hooks.prices.capabilities(
+                &hooks.scope.context.route.provider,
+                &hooks.scope.context.route.model,
+            ) {
+                Ok(capabilities) => capabilities,
+                Err(error) => return fail(error),
+            };
+            let input_bound = match assistant_input_bound_tokens(
+                &request,
+                &hooks.scope.context.route.model,
+                capabilities,
+            ) {
                 Ok(bound) => bound,
                 Err(error) => return fail(error),
             };
@@ -300,11 +312,20 @@ impl AgentHook for DeepRefHooks {
         let input_tokens = event.usage.input_tokens;
         let output_tokens = event.usage.output_tokens;
         let reasoning_tokens = event.usage.reasoning_tokens;
+        let provider_request_id = event.identity.provider_request_id.clone();
+        let provider_response_id = event.identity.response_id.clone();
         let text = turn_text(event.content);
         let has_calls = turn_has_tool_calls(event.content);
         async move {
             if let Err(error) = hooks
-                .settle_turn_usage(turn, input_tokens, output_tokens, reasoning_tokens)
+                .settle_turn_usage(
+                    turn,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    provider_request_id,
+                    provider_response_id,
+                )
                 .await
             {
                 tracing::error!(error = %error, "assistant AI usage settlement failed");

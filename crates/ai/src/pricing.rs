@@ -32,6 +32,18 @@ pub struct RouteCapabilities {
     /// charged through input/output token counts. Hosted search, retrieval,
     /// image, audio, and other separately billed tools are not enabled.
     pub billable_components: BillableComponents,
+    /// Maximum fixed bytes added by the published provider template, including
+    /// its system/tool preamble and generation markers. Derived from the
+    /// linked route source and rounded up with the route's other template
+    /// overhead to keep the admission calculation stable.
+    pub template_overhead_bytes: u64,
+    /// Maximum per-message role, separator and end marker bytes added by the
+    /// provider's published template.
+    pub per_message_overhead_bytes: u64,
+    /// Maximum fixed wrapper bytes for each declared tool or prior tool call.
+    pub per_tool_wrapper_bytes: u64,
+    /// Maximum fixed wrapper bytes for each serialized tool-call argument.
+    pub per_tool_argument_wrapper_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,11 +52,30 @@ pub enum BillableComponents {
 }
 
 const OUTPUT_CAP: u64 = 2_048;
-const TOKEN_ONLY: RouteCapabilities = RouteCapabilities {
-    max_output_tokens: OUTPUT_CAP,
-    reasoning_included_in_output: true,
-    billable_components: BillableComponents::TextTokensAndFunctionTools,
-};
+const fn text_function_route(
+    template_overhead_bytes: u64,
+    per_message_overhead_bytes: u64,
+    per_tool_wrapper_bytes: u64,
+    per_tool_argument_wrapper_bytes: u64,
+) -> RouteCapabilities {
+    RouteCapabilities {
+        max_output_tokens: OUTPUT_CAP,
+        reasoning_included_in_output: true,
+        billable_components: BillableComponents::TextTokensAndFunctionTools,
+        template_overhead_bytes,
+        per_message_overhead_bytes,
+        per_tool_wrapper_bytes,
+        per_tool_argument_wrapper_bytes,
+    }
+}
+
+// The rounded source-derived byte ceilings are documented per route in
+// docs/ai-usage.md. Each source family has a separate capability value so a
+// route cannot inherit a template bound without an explicit review entry.
+const GLM_53: RouteCapabilities = text_function_route(1_024, 128, 128, 64);
+const GLM_53_FLASH: RouteCapabilities = text_function_route(1_024, 128, 128, 64);
+const KIMI_K2_6: RouteCapabilities = text_function_route(512, 128, 128, 64);
+const DEEPSEEK_V4_FLASH: RouteCapabilities = text_function_route(2_048, 128, 128, 128);
 
 /// Explicit capability allowlist for the current chat-completions adapters.
 /// Inputs are bounded from the exact serialized request bytes; tokenizers are
@@ -52,11 +83,11 @@ const TOKEN_ONLY: RouteCapabilities = RouteCapabilities {
 /// so charging all prompt tokens at the configured uncached input rate is a
 /// conservative upper bound. No hosted or separately billed tools are sent.
 const ROUTE_CAPABILITIES: &[((&str, &str), RouteCapabilities)] = &[
-    (("opencode-go", "glm-5.3-flash"), TOKEN_ONLY),
-    (("opencode-go", "glm-5.3"), TOKEN_ONLY),
-    (("opencode-go", "kimi-k2.6"), TOKEN_ONLY),
-    (("opencode-go", "deepseek-v4-flash"), TOKEN_ONLY),
-    (("zai", "glm-5.3"), TOKEN_ONLY),
+    (("opencode-go", "glm-5.3-flash"), GLM_53_FLASH),
+    (("opencode-go", "glm-5.3"), GLM_53),
+    (("opencode-go", "kimi-k2.6"), KIMI_K2_6),
+    (("opencode-go", "deepseek-v4-flash"), DEEPSEEK_V4_FLASH),
+    (("zai", "glm-5.3"), GLM_53),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,9 +268,40 @@ fn version_for(routes: &BTreeMap<(String, String), RoutePrice>) -> String {
         feed(route.capabilities.max_output_tokens.to_string().as_bytes());
         feed(&[u8::from(route.capabilities.reasoning_included_in_output)]);
         feed(&[route.capabilities.billable_components as u8]);
+        feed(
+            route
+                .capabilities
+                .template_overhead_bytes
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .capabilities
+                .per_message_overhead_bytes
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .capabilities
+                .per_tool_wrapper_bytes
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .capabilities
+                .per_tool_argument_wrapper_bytes
+                .to_string()
+                .as_bytes(),
+        );
         feed(&[0xff]);
     }
-    format!("price-v2-{hash:016x}")
+    format!("price-v3-{hash:016x}")
 }
 
 #[cfg(test)]

@@ -10,6 +10,13 @@ DECLARE
   v_spent bigint;
   v_reserved bigint;
 BEGIN
+  -- INSERT/UPDATE has already locked this tuple. State the lock contract
+  -- explicitly before any hierarchy bucket access so project cap writes and
+  -- legacy ledger writes cannot invert project → bucket ordering.
+  IF TG_OP <> 'INSERT' THEN
+    PERFORM 1 FROM projects WHERE id = NEW.id FOR NO KEY UPDATE;
+  END IF;
+
   IF TG_OP = 'INSERT' THEN
     INSERT INTO ai_usage_limits (scope_kind, scope_id, limit_micros)
     VALUES ('project', NEW.id, NEW.ai_monthly_budget_micros) ON CONFLICT DO NOTHING;
@@ -33,8 +40,9 @@ BEGIN
   IF NEW.workspace_id IS NULL THEN
     RETURN NEW;
   END IF;
-  -- Project budget or workspace assignment updates use the same bucket order
-  -- as admissions. A child update never changes parent allowance.
+  -- The project row is locked before platform → workspace → project buckets.
+  -- Assigning a workspace to an old workspace-less project creates its
+  -- hierarchy lazily; a child update never changes parent allowance.
   INSERT INTO ai_usage_limits (scope_kind, scope_id, limit_micros)
   VALUES ('workspace', NEW.workspace_id, 0) ON CONFLICT DO NOTHING;
   INSERT INTO ai_usage_period_buckets (scope_kind, scope_id, period_start, limit_micros)

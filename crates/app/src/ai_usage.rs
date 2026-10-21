@@ -124,6 +124,21 @@ struct StoredUsageEvidence {
     provider_response_id: Option<String>,
 }
 
+async fn lock_project_bucket_lifecycle(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Option<Uuid>,
+) -> Result<(), AiError> {
+    let Some(project_id) = project_id else {
+        return Ok(());
+    };
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(project_id.to_string())
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| db_failure())?;
+    Ok(())
+}
+
 async fn ensure_bucket_from_limit(
     tx: &mut Transaction<'_, Postgres>,
     scope_kind: &str,
@@ -877,6 +892,10 @@ impl UsageLedger for PostgresUsageLedger {
             let project_id: Option<Uuid> = row.get("project_id");
             let run_budget_id: Uuid = row.get("run_budget_id");
             let period_start: chrono::NaiveDate = row.get("period_start");
+            // Serialize final settlement with project detach before the
+            // hierarchy buckets so detach and settlement always leave one
+            // side responsible for detached-bucket garbage collection.
+            lock_project_bucket_lifecycle(&mut tx, project_id).await?;
             let spent_delta = actual
                 .checked_sub(recognized_cost)
                 .ok_or(AiError::InvalidUsageBound)?;
@@ -1191,6 +1210,7 @@ impl UsageLedger for PostgresUsageLedger {
             let project_id: Option<Uuid> = row.get("project_id");
             let run_budget_id: Uuid = row.get("run_budget_id");
             let period_start: chrono::NaiveDate = row.get("period_start");
+            lock_project_bucket_lifecycle(&mut tx, project_id).await?;
             let reserved_cost: i64 = row.get("reserved_cost_micros");
             let reserved_delta = reserved_cost
                 .checked_neg()
@@ -1640,6 +1660,9 @@ pub async fn resolve_ai_usage_reservation(
     let project_id: Option<Uuid> = row.get("project_id");
     let run_budget_id: Uuid = row.get("run_budget_id");
     let period_start: chrono::NaiveDate = row.get("period_start");
+    lock_project_bucket_lifecycle(&mut tx, project_id)
+        .await
+        .map_err(|_| AiUsageError::Reconciliation)?;
     let reserved: i64 = row.get("reserved_cost_micros");
     let recognized: i64 = row.get("recognized_cost_micros");
     let prior_overage: i64 = row.get("overage_micros");
@@ -1856,7 +1879,7 @@ pub async fn set_ai_usage_cap(
         ),
         AiUsageLimitScope::Project(project_id) => {
             let workspace = sqlx::query_scalar::<_, Uuid>(
-                "SELECT workspace_id FROM projects WHERE id = $1 FOR KEY SHARE",
+                "SELECT workspace_id FROM projects WHERE id = $1 FOR NO KEY UPDATE",
             )
             .bind(project_id.as_uuid())
             .fetch_optional(&mut *tx)
@@ -2121,13 +2144,55 @@ pub async fn reconcile_ai_usage_workspace(
             .map_err(|_| AiUsageError::Reconciliation)?;
         summary.settled_from_observation += 1;
     }
+    let detached_projects_collected = sweep_detached_project_buckets(pool).await?;
     tracing::info!(
         inspected = summary.inspected,
         settled_from_observation = summary.settled_from_observation,
         still_unresolved = summary.still_unresolved,
+        detached_projects_collected,
         "workspace AI usage reconciliation completed"
     );
     Ok(summary)
+}
+
+const DETACHED_BUCKET_SWEEP_BATCH: i64 = 100;
+
+/// Periodic recovery for detached projects whose last liability already
+/// became terminal. Each candidate is rechecked under the same advisory lock
+/// used by project deletion and final settlement before its buckets are removed.
+async fn sweep_detached_project_buckets(pool: &PgPool) -> Result<u64, AiUsageError> {
+    let candidates: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT d.project_id FROM ai_usage_detached_projects d
+         WHERE NOT EXISTS (
+           SELECT 1 FROM ai_usage_reservations r
+           WHERE r.project_id = d.project_id AND r.state IN ('open', 'observed', 'unresolved'))
+         ORDER BY d.project_id
+         LIMIT $1",
+    )
+    .bind(DETACHED_BUCKET_SWEEP_BATCH)
+    .fetch_all(pool)
+    .await?;
+    let mut collected = 0_u64;
+    for project_id in candidates {
+        let mut tx = pool.begin().await?;
+        lock_project_bucket_lifecycle(&mut tx, Some(project_id))
+            .await
+            .map_err(|_| AiUsageError::Reconciliation)?;
+        garbage_collect_detached_project(&mut tx, Some(project_id))
+            .await
+            .map_err(|_| AiUsageError::Reconciliation)?;
+        let still_detached: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM ai_usage_detached_projects WHERE project_id = $1)",
+        )
+        .bind(project_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        if !still_detached {
+            collected = collected.saturating_add(1);
+        }
+    }
+    Ok(collected)
 }
 
 const ALL_PROFILES: [ModelProfile; 5] = [
