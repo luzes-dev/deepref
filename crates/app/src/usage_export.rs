@@ -65,7 +65,9 @@ impl UsageExportReplayParams {
 }
 
 /// Export backlog as SQL reports it. Counters carry no workspace or cost
-/// labels; ages are relative to `now()` on the database.
+/// labels; ages are relative to `now()` on the database. A fact counts as
+/// emitted only when the outbox event with its id *is* its export event; an
+/// unrelated event sharing the id is an identity conflict, not emission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageExportBacklog {
     /// Outbox events of the usage fact contract, emitted so far.
@@ -78,6 +80,10 @@ pub struct UsageExportBacklog {
     /// Correction records without an export event.
     pub unemitted_corrections: i64,
     pub oldest_unemitted_age_seconds: Option<i64>,
+    /// Facts whose id is held by an outbox event that is not their export
+    /// event. They are reported here and refused by the replay; never counted
+    /// as emitted.
+    pub conflicting_facts: i64,
     /// Facts no workspace can be resolved for. They are reported, never
     /// silently exported to no customer and never hidden.
     pub unattributed_facts: i64,
@@ -97,6 +103,37 @@ pub struct UsageExportReplaySummary {
     /// the call's limit.
     pub complete: bool,
     pub backlog: UsageExportBacklog,
+}
+
+/// Export failures the caller can act on. An outbox event that is not this
+/// fact's export event is a collision, never a successful earlier emission:
+/// the replay refuses to lose the fact silently.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UsageExportError {
+    #[error(
+        "usage fact {fact_id} collides with outbox event {fact_id} held by {message_type}; refusing to treat it as emitted"
+    )]
+    EventIdentityConflict { fact_id: Uuid, message_type: String },
+    #[error("usage export replay failed: {0}")]
+    Replay(String),
+}
+
+impl From<anyhow::Error> for UsageExportError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Replay(format!("{error:#}"))
+    }
+}
+
+impl From<serde_json::Error> for UsageExportError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Replay(error.to_string())
+    }
+}
+
+impl From<sqlx::Error> for UsageExportError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Replay(error.to_string())
+    }
 }
 
 /// Which retained source one scan page reads. Both project the same columns,
@@ -127,7 +164,10 @@ impl ScanTarget {
                 FROM ai_usage_ledger l
                 LEFT JOIN projects p ON p.id = l.project_id
                 WHERE COALESCE(l.workspace_id, p.workspace_id) IS NOT NULL
-                  AND NOT EXISTS (SELECT 1 FROM outbox_events e WHERE e.event_id = l.id)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM outbox_events e
+                    WHERE e.event_id = l.id AND e.message_type = $5
+                      AND e.payload->>'fact_id' = l.id::text)
                   AND ($1::timestamptz IS NULL OR l.created_at >= $1)
                   AND ($2::timestamptz IS NULL OR (l.created_at, l.id) > ($2::timestamptz, $3::uuid))
                 ORDER BY l.created_at, l.id
@@ -153,7 +193,10 @@ impl ScanTarget {
                 JOIN ai_usage_ledger l ON l.id = c.ledger_id
                 LEFT JOIN projects p ON p.id = l.project_id
                 WHERE COALESCE(l.workspace_id, p.workspace_id) IS NOT NULL
-                  AND NOT EXISTS (SELECT 1 FROM outbox_events e WHERE e.event_id = c.id)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM outbox_events e
+                    WHERE e.event_id = c.id AND e.message_type = $5
+                      AND e.payload->>'fact_id' = c.id::text)
                   AND ($1::timestamptz IS NULL OR c.created_at >= $1)
                   AND ($2::timestamptz IS NULL OR (c.created_at, c.id) > ($2::timestamptz, $3::uuid))
                 ORDER BY c.created_at, c.id
@@ -189,6 +232,7 @@ async fn scan_page(
         .bind(cursor_time)
         .bind(cursor_id)
         .bind(page_rows)
+        .bind(AiUsageFact::TYPE)
         .fetch_all(&mut **tx)
         .await?;
     let complete = rows.len() < usize::try_from(page_rows).context("page size fits usize")?;
@@ -233,12 +277,47 @@ struct TargetCounts {
     already_emitted: u64,
 }
 
+/// Insert one fact's export event. `false` means this fact's event already
+/// exists (a replayed or concurrent emission). An outbox row that is not this
+/// fact's event is an identity collision and raises instead of being treated
+/// as a successful earlier emission.
+async fn insert_fact_event(
+    tx: &mut Transaction<'_, Postgres>,
+    fact: &AiUsageFact,
+) -> Result<bool, UsageExportError> {
+    let event = NewOutboxEvent::for_message(fact.fact_id, fact)?
+        .with_max_attempts(USAGE_EXPORT_MAX_ATTEMPTS);
+    if insert_outbox_event(tx, &event).await? {
+        return Ok(true);
+    }
+    let existing = sqlx::query(
+        "SELECT message_type, payload->>'fact_id' AS fact_id FROM outbox_events WHERE event_id = $1",
+    )
+    .bind(fact.fact_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let this_fact = existing.as_ref().is_some_and(|row| {
+        row.get::<String, _>("message_type") == AiUsageFact::TYPE
+            && row.get::<Option<String>, _>("fact_id").as_deref()
+                == Some(fact.fact_id.to_string().as_str())
+    });
+    if this_fact {
+        return Ok(false);
+    }
+    Err(UsageExportError::EventIdentityConflict {
+        fact_id: fact.fact_id,
+        message_type: existing
+            .map(|row| row.get::<String, _>("message_type"))
+            .unwrap_or_else(|| "<missing>".to_owned()),
+    })
+}
+
 async fn emit_target(
     pool: &PgPool,
     counters: &UsageExportCounters,
     target: ScanTarget,
     params: &UsageExportReplayParams,
-) -> anyhow::Result<(TargetCounts, bool)> {
+) -> Result<(TargetCounts, bool), UsageExportError> {
     let limit = u64::try_from(params.limit).context("limit fits u64")?;
     let mut counts = TargetCounts::default();
     let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
@@ -250,9 +329,7 @@ async fn emit_target(
         let page = scan_page(&mut tx, target, params, cursor, page_rows).await?;
         let mut emitted = 0_u64;
         for fact in &page.facts {
-            let event = NewOutboxEvent::for_message(fact.fact_id, fact)?
-                .with_max_attempts(USAGE_EXPORT_MAX_ATTEMPTS);
-            if insert_outbox_event(&mut tx, &event).await? {
+            if insert_fact_event(&mut tx, fact).await? {
                 emitted = emitted.saturating_add(1);
             } else {
                 counts.already_emitted = counts.already_emitted.saturating_add(1);
@@ -278,8 +355,12 @@ pub async fn replay_usage_facts(
     pool: &PgPool,
     counters: &UsageExportCounters,
     params: UsageExportReplayParams,
-) -> anyhow::Result<UsageExportReplaySummary> {
-    anyhow::ensure!(params.limit > 0, "replay limit must be positive");
+) -> Result<UsageExportReplaySummary, UsageExportError> {
+    if params.limit <= 0 {
+        return Err(UsageExportError::Replay(
+            "replay limit must be positive".to_owned(),
+        ));
+    }
     let backlog = usage_export_backlog(pool).await?;
     if backlog.unattributed_facts > 0 {
         tracing::warn!(
@@ -317,11 +398,34 @@ pub async fn replay_usage_facts(
     })
 }
 
-/// Current export backlog, including facts no workspace resolves for.
+/// Current export backlog, including identity conflicts and facts no workspace
+/// resolves for. A fact is emitted only when its outbox event is its export
+/// event.
 pub async fn usage_export_backlog(pool: &PgPool) -> anyhow::Result<UsageExportBacklog> {
     let message_type = AiUsageFact::TYPE;
     let row = sqlx::query(
         r#"
+        WITH facts AS (
+          SELECT l.id AS fact_id, l.created_at AS settled_at, 'usage'::text AS fact_kind,
+                 COALESCE(l.workspace_id, p.workspace_id) AS workspace_id
+          FROM ai_usage_ledger l
+          LEFT JOIN projects p ON p.id = l.project_id
+          UNION ALL
+          SELECT c.id, c.created_at, 'correction',
+                 COALESCE(l.workspace_id, p.workspace_id)
+          FROM ai_usage_corrections c
+          JOIN ai_usage_ledger l ON l.id = c.ledger_id
+          LEFT JOIN projects p ON p.id = l.project_id
+        ),
+        emission AS (
+          SELECT f.*,
+                 EXISTS (SELECT 1 FROM outbox_events e
+                   WHERE e.event_id = f.fact_id AND e.message_type = $1
+                     AND e.payload->>'fact_id' = f.fact_id::text) AS emitted,
+                 EXISTS (SELECT 1 FROM outbox_events e WHERE e.event_id = f.fact_id)
+                   AS identity_taken
+          FROM facts f
+        )
         SELECT
           (SELECT count(*) FROM outbox_events
             WHERE message_type = $1 AND message_version = 1)::bigint AS emitted_events,
@@ -331,25 +435,18 @@ pub async fn usage_export_backlog(pool: &PgPool) -> anyhow::Result<UsageExportBa
           (SELECT EXTRACT(EPOCH FROM (now() - min(created_at)))::bigint FROM outbox_events
             WHERE message_type = $1 AND message_version = 1
               AND delivery_state <> 'delivered') AS oldest_pending_age_seconds,
-          (SELECT count(*) FROM ai_usage_ledger l
-            LEFT JOIN projects p ON p.id = l.project_id
-            WHERE COALESCE(l.workspace_id, p.workspace_id) IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM outbox_events e WHERE e.event_id = l.id))::bigint
-            AS unemitted_facts,
-          (SELECT count(*) FROM ai_usage_corrections c
-            WHERE NOT EXISTS (SELECT 1 FROM outbox_events e WHERE e.event_id = c.id))::bigint
-            AS unemitted_corrections,
-          (SELECT EXTRACT(EPOCH FROM (now() - min(l.created_at)))::bigint
-            FROM ai_usage_ledger l
-            LEFT JOIN projects p ON p.id = l.project_id
-            WHERE COALESCE(l.workspace_id, p.workspace_id) IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM outbox_events e WHERE e.event_id = l.id))
-            AS oldest_unemitted_age_seconds,
-          (SELECT count(*) FROM ai_usage_ledger l
-            LEFT JOIN projects p ON p.id = l.project_id
-            WHERE COALESCE(l.workspace_id, p.workspace_id) IS NULL
-              AND NOT EXISTS (SELECT 1 FROM outbox_events e WHERE e.event_id = l.id))::bigint
-            AS unattributed_facts
+          (SELECT count(*) FROM emission
+            WHERE fact_kind = 'usage' AND workspace_id IS NOT NULL
+              AND NOT emitted)::bigint AS unemitted_facts,
+          (SELECT count(*) FROM emission
+            WHERE fact_kind = 'correction' AND workspace_id IS NOT NULL
+              AND NOT emitted)::bigint AS unemitted_corrections,
+          (SELECT EXTRACT(EPOCH FROM (now() - min(settled_at)))::bigint FROM emission
+            WHERE workspace_id IS NOT NULL AND NOT emitted) AS oldest_unemitted_age_seconds,
+          (SELECT count(*) FROM emission
+            WHERE NOT emitted AND identity_taken)::bigint AS conflicting_facts,
+          (SELECT count(*) FROM emission
+            WHERE workspace_id IS NULL AND NOT emitted)::bigint AS unattributed_facts
         "#,
     )
     .bind(message_type)
@@ -362,6 +459,7 @@ pub async fn usage_export_backlog(pool: &PgPool) -> anyhow::Result<UsageExportBa
         unemitted_facts: row.get("unemitted_facts"),
         unemitted_corrections: row.get("unemitted_corrections"),
         oldest_unemitted_age_seconds: row.get("oldest_unemitted_age_seconds"),
+        conflicting_facts: row.get("conflicting_facts"),
         unattributed_facts: row.get("unattributed_facts"),
     })
 }

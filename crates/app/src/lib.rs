@@ -237,7 +237,7 @@ pub use study::{
     remove_report_from_study, rename_study,
 };
 pub use usage_export::{
-    UsageExportBacklog, UsageExportReplayParams, UsageExportReplaySummary,
+    UsageExportBacklog, UsageExportError, UsageExportReplayParams, UsageExportReplaySummary,
     billing_usage_export_handler, replay_usage_facts, usage_export_backlog, usage_export_registry,
 };
 pub use worker_runtime::{
