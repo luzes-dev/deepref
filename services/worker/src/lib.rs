@@ -206,18 +206,34 @@ pub async fn run_with_shutdown(
         config.reconciler_interval,
         reconciler_signal.clone(),
         provider_reconcilers,
+        config.runtime.usage_export.clone(),
     ));
     // The in-process outbox dispatcher (04a) is the outbox recipient until the
-    // trigger-gated JetStream relay (04b) replaces it on the same rows. Its
-    // registry is empty in 04a; production publication starts with 04b.
-    // The inbox processor shell claims nothing
-    // until provider adapters register handlers in 02/08.
+    // trigger-gated JetStream relay (04b) replaces it on the same rows. Usage
+    // export (09 slice B) registers the first production contract; while the
+    // export switch is off no consumer is registered, so nothing is claimed
+    // and no delivery attempt is spent waiting for a billing provider.
+    let usage_export_registry = if config.runtime.usage_export.enabled {
+        let sink: Arc<dyn deepref_application::usage_export::UsageExportSink> =
+            // No billing provider is chosen yet (BUSINESS_DECISIONS.md). The
+            // disabled sink never claims success, so exported events stay
+            // pending until handoff 08 supplies an adapter.
+            Arc::new(deepref_application::usage_export::DisabledUsageExportSink);
+        deepref_app::usage_export_registry(
+            &pool,
+            sink,
+            Arc::new(deepref_application::usage_export::UsageExportCounters::default()),
+        )?
+    } else {
+        tracing::info!("AI usage export is disabled; retained usage facts wait for a later replay");
+        deepref_application::outbox::OutboxRegistry::new()
+    };
     let outbox_task = tokio::spawn(supervise_processor(
         "outbox dispatcher",
         reconciler_shutdown.clone(),
         outbox_dispatch::run(
             pool.clone(),
-            Arc::new(deepref_application::outbox::OutboxRegistry::new()),
+            Arc::new(usage_export_registry),
             owner.clone(),
             outbox_dispatch::OutboxDispatchConfig {
                 batch: 16,

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use deepref_application::{inbox::ProviderReconcilerRegistry, jobs::JobScope};
+use deepref_config::UsageExportConfig;
 use deepref_domain::{JobKind, WorkspaceId};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ pub async fn run(pool: PgPool, interval: Duration, shutdown: watch::Receiver<boo
         interval,
         shutdown,
         Arc::new(ProviderReconcilerRegistry::new()),
+        UsageExportConfig::default(),
     )
     .await;
 }
@@ -35,6 +37,7 @@ pub async fn run_with_provider_reconcilers(
     interval: Duration,
     mut shutdown: watch::Receiver<bool>,
     provider_reconcilers: Arc<ProviderReconcilerRegistry>,
+    usage_export: UsageExportConfig,
 ) {
     let mut ticker = tokio::time::interval(interval);
     loop {
@@ -54,8 +57,37 @@ pub async fn run_with_provider_reconcilers(
         if let Err(error) = enqueue_ai_usage_reconciliation_jobs(&pool).await {
             tracing::error!(%error, "AI usage reconciliation jobs could not be enqueued");
         }
+        if let Err(error) = enqueue_ai_usage_export_replay_job(&pool, &usage_export).await {
+            tracing::error!(%error, "AI usage export replay jobs could not be enqueued");
+        }
         crate::second_review::sweep(&pool).await;
     }
+}
+
+/// Schedule the platform-scoped usage export replay while export is enabled.
+/// The job itself re-checks the switch, so an in-flight schedule after a
+/// disable emits nothing. While disabled no job row is created at all.
+pub async fn enqueue_ai_usage_export_replay_job(
+    pool: &PgPool,
+    usage_export: &UsageExportConfig,
+) -> anyhow::Result<u64> {
+    if !usage_export.enabled {
+        return Ok(0);
+    }
+    let minute = chrono::Utc::now().format("%Y%m%d%H%M").to_string();
+    let dedupe_key = format!("ai_usage_export_replay:{minute}");
+    deepref_app::enqueue_job_pool(
+        pool,
+        &deepref_app::scoped_job(
+            uuid::Uuid::new_v4(),
+            JobScope::Platform,
+            JobKind::AiUsageExportReplay,
+            serde_json::json!({}),
+            dedupe_key,
+        ),
+    )
+    .await?;
+    Ok(1)
 }
 
 async fn enqueue_ai_usage_reconciliation_jobs(pool: &PgPool) -> anyhow::Result<u64> {
