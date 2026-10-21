@@ -13,8 +13,8 @@ still meaningful from the current repository state.
   did not pass. Blocked is not another failure and does not run the command.
 
 The runner is [`scripts/ci/diagnose.py`](../scripts/ci/diagnose.py). It uses only
-the Python standard library, does not import Cargo metadata or `xtask`, and can
-run when the Rust workspace does not compile.
+the Python standard library (Python 3.11+ for `tomllib`), does not import Cargo
+metadata or `xtask`, and can run when the Rust workspace does not compile.
 
 ## Commands
 
