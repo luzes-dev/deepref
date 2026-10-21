@@ -44,6 +44,7 @@ mod second_review;
 mod study;
 #[cfg(feature = "test-support")]
 pub mod test_isolation;
+mod usage_export;
 mod worker_runtime;
 mod workflow_files;
 mod workflows;
@@ -234,6 +235,10 @@ pub use study::{
     create_study_and_assign_report_in_transaction, get_study, get_study_for_report,
     list_reports_for_studies, list_studies, list_study_events, list_ungrouped_included_reports,
     remove_report_from_study, rename_study,
+};
+pub use usage_export::{
+    UsageExportBacklog, UsageExportReplayParams, UsageExportReplaySummary,
+    billing_usage_export_handler, replay_usage_facts, usage_export_backlog, usage_export_registry,
 };
 pub use worker_runtime::{
     MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,

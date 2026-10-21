@@ -221,7 +221,7 @@ fn reservation_and_settlement_use_each_captured_token_rate() {
 
 #[test]
 fn concurrent_index_migrations_are_marked_no_transaction() {
-    for version in [123, 125, 126] {
+    for version in [123, 125, 126, 131] {
         let index_migration = deepref_app::MIGRATOR
             .iter()
             .find(|migration| migration.version == version)
