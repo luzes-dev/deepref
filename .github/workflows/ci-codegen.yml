@@ -27,13 +27,14 @@ jobs:
           sccache: local-bundle
       - name: Set up Node.js
         uses: ./.github/actions/setup-node
-      # The clean-tree assertion is meaningful only after generation reached a
-      # point where its result can be inspected.  If codegen.api fails, the
-      # dependent probe is recorded as blocked instead of producing a second,
-      # misleading red line.
+      # Generation checks are independent; clean-tree verification depends on
+      # both completing successfully.
       - name: Probe generated API artifacts
         continue-on-error: true
         run: python3 scripts/ci/diagnose.py run-check codegen.api
+      - name: Probe authorization coverage artifacts
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check codegen.authz
       - name: Probe clean tree
         continue-on-error: true
         run: python3 scripts/ci/diagnose.py run-check codegen.clean-tree

@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../../../../tests/e2e-test';
+import type { Page } from '@playwright/test';
 
 const project = {
 	id: 'project-1',
@@ -112,11 +113,12 @@ test('navigates to deduplication and resolves a proposal with an auditable decis
 	await page.getByRole('button', { name: 'Accept candidate' }).click();
 	await expect(page.getByText('No pending proposals', { exact: true })).toBeVisible();
 	await expect.poll(() => decisions.length).toBe(1);
+	// The server derives the actor from the session; the client no longer claims one.
 	expect(decisions[0]).toMatchObject({
 		decision: 'accept',
-		actor_kind: 'user',
 		reason: 'Manual deduplication decision: accept'
 	});
+	expect(decisions[0]).not.toHaveProperty('actor_kind');
 });
 
 test('shows a loading state and an empty queue', async ({ page }) => {

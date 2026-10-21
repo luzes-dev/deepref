@@ -42,6 +42,8 @@ jobs:
         with:
           filters: |
             rust:
+              - 'apps/server/**'
+              - 'scripts/ci/**'
               - 'crates/**'
               - 'services/**'
               - 'tools/**'
@@ -56,9 +58,8 @@ jobs:
               - '.github/workflows/ci-rust.yml'
               - '.github/workflows/ci-integration.yml'
               - '.github/actions/setup-rust/**'
-              - 'scripts/ci/diagnose.py'
-              - 'scripts/ci/diagnostics.toml'
             web:
+              - 'scripts/ci/**'
               - 'apps/web/**'
               - 'packages/**'
               - 'package.json'
@@ -68,9 +69,9 @@ jobs:
               - '.github/workflows/ci-web.yml'
               - '.github/workflows/ci-e2e.yml'
               - '.github/actions/setup-node/**'
-              - 'scripts/ci/diagnose.py'
-              - 'scripts/ci/diagnostics.toml'
             codegen:
+              - 'apps/server/**'
+              - 'scripts/ci/**'
               - 'crates/**'
               - 'services/**'
               - 'tools/**'
@@ -86,14 +87,15 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'docs/openapi.json'
+              - 'docs/authorization-matrix.md'
               - 'scripts/check-api-codegen.sh'
               - '.github/workflows/ci.yml'
               - '.github/workflows/ci-codegen.yml'
               - '.github/actions/setup-rust/**'
               - '.github/actions/setup-node/**'
-              - 'scripts/ci/diagnose.py'
-              - 'scripts/ci/diagnostics.toml'
             integration:
+              - 'apps/server/**'
+              - 'scripts/ci/**'
               - 'crates/**'
               - 'services/**'
               - 'tools/**'
@@ -306,9 +308,25 @@ jobs:
           pattern: ci-diagnostics-*
           path: ci-diagnostics-artifacts
       - name: Merge diagnostic reports
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUST_RESULT: ${{ needs.rust-checks.result }}
+          WEB_RESULT: ${{ needs.web-checks.result }}
+          CODEGEN_RESULT: ${{ needs.codegen-checks.result }}
+          INTEGRATION_RESULT: ${{ needs.integration-checks.result }}
+          E2E_RESULT: ${{ needs.e2e-checks.result }}
         run: |
           mkdir -p ci-diagnostics-artifacts
-          python3 scripts/ci/diagnose.py --output ci-diagnostics merge ci-diagnostics-artifacts
+          groups=()
+          [[ "$RUST_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group rust)
+          if [[ "$WEB_RESULT" != skipped || "$CHANGES_RESULT" != success ]]; then
+            groups+=(--expect-group web)
+            [[ "$GITHUB_EVENT_NAME" != pull_request ]] || groups+=(--expect-group fallow)
+          fi
+          [[ "$CODEGEN_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group codegen)
+          [[ "$INTEGRATION_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group integration)
+          [[ "$E2E_RESULT" == skipped && "$CHANGES_RESULT" == success ]] || groups+=(--expect-group e2e)
+          python3 scripts/ci/diagnose.py --output ci-diagnostics merge ci-diagnostics-artifacts "${groups[@]}"
       - name: Publish diagnostic summary
         if: always()
         run: |

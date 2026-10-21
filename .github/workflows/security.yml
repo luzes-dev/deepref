@@ -3,13 +3,15 @@ name: Security
 on:
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
     - cron: "17 3 * * 1"
 
 concurrency:
-  group: security-${{ github.event.pull_request.number || github.ref }}
+  group: security-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -242,7 +244,10 @@ jobs:
       - name: Merge security diagnostics
         run: |
           mkdir -p security-diagnostics-artifacts
-          python3 scripts/ci/diagnose.py --output ci-diagnostics-security merge security-diagnostics-artifacts
+          python3 scripts/ci/diagnose.py --output ci-diagnostics-security merge security-diagnostics-artifacts \
+            --expect-group security-sast --expect-group security-dependencies \
+            --expect-group security-secrets --expect-group security-configuration \
+            --expect-group security-policy
       - name: Publish security diagnostic summary
         if: always()
         run: |

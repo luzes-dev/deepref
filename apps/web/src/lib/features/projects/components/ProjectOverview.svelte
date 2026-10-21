@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
-	import { createGetDependencyStatus } from '#lib/api/generated/health/health.js';
+	import { createGetProjectDependencyStatus } from '#lib/api/generated/health/health.js';
 	import {
 		createGetProjectPrisma,
 		createGetScreeningQueue
@@ -31,9 +31,11 @@
 	const workspace = useProjectWorkspaceContext();
 	const projectId = $derived(workspace.selectedProjectId);
 	// Scoped to this project, like the status badge in the workspace header.
-	const dependenciesQuery = createGetDependencyStatus(
-		() => ({ project_id: projectId ?? undefined }),
-		() => ({ query: { staleTime: 5_000, refetchOnWindowFocus: 'always' } })
+	const dependenciesQuery = createGetProjectDependencyStatus(
+		() => projectId ?? '',
+		() => ({
+			query: { enabled: Boolean(projectId), staleTime: 5_000, refetchOnWindowFocus: 'always' }
+		})
 	);
 	const prismaQuery = createGetProjectPrisma(
 		() => projectId,

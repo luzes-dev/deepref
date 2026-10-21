@@ -32,6 +32,16 @@ description = "Test the xtask support crate."
 command = ["cargo", "test", "-p", "xtask", "--locked"]
 
 [[check]]
+id = "rust.migrations"
+group = "rust"
+description = "Report append-only migration and destructive SQL policy findings."
+command = [
+  "bash",
+  "-c",
+  'exec cargo xtask migrations check --base "${BASE_REF:-origin/main}" --report-only',
+]
+
+[[check]]
 id = "rust.fmt"
 group = "rust"
 description = "Check Rust formatting."
@@ -139,11 +149,18 @@ command = ["pnpm", "run", "generate:api:check"]
 env = { SQLX_OFFLINE = "true" }
 
 [[check]]
+id = "codegen.authz"
+group = "codegen"
+description = "Verify authorization route coverage and generated policy documentation."
+command = ["pnpm", "run", "generate:authz:check"]
+env = { SQLX_OFFLINE = "true" }
+
+[[check]]
 id = "codegen.clean-tree"
 group = "codegen"
 description = "Prove the drift check left the checkout clean."
 command = ["git", "diff", "--exit-code"]
-depends_on = ["codegen.api"]
+depends_on = ["codegen.api", "codegen.authz"]
 
 # ---------------------------------------------------------------------------
 # Database integration

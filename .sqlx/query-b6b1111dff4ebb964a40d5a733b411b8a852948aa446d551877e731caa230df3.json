@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_events e\n               SET last_error = $2,\n                   next_attempt_at = CASE\n                     WHEN EXISTS (\n                       SELECT 1 FROM unnest(e.expected_consumers) AS expected(consumer)\n                       WHERE NOT EXISTS (\n                         SELECT 1 FROM outbox_receipts r\n                         WHERE r.event_id = e.event_id AND r.consumer = expected.consumer))\n                     THEN now()\n                     ELSE COALESCE((\n                       SELECT min(r.next_attempt_at) FROM outbox_receipts r\n                       WHERE r.event_id = e.event_id AND r.state = 'retrying'), now())\n                   END\n               WHERE e.event_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b6b1111dff4ebb964a40d5a733b411b8a852948aa446d551877e731caa230df3"
+}

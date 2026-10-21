@@ -115,6 +115,7 @@ pub async fn handle_step(
     ai_gateway: Option<Arc<dyn AiGateway>>,
     runtime: &deepref_config::RuntimeConfig,
     metadata: &crate::metadata::MetadataClients,
+    documents: &deepref_documents::DocumentStore,
 ) -> anyhow::Result<DeliveryAction> {
     let payload = StepPayload::deserialize(&job.payload)?;
     anyhow::ensure!(
@@ -162,6 +163,7 @@ pub async fn handle_step(
     }
     let context = nodes::Context {
         pool,
+        documents,
         ai: ai_gateway.as_deref(),
         execution: &execution,
         runtime,

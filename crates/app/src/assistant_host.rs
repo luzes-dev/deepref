@@ -27,14 +27,96 @@ use uuid::Uuid;
 const MAX_BLOCK_TEXT_CHARS: usize = 2_000;
 const MAX_REPORT_ABSTRACT_CHARS: usize = 4_000;
 
-#[derive(Debug, Clone)]
+/// Per-call authorization for a durable turn: who the turn runs for, the
+/// audited decision point, and a flag the worker reads to end the run when a
+/// call was refused.
+#[derive(Clone)]
+pub struct HostAuthorization {
+    authorizer: crate::authorization::AuditedAuthorizer,
+    principal: deepref_domain::Principal,
+    refused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl HostAuthorization {
+    pub fn new(
+        authorizer: crate::authorization::AuditedAuthorizer,
+        principal: deepref_domain::Principal,
+    ) -> Self {
+        Self {
+            authorizer,
+            principal,
+            refused: std::sync::Arc::default(),
+        }
+    }
+
+    /// Whether any call of this turn was refused for lack of access.
+    pub fn was_refused(&self) -> bool {
+        self.refused.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Checks `tool` against current grants. Reads PostgreSQL every call:
+    /// removal, downgrade or deactivation is visible to the next call.
+    pub async fn check(&self, project_id: ProjectId, tool: &str) -> Result<(), AiError> {
+        let permission = crate::authorization::assistant_tool_permission(tool);
+        match self
+            .authorizer
+            .require(
+                &self.principal,
+                permission,
+                deepref_domain::authorization::Resource::Project(project_id),
+                None,
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(deepref_application::authorization::AuthzError::Denied(_)) => {
+                self.refused
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Err(AiError::InvalidContext(
+                    "your access to this project has changed; this step was not run".to_owned(),
+                ))
+            }
+            Err(deepref_application::authorization::AuthzError::Store(_)) => Err(
+                AiError::Persistence("authorization is unavailable".to_owned()),
+            ),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct PostgresAssistantToolHost {
     pool: PgPool,
+    authorization: Option<HostAuthorization>,
+}
+
+impl std::fmt::Debug for PostgresAssistantToolHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresAssistantToolHost")
+            .finish_non_exhaustive()
+    }
 }
 
 impl PostgresAssistantToolHost {
     pub fn new(pool: &PgPool) -> Self {
-        Self { pool: pool.clone() }
+        Self {
+            pool: pool.clone(),
+            authorization: None,
+        }
+    }
+
+    /// Authorizes every tool call and plan action with `authorization`. A host
+    /// without it (local development bypass) runs unchecked.
+    #[must_use]
+    pub fn with_authorization(mut self, authorization: HostAuthorization) -> Self {
+        self.authorization = Some(authorization);
+        self
+    }
+
+    async fn authorize(&self, project_id: ProjectId, tool: &str) -> Result<(), AiError> {
+        match &self.authorization {
+            Some(authorization) => authorization.check(project_id, tool).await,
+            None => Ok(()),
+        }
     }
 
     async fn read(&self, project_id: ProjectId, tool: &str, args: Value) -> Result<Value, AiError> {
@@ -95,7 +177,10 @@ impl AssistantToolHost for PostgresAssistantToolHost {
         tool: &'a str,
         args: Value,
     ) -> AiFuture<'a, Value> {
-        Box::pin(async move { self.read(project_id, tool, args).await })
+        Box::pin(async move {
+            self.authorize(project_id, tool).await?;
+            self.read(project_id, tool, args).await
+        })
     }
 
     fn prepare_plan_action<'a>(
@@ -104,6 +189,7 @@ impl AssistantToolHost for PostgresAssistantToolHost {
         action: PlanAction,
     ) -> AiFuture<'a, PlanAction> {
         Box::pin(async move {
+            self.authorize(project_id, &action.tool).await?;
             if action.tool != TOOL_SCREEN_REPORTS {
                 return Ok(action);
             }

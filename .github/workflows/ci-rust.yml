@@ -31,6 +31,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Migration policy compares against the pull request base commit.
+          fetch-depth: 0
       - name: Set up Rust
         uses: ./.github/actions/setup-rust
         with:
@@ -44,8 +46,7 @@ jobs:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
-      # The fmt lane carries three independent policy probes.  They share one
-      # checkout and toolchain, but each failure is collected before the gate.
+      # The fmt lane shares setup across independent policy probes.
       - name: Probe workspace boundaries
         if: matrix.command == 'fmt'
         continue-on-error: true
@@ -54,6 +55,12 @@ jobs:
         if: matrix.command == 'fmt'
         continue-on-error: true
         run: python3 scripts/ci/diagnose.py run-check rust.xtask-tests
+      - name: Probe migration policy (report-only)
+        if: matrix.command == 'fmt'
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: python3 scripts/ci/diagnose.py run-check rust.migrations
       - name: Probe formatting
         if: matrix.command == 'fmt'
         continue-on-error: true

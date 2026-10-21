@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event_id, consumer, state, attempts, attempt_generation, settled_generation, next_attempt_at, last_error, delivered_at\n           FROM outbox_receipts WHERE event_id = $1 ORDER BY consumer",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "event_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "consumer",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "consumer"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "attempt_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "attempt_generation"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "settled_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "settled_generation"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "next_attempt_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "next_attempt_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "delivered_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "delivered_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "cc1afe50990113ad16f1c02a9e7ebc1dcd8cfa71fda977319072e754fa0ec2cd"
+}

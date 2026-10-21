@@ -186,6 +186,10 @@ test('direct, refreshed, and new-tab Settings URLs render the full page', async 
 
 	await page.context().route('**/api/**', async (route) => {
 		const pathname = new URL(route.request().url()).pathname;
+		if (pathname === '/api/me') {
+			await route.fulfill({ json: { auth_enabled: false, user: null } });
+			return;
+		}
 		if (pathname === '/api/settings') {
 			await route.fulfill({ json: initialSettings });
 			return;

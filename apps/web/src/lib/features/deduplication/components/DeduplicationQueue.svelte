@@ -93,8 +93,7 @@
 				proposalId: proposal.id,
 				data: {
 					decision,
-					reason: `Manual deduplication decision: ${decision}`,
-					actor_kind: 'user'
+					reason: `Manual deduplication decision: ${decision}`
 				}
 			});
 			await refreshProposalList();
@@ -121,7 +120,7 @@
 	async function run() {
 		if (isRunning || pendingProposalId) return;
 		isRunning = true;
-		const request: RunDeduplicationRequest = { limit: 100, actor_kind: 'user' };
+		const request: RunDeduplicationRequest = { limit: 100 };
 		try {
 			const response = await runDeduplication.mutateAsync({ projectId, data: request });
 			const result = response.data;

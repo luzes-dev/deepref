@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Reviewer 3: Architecture, layering, crate structure, simplification
 
 Scope: crate layering, where business logic lives, shallow crates and speculative ports, competing patterns, large modules, duplication, and a zero-based target shape. Other reviewers already cover these topics, so this report only cross-references them:

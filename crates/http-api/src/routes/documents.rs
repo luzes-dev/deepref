@@ -737,11 +737,12 @@ async fn persist_uploaded_document(
 pub(crate) async fn upload_document(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     multipart: Multipart,
 ) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let actor = super::actor::extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let store = state
         .document_store
         .as_ref()
@@ -826,9 +827,10 @@ async fn requeue_document(
 pub(crate) async fn reparse_document(
     State(state): State<AppState>,
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
-    let actor = super::actor::extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     ensure_report_scope(&state.pool, project_id, report_id).await?;
     let stored = deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
@@ -868,11 +870,12 @@ pub(crate) async fn reparse_document(
 pub(crate) async fn attach_external_document(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<ExternalDocumentRequest>,
 ) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let actor = super::actor::extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let url =
         deepref_documents::validate_external_url(&input.url).map_err(map_remote_fetch_error)?;
     let original_filename = sanitize_filename(input.original_filename.as_deref());
@@ -950,10 +953,11 @@ async fn attach_external_url(
 pub(crate) async fn attach_open_access_document(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let actor = super::actor::extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let (_, doi) = deepref_app::report_identity(&state.pool, report_id).await?;
     let doi = doi.ok_or_else(|| ApiError::Conflict {
         code: "report_doi_missing".to_owned(),

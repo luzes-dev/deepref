@@ -91,14 +91,16 @@ impl NewExposure {
 const INSERT_EXPOSURES: &str = "
     INSERT INTO ai_opinion_exposures
       (project_id, report_id, stage, exposure_source, audience_actor_kind, audience_actor_id,
+       audience_actor_user_id,
        ai_reviewer_decision_id, proposal_id, ai_run_id, workflow_run_id, exposure_possible_at)
     SELECT x.project_id, x.report_id, x.stage, x.source, x.audience_kind, x.audience_id,
+           x.audience_user_id,
            x.decision_id, x.proposal_id, x.ai_run_id, x.workflow_run_id,
            COALESCE(x.possible_at, now())
     FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[],
-                $7::uuid[], $8::uuid[], $9::uuid[], $10::uuid[], $11::timestamptz[])
-      AS x(project_id, report_id, stage, source, audience_kind, audience_id, decision_id,
-           proposal_id, ai_run_id, workflow_run_id, possible_at)
+                $7::uuid[], $8::uuid[], $9::uuid[], $10::uuid[], $11::uuid[], $12::timestamptz[])
+      AS x(project_id, report_id, stage, source, audience_kind, audience_id, audience_user_id,
+           decision_id, proposal_id, ai_run_id, workflow_run_id, possible_at)
     ON CONFLICT DO NOTHING";
 
 /// Records exposures in one statement, inside the caller's transaction. An
@@ -117,6 +119,7 @@ pub async fn record_exposures_in_transaction(
     let mut sources = Vec::with_capacity(exposures.len());
     let mut audience_kinds = Vec::with_capacity(exposures.len());
     let mut audience_ids = Vec::with_capacity(exposures.len());
+    let mut audience_user_ids = Vec::with_capacity(exposures.len());
     let mut decision_ids = Vec::with_capacity(exposures.len());
     let mut proposal_ids = Vec::with_capacity(exposures.len());
     let mut ai_run_ids = Vec::with_capacity(exposures.len());
@@ -139,6 +142,12 @@ pub async fn record_exposures_in_transaction(
                 .as_ref()
                 .map(|actor| actor.id().to_owned()),
         );
+        audience_user_ids.push(
+            exposure
+                .audience
+                .as_ref()
+                .and_then(|actor| actor.user_id().map(|user_id| user_id.as_uuid())),
+        );
         decision_ids.push(exposure.ai_reviewer_decision_id);
         proposal_ids.push(exposure.proposal_id);
         ai_run_ids.push(exposure.ai_run_id);
@@ -152,6 +161,7 @@ pub async fn record_exposures_in_transaction(
         .bind(sources)
         .bind(audience_kinds)
         .bind(audience_ids)
+        .bind(audience_user_ids)
         .bind(decision_ids)
         .bind(proposal_ids)
         .bind(ai_run_ids)
@@ -289,6 +299,8 @@ pub async fn independent_reviewer_pairs(
     project_id: Uuid,
     stage: Option<&str>,
 ) -> Result<ReviewerPairs, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    crate::legacy_actors::lock_identity_mappings_shared(&mut tx).await?;
     let rows = sqlx::query(
         "SELECT t.decision_id, t.report_id, t.stage, t.ai_decision, t.human_decision,
                 EXISTS (
@@ -296,7 +308,7 @@ pub async fn independent_reviewer_pairs(
                   WHERE o.project_id=t.project_id AND o.report_id=t.report_id AND o.stage=t.stage
                     AND o.exposure_possible_at <= t.human_at
                     AND (o.audience_actor_id IS NULL OR t.actor_id IS NULL
-                         OR (o.audience_actor_kind=t.actor_kind AND o.audience_actor_id=t.actor_id))
+                         OR same_human_actor_identity(o.audience_actor_kind,o.audience_actor_id,o.audience_actor_user_id,t.actor_kind,t.actor_id,t.actor_user_id))
                 ) AS exposed,
                 t.human_at IS NULL AS unverifiable
          FROM (
@@ -306,7 +318,7 @@ pub async fn independent_reviewer_pairs(
                               AND h.decision=p.human_decision AND NOT h.audit_reference
                        THEN CASE WHEN p.resolved_at IS NOT NULL THEN p.human_decision_before_at
                                  ELSE h.created_at END END AS human_at,
-                  h.actor_kind, h.actor_id
+                  h.actor_kind, h.actor_id, h.actor_user_id
            FROM (
              SELECT d.id, d.project_id, d.report_id, d.stage, d.decision, d.resolved_at,
                     d.human_decision_before_at,
@@ -319,7 +331,7 @@ pub async fn independent_reviewer_pairs(
              WHERE d.project_id=$1 AND d.voided_at IS NULL AND ($2::text IS NULL OR d.stage=$2)
            ) p
            LEFT JOIN LATERAL (
-             SELECT e.created_at, e.actor_kind, e.actor_id, e.event_kind, e.decision,
+             SELECT e.created_at, e.actor_kind, e.actor_id, e.actor_user_id, e.event_kind, e.decision,
                (e.notes LIKE '%dual_or%' AND e.notes LIKE '%ai_first_cohort%') IS TRUE AS audit_reference
              FROM screening_events e
              WHERE e.project_id=p.project_id AND e.report_id=p.report_id AND e.stage=p.stage
@@ -329,13 +341,14 @@ pub async fn independent_reviewer_pairs(
            ) h ON true
            WHERE p.human_decision IS NOT NULL
              AND p.human_decision NOT IN ('unscreened', 'not_required')
-         ) t
+           ) t
          ORDER BY t.report_id, t.stage, t.decision_id",
     )
     .bind(project_id)
     .bind(stage)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     let mut pairs = ReviewerPairs::default();
     for row in rows {
         let decode = |column: &str| -> Result<&str, sqlx::Error> { row.try_get(column) };

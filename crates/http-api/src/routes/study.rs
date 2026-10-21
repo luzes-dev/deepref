@@ -21,8 +21,6 @@ use crate::{
     state::AppState,
 };
 
-use super::actor::extract_actor;
-
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct StudyListParams {
     pub cursor: Option<Uuid>,
@@ -425,7 +423,8 @@ pub(crate) async fn list_ungrouped_included_reports(
 pub(crate) async fn create_project_study(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<CreateStudyRequest>,
 ) -> Result<(StatusCode, Json<StudyDto>), ApiError> {
     let title =
@@ -434,7 +433,7 @@ pub(crate) async fn create_project_study(
         project_id: project_id.into(),
         study_id: Uuid::new_v4().into(),
         title,
-        actor: extract_actor(&headers)?,
+        actor: request_actor.actor.clone(),
     };
     let result = deepref_app::create_study(&state.pool, command)
         .await
@@ -497,7 +496,8 @@ pub(crate) async fn get_report_study_membership(
 pub(crate) async fn rename_project_study(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<UpdateStudyRequest>,
 ) -> Result<Json<StudyDto>, ApiError> {
     let title =
@@ -510,7 +510,7 @@ pub(crate) async fn rename_project_study(
             study_id: study_id.into(),
             title,
             expected_revision,
-            actor: extract_actor(&headers)?,
+            actor: request_actor.actor.clone(),
         },
     )
     .await
@@ -551,7 +551,8 @@ pub(crate) async fn list_project_study_history(
 pub(crate) async fn classify_project_study(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<StudyClassificationRequest>,
 ) -> Result<Json<StudyDto>, ApiError> {
     let design = StudyDesign::parse(input.design.trim()).ok_or_else(|| {
@@ -569,7 +570,7 @@ pub(crate) async fn classify_project_study(
                 prediction_or_ai: input.prediction_or_ai.unwrap_or(false),
             },
             expected_revision: non_negative_revision(input.expected_revision)?,
-            actor: extract_actor(&headers)?,
+            actor: request_actor.actor.clone(),
         },
     )
     .await
@@ -589,10 +590,11 @@ pub(crate) async fn classify_project_study(
 pub(crate) async fn put_report_study_membership(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<StudyMembershipRequest>,
 ) -> Result<StudyMembershipResponse, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let expected_revision = non_negative_revision(input.expected_revision)?;
     let result = if let Some(study_id) = input.study_id {
         let result = deepref_app::assign_report_to_study(
@@ -808,7 +810,8 @@ pub(crate) async fn list_report_appraisals(
 pub(crate) async fn complete_report_appraisal(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: axum::http::HeaderMap,
+    _headers: axum::http::HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<CompleteAppraisalRequest>,
 ) -> Result<(StatusCode, Json<AppraisalAssessmentDto>), ApiError> {
     let definition_id = DefinitionId::new(input.definition_id)
@@ -840,7 +843,7 @@ pub(crate) async fn complete_report_appraisal(
             overall_judgment: input.overall_judgment,
             override_reasons: input.override_reasons,
         },
-        extract_actor(&headers)?,
+        request_actor.actor.clone(),
     )
     .await
     .map_err(map_appraisal_error)?;

@@ -34,6 +34,36 @@ pub struct NewAssistantAgentRun {
     pub build_provenance: Value,
     pub answer_message_id: Uuid,
     pub plan_id: Uuid,
+    pub principal: RunPrincipal,
+}
+
+/// Who a durable run acts for, as the API authorized it at enqueue time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunPrincipal {
+    /// An authenticated person; the worker re-checks their grants per call.
+    User(deepref_domain::UserId),
+    /// Authentication was off (local development only).
+    DevelopmentBypass,
+    /// Enqueued without a principal (an older release). Fails closed.
+    Unspecified,
+}
+
+impl RunPrincipal {
+    fn columns(self) -> (Option<Uuid>, Option<&'static str>) {
+        match self {
+            Self::User(user) => (Some(user.as_uuid()), Some("user")),
+            Self::DevelopmentBypass => (None, Some("development_bypass")),
+            Self::Unspecified => (None, None),
+        }
+    }
+
+    fn from_columns(user: Option<Uuid>, mode: Option<&str>) -> Self {
+        match (mode, user) {
+            (Some("user"), Some(user)) => Self::User(deepref_domain::UserId::new(user)),
+            (Some("development_bypass"), None) => Self::DevelopmentBypass,
+            _ => Self::Unspecified,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +88,7 @@ pub struct AssistantAgentRunRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub principal: RunPrincipal,
 }
 
 fn run_from_row(row: &PgRow) -> Result<AssistantAgentRunRecord, AssistantError> {
@@ -86,6 +117,10 @@ fn run_from_row(row: &PgRow) -> Result<AssistantAgentRunRecord, AssistantError> 
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         completed_at: row.get("completed_at"),
+        principal: RunPrincipal::from_columns(
+            row.get("principal_user_id"),
+            row.get::<Option<String>, _>("authz_principal").as_deref(),
+        ),
     })
 }
 
@@ -153,6 +188,7 @@ pub async fn submit_assistant_agent_run(
     actor_id: &str,
     model_route: &Value,
     runtime_version: &str,
+    principal: RunPrincipal,
 ) -> Result<AssistantAgentRunRecord, AssistantError> {
     let mut tx = pool.begin().await?;
     let trigger = crate::assistant::append_assistant_message_tx(
@@ -185,6 +221,7 @@ pub async fn submit_assistant_agent_run(
             build_provenance: Value::Object(Default::default()),
             answer_message_id: Uuid::new_v4(),
             plan_id: Uuid::new_v4(),
+            principal,
         },
     )
     .await;
@@ -246,8 +283,8 @@ pub(crate) async fn create_assistant_agent_run_tx(
         "INSERT INTO assistant_agent_runs
            (id, conversation_id, project_id, trigger_message_id, actor_kind, actor_id,
             status, model_route, semantic_contract_id, runtime_version, build_provenance,
-            answer_message_id, plan_id)
-         VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12)
+            answer_message_id, plan_id, principal_user_id, authz_principal)
+         VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,$10,$11,$12,$13,$14)
          RETURNING id",
     )
     .bind(input.id)
@@ -262,6 +299,8 @@ pub(crate) async fn create_assistant_agent_run_tx(
     .bind(&input.build_provenance)
     .bind(input.answer_message_id)
     .bind(input.plan_id)
+    .bind(input.principal.columns().0)
+    .bind(input.principal.columns().1)
     .fetch_one(&mut **tx)
     .await
     .map_err(|err| {
@@ -275,7 +314,7 @@ pub(crate) async fn create_assistant_agent_run_tx(
         "SELECT id, conversation_id, project_id, trigger_message_id, actor_kind, actor_id, \
           status, model_route, semantic_contract_id, runtime_version, build_provenance, \
           rig_run, effect_log, run_spec_hash, answer_message_id, plan_id, error, \
-          created_at, updated_at, completed_at FROM assistant_agent_runs WHERE id=$1",
+          created_at, updated_at, completed_at, principal_user_id, authz_principal FROM assistant_agent_runs WHERE id=$1",
     )
     .bind(id)
     .fetch_one(&mut **tx)
@@ -291,7 +330,7 @@ pub async fn get_assistant_agent_run(
         "SELECT id, conversation_id, project_id, trigger_message_id, actor_kind, actor_id, \
           status, model_route, semantic_contract_id, runtime_version, build_provenance, \
           rig_run, effect_log, run_spec_hash, answer_message_id, plan_id, error, \
-          created_at, updated_at, completed_at FROM assistant_agent_runs WHERE id=$1",
+          created_at, updated_at, completed_at, principal_user_id, authz_principal FROM assistant_agent_runs WHERE id=$1",
     )
     .bind(run_id)
     .fetch_optional(pool)
@@ -325,7 +364,7 @@ pub async fn begin_assistant_agent_run(
         "SELECT id, conversation_id, project_id, trigger_message_id, actor_kind, actor_id, \
           status, model_route, semantic_contract_id, runtime_version, build_provenance, \
           rig_run, effect_log, run_spec_hash, answer_message_id, plan_id, error, \
-          created_at, updated_at, completed_at FROM assistant_agent_runs WHERE id=$1 FOR UPDATE",
+          created_at, updated_at, completed_at, principal_user_id, authz_principal FROM assistant_agent_runs WHERE id=$1 FOR UPDATE",
     )
     .bind(run_id)
     .fetch_optional(&mut *tx)

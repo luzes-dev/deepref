@@ -532,5 +532,125 @@ class DiagnoseCliTests(unittest.TestCase):
             )
 
 
+    def recovery_manifest(self) -> None:
+        self.write_manifest([
+            {"id": "sample.parent", "group": "sample", "command": python_probe("print('parent')")},
+            {"id": "sample.child", "group": "sample", "command": python_probe("print('child')"),
+             "depends_on": ["sample.parent"]},
+            {"id": "other.root", "group": "other", "command": python_probe("print('unrelated')")},
+        ])
+
+    def test_rerunning_parent_invalidates_previously_passed_descendant(self) -> None:
+        self.recovery_manifest()
+        self.assertEqual(self.cli("run", "sample").returncode, 0)
+        self.assertEqual(self.cli("run-check", "sample.parent").returncode, 0)
+        self.assertNotEqual(self.cli("gate", "sample").returncode, 0)
+        self.assertEqual(self.read_result("sample.child")["status"], "blocked")
+
+    def test_fresh_output_rerun_persists_preserved_results_for_gate(self) -> None:
+        self.recovery_manifest()
+        self.assertEqual(self.cli("run", "sample").returncode, 0)
+        fresh = self.root / "fresh"
+        completed = self.cli("rerun-failed", str(self.output), output=fresh)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.cli("gate", "sample", output=fresh).returncode, 0)
+        self.assertEqual(self.read_result("sample.child", fresh)["status"], "passed")
+
+    def test_rerun_recovers_setup_only_blocked_roots(self) -> None:
+        self.recovery_manifest()
+        self.assertNotEqual(self.cli("gate", "other").returncode, 0)
+        completed = self.cli("rerun-failed", str(self.output))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.read_result("other.root")["status"], "passed")
+        self.assertEqual(self.cli("gate", "other").returncode, 0)
+
+    def test_excerpt_character_and_line_limits_include_truncation_marker(self) -> None:
+        self.write_manifest([
+            {"id": "sample.fail", "group": "sample",
+             "command": python_probe("print('x' * 1000); raise SystemExit(1)")},
+        ], excerpt_chars=20, excerpt_lines=1)
+        self.assertNotEqual(self.cli("run", "sample").returncode, 0)
+        markdown = (self.output / "report.md").read_text()
+        excerpt = markdown.split("~~~~text\n", 1)[1].split("\n~~~~", 1)[0]
+        self.assertLessEqual(len(excerpt), 20)
+        self.assertLessEqual(len(excerpt.splitlines()), 1)
+
+    def test_merge_marks_expected_missing_lane_blocked_without_becoming_gate(self) -> None:
+        self.recovery_manifest()
+        artifact = self.root / "empty-artifacts"
+        artifact.mkdir()
+        completed = self.cli("merge", str(artifact), "--expect-group", "sample")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.read_report()["summary"]["blocked"], 2)
+        self.assertEqual(self.read_report()["summary"]["failed"], 0)
+
+    def test_merge_retains_distinct_failed_logs_for_same_probe(self) -> None:
+        self.write_manifest([
+            {"id": "sample.fail", "group": "sample",
+             "command": python_probe("import os; print(os.environ['EVIDENCE']); raise SystemExit(1)")},
+        ])
+        first = self.root / "first"
+        second = self.root / "second"
+        self.assertNotEqual(self.cli("run", output=first, env={"EVIDENCE": "first failure"}).returncode, 0)
+        self.assertNotEqual(self.cli("run", output=second, env={"EVIDENCE": "second failure"}).returncode, 0)
+        completed = self.cli("merge", str(first), str(second))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = self.read_result("sample.fail")
+        log = (self.output / result["log"]).read_text()
+        self.assertIn("first failure", log)
+        self.assertIn("second failure", log)
+        self.assertEqual(log.count("first failure"), 1)
+        self.assertEqual(log.count("second failure"), 1)
+
+    def test_manifest_rejects_invalid_environment_without_traceback(self) -> None:
+        for env in ({"INVALID=KEY": "value"}, {"KEY": "\0"}):
+            with self.subTest(env=env):
+                self.write_manifest([
+                    {"id": "sample.pass", "group": "sample",
+                     "command": python_probe("print('ok')"), "env": env},
+                ])
+                completed = self.cli("run")
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn("invalid env", completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+
+    def test_empty_argv_argument_is_preserved(self) -> None:
+        self.write_manifest([
+            {"id": "sample.argv", "group": "sample",
+             "command": python_probe("import sys; assert sys.argv[1] == ''", "")},
+        ])
+        completed = self.cli("run")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_manifest_rejects_newline_ids_and_nul_argv(self) -> None:
+        for check_id, command in (
+            ("sample.bad\n", python_probe("print('ok')")),
+            ("sample.bad", python_probe("print('ok')", "\0")),
+        ):
+            with self.subTest(check_id=check_id, command=command):
+                self.write_manifest([
+                    {"id": check_id, "group": "sample", "command": command},
+                ])
+                completed = self.cli("run")
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn("malformed manifest", completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+
+    def test_expected_lane_preserves_failure_while_filling_missing_probes(self) -> None:
+        self.write_manifest([
+            {"id": "sample.fail", "group": "sample",
+             "command": python_probe("raise SystemExit(1)")},
+            {"id": "sample.missing", "group": "sample",
+             "command": python_probe("print('not run')")},
+        ])
+        source = self.root / "partial"
+        self.assertNotEqual(self.cli("run-check", "sample.fail", output=source).returncode, 0)
+        completed = self.cli("merge", str(source), "--expect-group", "sample")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.read_report()["summary"]["failed"], 1)
+        self.assertEqual(self.read_report()["summary"]["blocked"], 1)
+
+
+
 if __name__ == "__main__":
     unittest.main()

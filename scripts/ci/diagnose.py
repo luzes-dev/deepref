@@ -132,7 +132,7 @@ def load_manifest(path: Path) -> Manifest:
             )
 
         check_id = raw.get("id")
-        if not isinstance(check_id, str) or not CHECK_ID_RE.match(check_id):
+        if not isinstance(check_id, str) or not CHECK_ID_RE.fullmatch(check_id):
             raise DiagnosticError(
                 f"malformed manifest {path}: check #{index} has invalid id {check_id!r}"
             )
@@ -142,7 +142,7 @@ def load_manifest(path: Path) -> Manifest:
             )
 
         group = raw.get("group")
-        if not isinstance(group, str) or not CHECK_ID_RE.match(group):
+        if not isinstance(group, str) or not CHECK_ID_RE.fullmatch(group):
             raise DiagnosticError(
                 f"malformed manifest {path}: check {check_id!r} has invalid group {group!r}"
             )
@@ -151,7 +151,8 @@ def load_manifest(path: Path) -> Manifest:
         if (
             not isinstance(command, list)
             or not command
-            or not all(isinstance(argument, str) and argument for argument in command)
+            or not all(isinstance(argument, str) and "\0" not in argument for argument in command)
+            or not command[0]
         ):
             raise DiagnosticError(
                 f"malformed manifest {path}: check {check_id!r} must define a "
@@ -168,7 +169,8 @@ def load_manifest(path: Path) -> Manifest:
 
         env = raw.get("env", {})
         if not isinstance(env, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
+            isinstance(key, str) and key and "=" not in key and "\0" not in key
+            and isinstance(value, str) and "\0" not in value
             for key, value in env.items()
         ):
             raise DiagnosticError(
@@ -208,11 +210,11 @@ def load_manifest(path: Path) -> Manifest:
         )
     excerpt_lines = report_settings.get("excerpt_lines", 60)
     excerpt_chars = report_settings.get("excerpt_chars", 6000)
-    if not isinstance(excerpt_lines, int) or excerpt_lines <= 0:
+    if type(excerpt_lines) is not int or excerpt_lines <= 0:
         raise DiagnosticError(
             f"malformed manifest {path}: report.excerpt_lines must be a positive integer"
         )
-    if not isinstance(excerpt_chars, int) or excerpt_chars <= 0:
+    if type(excerpt_chars) is not int or excerpt_chars <= 0:
         raise DiagnosticError(
             f"malformed manifest {path}: report.excerpt_chars must be a positive integer"
         )
@@ -303,13 +305,13 @@ def _load_json(path: Path) -> dict[str, object]:
 
 def _validate_result(result: Mapping[str, object], source: Path) -> None:
     check_id = result.get("id")
-    if not isinstance(check_id, str) or not CHECK_ID_RE.match(check_id):
+    if not isinstance(check_id, str) or not CHECK_ID_RE.fullmatch(check_id):
         raise DiagnosticError(f"{source}: missing or invalid check id")
     group = result.get("group")
-    if not isinstance(group, str) or not CHECK_ID_RE.match(group):
+    if not isinstance(group, str) or not CHECK_ID_RE.fullmatch(group):
         raise DiagnosticError(f"{source}: missing or invalid group for {check_id}")
     status = result.get("status")
-    if status not in ALL_STATUSES:
+    if not isinstance(status, str) or status not in ALL_STATUSES:
         raise DiagnosticError(f"{source}: invalid status {status!r} for {check_id}")
 
 
@@ -505,7 +507,7 @@ def _clean_log_text(raw: str) -> str:
 
 def _bounded_excerpt(text: str, max_lines: int, max_chars: int) -> str:
     if not text:
-        return "(no diagnostic output captured)"
+        text = "(no diagnostic output captured)"
     lines = text.splitlines()
     if len(lines) > max_lines:
         head = min(max(1, max_lines // 3), max_lines - 1)
@@ -518,9 +520,11 @@ def _bounded_excerpt(text: str, max_lines: int, max_chars: int) -> str:
         )
     excerpt = "\n".join(lines)
     if len(excerpt) > max_chars:
-        excerpt = excerpt[:max_chars].rstrip() + (
-            "\n... (excerpt truncated; see the full log) ..."
-        )
+        marker = "... (excerpt truncated; see the full log)"
+        if max_chars <= len(marker):
+            excerpt = marker[:max_chars]
+        else:
+            excerpt = excerpt[:max_chars - len(marker)].rstrip() + marker
     return excerpt
 
 
@@ -784,11 +788,37 @@ def _validate_groups(manifest: Manifest, groups: Sequence[str]) -> list[str]:
     return list(groups)
 
 
+def _invalidate_descendants(
+    selected: Iterable[str], manifest: Manifest, output_dir: Path,
+    results: dict[str, dict[str, object]],
+) -> None:
+    invalidated = set(selected)
+    changed = True
+    while changed:
+        changed = False
+        for check_id in manifest.order:
+            check = manifest.checks[check_id]
+            if check_id in invalidated or not any(
+                dependency in invalidated for dependency in check.depends_on
+            ):
+                continue
+            invalidated.add(check_id)
+            changed = True
+            if results.get(check_id, {}).get("status") == STATUS_PASSED:
+                result = _blocked_result(
+                    check, ["prerequisite rerun; probe must run again"], output_dir
+                )
+                _save_result(output_dir, result)
+                results[check_id] = result
+
+
 def command_run_check(manifest: Manifest, output_dir: Path, check_id: str) -> int:
     check = manifest.checks.get(check_id)
     if check is None:
         raise DiagnosticError(f"unknown check id {check_id!r}")
     results = load_results(output_dir)
+    _invalidate_descendants([check_id], manifest, output_dir, results)
+    _result_path(output_dir, check_id).unlink(missing_ok=True)
     result = _run_check(check, results, output_dir)
     # Blocked means the probe was not meaningful, not that it produced a new
     # failure.  The lane gate is responsible for turning blocked into red.
@@ -820,6 +850,7 @@ def command_run(
         _log_path(output_dir, check_id).unlink(missing_ok=True)
 
     results = load_results(output_dir)
+    _invalidate_descendants(selected, manifest, output_dir, results)
     for check_id in _topological_order(selected, manifest):
         result = _run_check(manifest.checks[check_id], results, output_dir)
         results[check_id] = result
@@ -986,6 +1017,10 @@ def command_rerun_failed(
             check_id for check_id in manifest.order if check_id in selected
         ))
     results = previous
+    _invalidate_descendants(selected, manifest, output_dir, results)
+    for check_id, result in results.items():
+        if check_id not in selected:
+            _save_result(output_dir, result)
     for check_id in selected:
         _result_path(output_dir, check_id).unlink(missing_ok=True)
         _log_path(output_dir, check_id).unlink(missing_ok=True)
@@ -1081,16 +1116,35 @@ def _result_rank(
 
 
 def command_merge(
-    manifest: Manifest, output_dir: Path, raw_paths: Sequence[str]
+    manifest: Manifest, output_dir: Path, raw_paths: Sequence[str],
+    expected_groups: Sequence[str] = (),
 ) -> int:
     if not raw_paths:
         raise DiagnosticError("merge requires at least one report or diagnostic directory")
+    groups = _validate_groups(manifest, expected_groups)
 
     chosen: dict[str, tuple[dict[str, object], Path]] = {}
+    failed_logs: dict[str, list[bytes]] = {}
+    failed_errors: dict[str, list[str]] = {}
     for raw_path in raw_paths:
         path = _resolve_path(raw_path)
         for result, base in _load_results_from_path(path, output_dir):
             check_id = str(result["id"])
+            if result["status"] == STATUS_FAILED:
+                log = result.get("log")
+                if isinstance(log, str) and log:
+                    source = Path(log)
+                    if not source.is_absolute():
+                        source = base / source
+                    try:
+                        content = source.read_bytes()
+                    except OSError:
+                        content = None
+                    if content is not None and content not in failed_logs.setdefault(check_id, []):
+                        failed_logs[check_id].append(content)
+                error = result.get("error")
+                if isinstance(error, str) and error not in failed_errors.setdefault(check_id, []):
+                    failed_errors[check_id].append(error)
             current = chosen.get(check_id)
             if current is None or _result_rank(result, base) > _result_rank(
                 current[0], current[1]
@@ -1101,8 +1155,27 @@ def command_merge(
     for check_id in sorted(chosen):
         result, base = chosen[check_id]
         materialized = _materialize_log(result, base, output_dir)
+        evidence = failed_logs.get(check_id, [])
+        if len(evidence) > 1:
+            target = _log_path(output_dir, check_id)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"\n\n--- Additional failed diagnostic observation ---\n\n".join(evidence))
+            materialized["log"] = f"logs/{check_id}.log"
+        errors = failed_errors.get(check_id, [])
+        if errors:
+            materialized["error"] = "; ".join(errors)
         results[check_id] = materialized
         _save_result(output_dir, materialized)
+
+    for check_id in manifest.checks_in_groups(groups):
+        if check_id not in results:
+            result = _blocked_result(
+                manifest.checks[check_id],
+                ["not reached (expected lane artifact or probe result missing)"],
+                output_dir,
+            )
+            results[check_id] = result
+            _save_result(output_dir, result)
 
     report = write_report(
         results,
@@ -1177,6 +1250,10 @@ def build_parser() -> argparse.ArgumentParser:
         "merge", help="merge lane reports/diagnostic directories into one report"
     )
     merge.add_argument("paths", nargs="+")
+    merge.add_argument(
+        "--expect-group", action="append", default=[], metavar="GROUP",
+        help="mark absent probes in this expected lane blocked (repeatable; not a gate)",
+    )
 
     return parser
 
@@ -1201,7 +1278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest, output_dir, _resolve_path(args.report)
             )
         if args.command == "merge":
-            return command_merge(manifest, output_dir, args.paths)
+            return command_merge(manifest, output_dir, args.paths, args.expect_group)
         raise DiagnosticError(f"unknown command {args.command!r}")
     except DiagnosticError as exc:
         print(f"diagnose: {exc}", file=sys.stderr)

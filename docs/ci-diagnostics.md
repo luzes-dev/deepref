@@ -34,6 +34,9 @@ python3 scripts/ci/diagnose.py rerun-failed target/ci-diagnostics/report.json
 
 # Merge lane reports/artifact directories (aggregate observability)
 python3 scripts/ci/diagnose.py merge diagnostics-artifacts
+
+# Keep a missing lane visible when its artifact could not be uploaded
+python3 scripts/ci/diagnose.py merge diagnostics-artifacts --expect-group web
 ```
 
 Groups are `rust`, `web`, `fallow`, `codegen`, `integration`, `e2e`,
@@ -53,6 +56,11 @@ just diagnose-full
 `diagnose-failed` keeps passed probes untouched. A blocked probe is selected only
 when every dependency is already passed or is itself being rerun. `diagnose-full`
 is the final confidence pass before handoff.
+
+Setup-only blocked probes are also eligible once their dependencies are satisfied.
+Rerunning a prerequisite invalidates previously passing descendants: they must be
+evaluated again before the gate can pass. Importing a report into a fresh
+`--output` directory preserves both known-green results and their full logs.
 
 ## Report layout
 
@@ -92,10 +100,11 @@ BLOCKED  integration.sqlx
 BLOCKED  integration.tests
 ```
 
-The same rule applies to `codegen.clean-tree` after `codegen.api` and to
-`e2e.browser` after `e2e.build`. Setup failures (checkout, toolchain, dependencies,
-database, browsers) remain fail-fast; the gate marks probes that never ran as
-blocked.
+The same rule applies to `codegen.clean-tree` after `codegen.api` and
+`codegen.authz`, and to `e2e.browser` after `e2e.build`. Setup failures (checkout,
+toolchain, dependencies, database, browsers) remain fail-fast; the gate marks
+probes that never ran as blocked. The Rust migration-policy probe preserves the
+existing report-only policy; its findings do not become a new enforcement gate.
 
 ## GitHub Actions
 
@@ -104,6 +113,10 @@ step with `if: always()` restores strict semantics. Lanes upload
 `ci-diagnostics-*` artifacts. The non-required `CI diagnostics` job in
 [`ci.yml`](../.github/workflows/ci.yml) downloads them, merges all lane results,
 and writes the combined table to the workflow summary.
+
+Expected groups are supplied to the merge so a lane with no available artifact
+still appears as blocked. This does not turn aggregate reporting into another
+required gate; the lane and external required checks retain the decision.
 
 The Security workflow follows the same model inside its dependency, repository
 policy, scanner, and configuration jobs. The external required checks remain

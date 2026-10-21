@@ -4,10 +4,9 @@ useDefault = true
 # DeepRef-specific allowlists belong here only for verified false positives or
 # intentional test fixtures. Never allowlist a real credential.
 #
-# The Playwright E2E fixtures in these two files build placeholder `doi_key`
-# values (`test-doi-key`, base64-encoded page numbers) for mocked API responses.
-# Match both the path and the `doi_key` line so unrelated findings in the same
-# files are still reported.
+# Historical Playwright fixtures use base64-encoded mock DOI values, not
+# credentials. Match only verified literals (including the pagination template)
+# so a new credential in a doi_key field is still reported.
 [[allowlists]]
 description = "Placeholder doi_key values in Playwright API fixtures"
 targetRules = ["generic-api-key"]
@@ -17,7 +16,7 @@ paths = [
   '''^apps/web/src/routes/projects/\[projectId\]/graph/page\.svelte\.e2e\.ts$''',
 ]
 regexTarget = "line"
-regexes = ['''doi_key:\s*['"`][^'"`]+['"`]''']
+regexes = ['''doi_key:\s*['"`](MTAuMS9zb3VyY2U|MTAuMi9yZXZpZXc|MTAuMy9hcmNoaXZl|MTAuNC9wYWdlLTE\$\{index\}|MTAuMS90YXJnZXQ|MTAuMS90aGlyZA)['"`]''']
 
 # `.env.example` documents the variable shape with an explicit replace-me
 # placeholder; it is not a usable credential.

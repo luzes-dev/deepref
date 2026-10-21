@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_events\n               SET delivery_state = 'quarantined', last_error = $2,\n                   lease_owner = NULL, lease_expires_at = NULL\n               WHERE event_id = $1 AND delivery_state = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b9cc9c97004d3cffd4cf82bb116b93230ca5e90d7545105e8463c4f6d41baf5"
+}

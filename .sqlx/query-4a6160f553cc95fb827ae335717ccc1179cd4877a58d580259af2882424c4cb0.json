@@ -1,0 +1,115 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH candidate AS (\n             SELECT e.event_id FROM outbox_events e\n             JOIN jsonb_to_recordset($4::jsonb)\n               AS contract(message_type text, message_version integer, consumers text[])\n               USING (message_type, message_version)\n             WHERE e.delivery_state='pending' AND e.lease_owner IS NULL\n               AND e.next_attempt_at <= clock_timestamp()\n               AND e.expected_consumers <@ contract.consumers\n             ORDER BY e.created_at,e.event_id FOR UPDATE OF e SKIP LOCKED LIMIT $3\n           )\n           UPDATE outbox_events e\n           SET lease_owner=$1,\n               lease_expires_at=clock_timestamp()+($2::double precision*interval '1 millisecond'),\n               attempts=e.attempts+1,claim_generation=e.claim_generation+1\n           FROM candidate WHERE e.event_id=candidate.event_id\n           RETURNING e.event_id,e.message_type,e.message_version,e.payload,\n                     e.expected_consumers,e.attempts,e.max_attempts,e.claim_generation",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "event_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "message_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "message_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "message_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "message_version"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "payload",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "payload"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "expected_consumers",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "expected_consumers"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "max_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "max_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "claim_generation",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "claim_generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4a6160f553cc95fb827ae335717ccc1179cd4877a58d580259af2882424c4cb0"
+}

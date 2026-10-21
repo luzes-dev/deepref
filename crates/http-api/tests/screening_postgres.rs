@@ -95,6 +95,12 @@ async fn postgres_screening_enforces_transition_and_project_boundaries() {
     let Some(pool) = database().await else {
         return;
     };
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        api_config().runtime.development_principal_enabled(),
+    )
+    .await
+    .expect("development principal is initialized for the auth-off runtime");
 
     let project_id = Uuid::new_v4();
     let other_project_id = Uuid::new_v4();
@@ -328,6 +334,12 @@ async fn screening_conflicts_and_history_contracts_include_reconciliation_state(
     let Some(pool) = database().await else {
         return;
     };
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        api_config().runtime.development_principal_enabled(),
+    )
+    .await
+    .expect("development principal is initialized for the auth-off runtime");
     let project_id = Uuid::new_v4();
     let report_id = Uuid::new_v4();
     let protocol_id = Uuid::new_v4();
