@@ -11,8 +11,6 @@ jobs:
     name: Browser tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      E2E_SKIP_WEB_BUILD: "1"
     steps:
       - name: Checkout trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

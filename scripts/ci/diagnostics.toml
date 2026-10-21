@@ -219,6 +219,7 @@ group = "e2e"
 description = "Run the Playwright browser and visual suites."
 command = ["pnpm", "--filter", "@deepref/web", "test:e2e"]
 depends_on = ["e2e.build"]
+env = { E2E_SKIP_WEB_BUILD = "1" }
 
 # ---------------------------------------------------------------------------
 # Security: dependency policy
