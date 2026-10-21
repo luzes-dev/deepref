@@ -7,6 +7,9 @@
 use deepref_http_api::authz::matrix;
 
 fn main() -> anyhow::Result<()> {
+    // Generator-only flags select stdout or a repository root to check; argv[0]
+    // is discarded and is never used as executable identity or authorization.
+    // nosemgrep: rust.lang.security.args.args
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [] => {
