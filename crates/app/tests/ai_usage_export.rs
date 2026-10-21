@@ -20,19 +20,23 @@ use deepref_ai::{
     UsageReservationRequest,
 };
 use deepref_app::outbox::{
-    claim_outbox_batch, dispatch_outbox_batch, dispatch_outbox_event, list_outbox_receipts,
+    claim_outbox_batch, dispatch_outbox_batch, dispatch_outbox_event, insert_outbox_event,
+    list_outbox_receipts,
 };
 use deepref_app::{
-    PostgresUsageLedger, UsageExportReplayParams, billing_usage_export_handler, replay_usage_facts,
-    usage_export_backlog, usage_export_registry,
+    AiUsageError, PostgresUsageLedger, UsageExportError, UsageExportReplayParams,
+    ai_usage_rollout_gates, billing_usage_export_handler, disable_ai_hard_caps,
+    enable_ai_usage_export, enqueue_job_pool, replay_usage_facts, scoped_job, usage_export_backlog,
+    usage_export_registry,
 };
-use deepref_application::outbox::{DeliveryContext, OutboxMessage, OutboxRegistry};
+use deepref_application::jobs::JobScope;
+use deepref_application::outbox::{DeliveryContext, NewOutboxEvent, OutboxMessage, OutboxRegistry};
 use deepref_application::usage_export::{
     AiUsageFact, DisabledUsageExportSink, ScriptedUsageExportSink, USAGE_EXPORT_CONSUMER,
     UsageExportCounters, UsageExportOutcome, UsageExportSink,
 };
-use deepref_domain::{ProjectId, WorkspaceId};
-use serde_json::Value;
+use deepref_domain::{ProjectId, UserId, WorkspaceId};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -259,28 +263,72 @@ async fn replay_is_idempotent_across_runs_and_concurrent_tasks() -> Result<()> {
     replay_usage_facts(&pool, &counters, UsageExportReplayParams::enabled(500)).await?;
     assert_eq!(fact_event_count(&pool).await, 5);
 
-    // Two concurrent replay tasks converge on the same single row per fact.
-    let left_counters = UsageExportCounters::default();
-    let right_counters = UsageExportCounters::default();
-    let (left, right) = tokio::join!(
-        replay_usage_facts(&pool, &left_counters, UsageExportReplayParams::enabled(500)),
-        replay_usage_facts(
-            &pool,
-            &right_counters,
-            UsageExportReplayParams::enabled(500)
-        ),
+    // Fresh, still unemitted facts: two replay tasks start together on the
+    // same unemitted page and race to insert the same events.
+    let mut fresh: Vec<Uuid> = Vec::new();
+    for _ in 0..8 {
+        fresh.push(settled_fact(&pool, project, 100).await);
+    }
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..2 {
+        let pool = pool.clone();
+        let barrier = Arc::clone(&barrier);
+        tasks.spawn(async move {
+            barrier.wait().await;
+            let counters = UsageExportCounters::default();
+            replay_usage_facts(&pool, &counters, UsageExportReplayParams::enabled(500))
+                .await
+                .expect("concurrent replay completes")
+        });
+    }
+    let mut summaries = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        let summary = result.expect("replay task joins");
+        assert_eq!(
+            summary.facts_scanned,
+            summary.facts_emitted + summary.facts_already_emitted,
+            "every scanned fact is either emitted or already emitted"
+        );
+        summaries.push(summary);
+    }
+    let emitted: u64 = summaries.iter().map(|summary| summary.facts_emitted).sum();
+    assert_eq!(
+        emitted, 8,
+        "concurrent replay emits each fresh fact exactly once"
     );
-    assert!(left?.complete);
-    assert!(right?.complete);
-    assert_eq!(fact_event_count(&pool).await, 5);
+    assert!(
+        summaries
+            .iter()
+            .map(|summary| summary.facts_scanned)
+            .sum::<u64>()
+            >= 8,
+        "both tasks scanned the unemitted page"
+    );
+    assert_eq!(fact_event_count(&pool).await, 13);
+
     let event_ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT event_id FROM outbox_events WHERE message_type='ai_usage.fact' ORDER BY event_id",
     )
     .fetch_all(&pool)
     .await?;
     let mut expected = facts.clone();
+    expected.extend(fresh);
     expected.sort();
-    assert_eq!(event_ids, expected);
+    assert_eq!(event_ids, expected, "exactly one outbox row per fact");
+    let distinct: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT event_id) FROM outbox_events WHERE message_type='ai_usage.fact'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(distinct, 13, "no fact id was emitted twice");
+
+    // A later replay finds nothing left to emit.
+    let summary =
+        replay_usage_facts(&pool, &counters, UsageExportReplayParams::enabled(500)).await?;
+    assert!(summary.complete);
+    assert_eq!(summary.facts_emitted, 0);
+    assert_eq!(fact_event_count(&pool).await, 13);
     Ok(())
 }
 
@@ -859,5 +907,303 @@ async fn the_export_contract_registers_one_consumer_and_binds_fact_id_to_the_eve
         ),
         "a mismatched fact id is terminal, not a retry"
     );
+    Ok(())
+}
+
+async fn operator(pool: &PgPool) -> UserId {
+    let operator = UserId::new(Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO users (id, workos_user_id, primary_email, status)
+         VALUES ($1, $2, $3, 'active')",
+    )
+    .bind(operator.as_uuid())
+    .bind(format!("usage-export-operator-{}", operator.as_uuid()))
+    .bind(format!("usage-export-{}@example.test", operator.as_uuid()))
+    .execute(pool)
+    .await
+    .expect("operator user exists for audit provenance");
+    operator
+}
+
+/// One live worker heartbeat. `known_job_kinds: None` is a binary that
+/// predates capability declaration.
+async fn heartbeat(pool: &PgPool, owner: &str, known_job_kinds: Option<Vec<String>>) {
+    sqlx::query(
+        "INSERT INTO worker_heartbeats (owner, known_job_kinds, seen_at) VALUES ($1, $2, now())",
+    )
+    .bind(owner)
+    .bind(known_job_kinds)
+    .execute(pool)
+    .await
+    .expect("worker heartbeat inserts");
+}
+
+async fn insert_correction(
+    pool: &PgPool,
+    correction_id: Uuid,
+    ledger_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO ai_usage_corrections
+           (id, ledger_id, original_cost_micros, corrected_cost_micros,
+            original_price_version, corrected_price_version, reason)
+         VALUES ($1, $2, 100, 150, 'test-price-v1', 'test-price-v2', 'price table corrected')",
+    )
+    .bind(correction_id)
+    .bind(ledger_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn jobs_of_kind_in_state(pool: &PgPool, kind: &str, state: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind=$1 AND state=$2")
+        .bind(kind)
+        .bind(state)
+        .fetch_one(pool)
+        .await
+        .expect("job count")
+}
+
+/// Rollout gate (N-1 compatibility): `enable-export` refuses while any live
+/// worker binary does not decode the replay job kind.
+#[tokio::test]
+async fn enable_export_refuses_until_the_fleet_decodes_the_kind() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let operator = operator(&pool).await;
+    heartbeat(&pool, "deepref-worker-pre-capability", None).await;
+    let error = enable_ai_usage_export(&pool, operator, 60)
+        .await
+        .expect_err("a heartbeat without the declaration is an old binary");
+    assert!(matches!(error, AiUsageError::UsageExportGate(_)));
+    assert!(!ai_usage_rollout_gates(&pool).await?.export_activated);
+
+    heartbeat(
+        &pool,
+        "deepref-worker-09a",
+        Some(vec![
+            "ai_usage_reconcile".to_owned(),
+            "durable_run_step".to_owned(),
+        ]),
+    )
+    .await;
+    let error = enable_ai_usage_export(&pool, operator, 60)
+        .await
+        .expect_err("a binary that decodes only the 09a kinds is still too old");
+    assert!(matches!(error, AiUsageError::UsageExportGate(_)));
+
+    sqlx::query("UPDATE worker_heartbeats SET known_job_kinds = $2 WHERE owner = $1")
+        .bind("deepref-worker-09a")
+        .bind(vec![
+            "ai_usage_reconcile".to_owned(),
+            "ai_usage_export_replay".to_owned(),
+            "durable_run_step".to_owned(),
+        ])
+        .execute(&pool)
+        .await
+        .expect("worker upgrades");
+    sqlx::query("DELETE FROM worker_heartbeats WHERE owner = 'deepref-worker-pre-capability'")
+        .execute(&pool)
+        .await
+        .expect("old worker drains");
+    enable_ai_usage_export(&pool, operator, 60)
+        .await
+        .expect("every live worker decodes the kind");
+    assert!(ai_usage_rollout_gates(&pool).await?.export_activated);
+    Ok(())
+}
+
+/// Rollout gate (N-1 compatibility): `enable-export` refuses while N-1 AI
+/// dispatchers are still writing legacy ledger rows.
+#[tokio::test]
+async fn enable_export_refuses_during_the_n1_quiet_window() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let operator = operator(&pool).await;
+    sqlx::query(
+        "UPDATE ai_usage_rollout_state SET last_legacy_ledger_insert_at = now() WHERE singleton",
+    )
+    .execute(&pool)
+    .await
+    .expect("an N-1 dispatcher just wrote a legacy ledger row");
+    let error = enable_ai_usage_export(&pool, operator, 300)
+        .await
+        .expect_err("N-1 activity inside the quiet window keeps the gate closed");
+    assert!(matches!(error, AiUsageError::UsageExportGate(_)));
+
+    sqlx::query(
+        "UPDATE ai_usage_rollout_state
+         SET last_legacy_ledger_insert_at = now() - interval '1 hour' WHERE singleton",
+    )
+    .execute(&pool)
+    .await
+    .expect("the quiet window passes");
+    enable_ai_usage_export(&pool, operator, 300)
+        .await
+        .expect("the quiet window is quiet");
+    Ok(())
+}
+
+/// Rollout gate symmetry: rolling back hard caps parks the queued recovery
+/// jobs of the kind only N decodes, before any N-1 binary can claim one.
+#[tokio::test]
+async fn disable_hard_caps_parks_queued_reconcile_jobs() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let (_project, workspace) = fixture(&pool).await;
+    let operator = operator(&pool).await;
+    for _ in 0..2 {
+        enqueue_job_pool(
+            &pool,
+            &scoped_job(
+                Uuid::new_v4(),
+                JobScope::Workspace(workspace),
+                deepref_domain::JobKind::AiUsageReconcile,
+                json!({}),
+                format!("n1-compat:reconcile:{}", Uuid::new_v4()),
+            ),
+        )
+        .await?;
+    }
+    assert_eq!(
+        jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "queued").await,
+        2
+    );
+    disable_ai_hard_caps(&pool, operator).await?;
+    assert_eq!(
+        jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "queued").await,
+        0
+    );
+    assert_eq!(
+        jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "failed").await,
+        2
+    );
+    Ok(())
+}
+
+/// Usage facts and correction records share one id namespace, enforced for
+/// every writer (including N-1 ledger inserts) by the database.
+#[tokio::test]
+async fn fact_ids_form_one_shared_namespace() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let (project, _workspace) = fixture(&pool).await;
+    let fact = settled_fact(&pool, project, 100).await;
+
+    let error = insert_correction(&pool, fact, fact)
+        .await
+        .expect_err("a correction may not reuse a usage fact id");
+    assert!(
+        error
+            .to_string()
+            .contains("already used by another fact record"),
+        "{error}"
+    );
+
+    let correction = Uuid::new_v4();
+    insert_correction(&pool, correction, fact).await?;
+    let error = sqlx::query(
+        "INSERT INTO ai_usage_ledger
+           (id, workspace_id, reservation_id, profile, provider, model, purpose,
+            input_tokens, output_tokens, cost_micros, price_version)
+         VALUES ($1, $2, $3, 'reasoning', 'test-provider', 'test-model', 'structured',
+            10, 5, 15, 'test-price-v1')",
+    )
+    .bind(correction)
+    .bind(Uuid::new_v4())
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .expect_err("a usage fact may not reuse a correction id");
+    assert!(
+        error
+            .to_string()
+            .contains("already used by another fact record"),
+        "{error}"
+    );
+
+    // Re-registering the same fact row id is that row's own primary key to
+    // decide, and fact ids are never rewritten.
+    sqlx::query("UPDATE ai_usage_ledger SET profile = 'renamed' WHERE id = $1")
+        .bind(fact)
+        .execute(&pool)
+        .await
+        .expect("facts may be updated");
+    let error = sqlx::query("UPDATE ai_usage_ledger SET id = $2 WHERE id = $1")
+        .bind(fact)
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect_err("fact ids are immutable");
+    assert!(error.to_string().contains("immutable"), "{error}");
+    Ok(())
+}
+
+/// An outbox event that is not this fact's export event is an identity
+/// collision: the replay refuses it loudly and the backlog never counts the
+/// fact as emitted.
+#[tokio::test]
+async fn an_unrelated_outbox_event_cannot_shadow_a_fact() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let (project, _workspace) = fixture(&pool).await;
+    let fact = settled_fact(&pool, project, 100).await;
+
+    let mut tx = pool.begin().await?;
+    insert_outbox_event(
+        &mut tx,
+        &NewOutboxEvent::untyped(
+            fact,
+            "test.unrelated",
+            1,
+            json!({"note": "squatting"}),
+            &["someone-else"],
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+
+    let error = replay_usage_facts(
+        &pool,
+        &UsageExportCounters::default(),
+        UsageExportReplayParams::enabled(500),
+    )
+    .await
+    .expect_err("the collision is not a successful earlier emission");
+    assert!(
+        matches!(
+            &error,
+            UsageExportError::EventIdentityConflict { fact_id, message_type }
+                if *fact_id == fact && message_type == "test.unrelated"
+        ),
+        "{error:?}"
+    );
+    let backlog = usage_export_backlog(&pool).await?;
+    assert_eq!(backlog.conflicting_facts, 1);
+    assert_eq!(
+        backlog.unemitted_facts, 1,
+        "the fact is never counted as emitted"
+    );
+    assert_eq!(backlog.emitted_events, 0);
+
+    // The fact is still not lost: later replays keep refusing loudly instead
+    // of skipping it forever.
+    let error = replay_usage_facts(
+        &pool,
+        &UsageExportCounters::default(),
+        UsageExportReplayParams::enabled(500),
+    )
+    .await
+    .expect_err("the collision persists until an operator resolves it");
+    assert!(matches!(
+        error,
+        UsageExportError::EventIdentityConflict { .. }
+    ));
     Ok(())
 }
