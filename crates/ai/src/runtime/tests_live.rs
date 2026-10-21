@@ -266,14 +266,17 @@ async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     assert_eq!(outcome.output_tokens, 10);
     let entries = ledger.entries.lock().expect("entries lock").clone();
     assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    assert_eq!(entry.purpose, "chat");
-    assert_eq!(entry.provider, "test-provider");
-    assert_eq!(entry.model, "test-model");
-    assert_eq!(entry.input_tokens, 100);
-    assert_eq!(entry.output_tokens, 10);
+    let (request, observation) = &entries[0];
+    assert_eq!(request.purpose, "assistant");
+    assert_eq!(request.provider, "test-provider");
+    assert_eq!(request.model, "test-model");
+    assert_eq!(observation.input_tokens, 100);
+    assert_eq!(observation.output_tokens, 10);
     assert_eq!(
-        entry.cost_micros,
+        request
+            .price
+            .actual_cost_micros(observation)
+            .expect("price"),
         PriceBook::default().estimate_cost_micros("test-provider", "test-model", 100, 10)
     );
 }

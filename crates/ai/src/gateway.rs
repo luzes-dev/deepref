@@ -163,6 +163,7 @@ impl AiGateway for RigGateway {
                 output_json: response.text(),
                 input_tokens: response.usage.input_tokens.unwrap_or(0),
                 output_tokens: response.usage.output_tokens.unwrap_or(0),
+                reasoning_tokens: response.usage.reasoning_tokens.unwrap_or(0),
                 cost_micros: None,
                 served_model: response.model().map(str::to_owned),
                 system_fingerprint: None,

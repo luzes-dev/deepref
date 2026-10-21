@@ -7,13 +7,16 @@ use uuid::Uuid;
 /// constraints when the parent rows are removed in the same statement. A
 /// project delete removes them first, children before parents. Every other
 /// project-owned row cascades (migration 0041).
-const PROTECTED_CHILDREN_FIRST: [&str; 7] = [
+const PROTECTED_CHILDREN_FIRST: [&str; 9] = [
     "DELETE FROM extraction_values WHERE project_id = $1",
     "DELETE FROM ai_proposal_evidence WHERE project_id = $1",
     "DELETE FROM ai_run_evidence WHERE project_id = $1",
     "DELETE FROM ai_proposal_criterion_judgments WHERE project_id = $1",
     "DELETE FROM screening_state WHERE project_id = $1",
     "DELETE FROM screening_events WHERE project_id = $1",
+    // These are live enforcement state, not retained usage facts.
+    "DELETE FROM ai_usage_period_buckets WHERE project_id = $1",
+    "DELETE FROM ai_usage_limits WHERE scope_kind = 'project' AND scope_id = $1",
     // projection_state has no foreign key to projects.
     "DELETE FROM projection_state WHERE project_id = $1",
 ];

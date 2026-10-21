@@ -49,7 +49,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    AgentLoopConfig, AiError, ChatMessage, PriceBook, UsageLedger,
+    AgentLoopConfig, AiError, AiUsageContext, ChatMessage, PriceBook, UsageLedger, UsagePrincipal,
     runtime::{
         agent::RigTurnOutcome,
         agent::run_assistant_runner,
@@ -140,10 +140,32 @@ pub async fn replay_rig_turn(
 ) -> Result<RigTurnOutcome, AiError> {
     let plans = PlanCollector::new();
     let scope = ToolHostScope::new(replay.context.clone(), replay.host.clone(), plans);
+    let usage_context = AiUsageContext {
+        workspace_id: None,
+        principal: Some(
+            replay
+                .context
+                .actor
+                .user_id()
+                .map(UsagePrincipal::User)
+                .unwrap_or_else(|| {
+                    UsagePrincipal::Service(format!(
+                        "assistant:{}",
+                        replay.context.actor.kind().as_str()
+                    ))
+                }),
+        ),
+        run_id: cassette.run_id,
+        step_id: None,
+        job_id: replay.context.job_id,
+        attempt_fence: replay.context.attempt_fence,
+        run_limit_micros: None,
+    };
     let hooks = DeepRefHooks::new(
         scope.clone(),
         replay.ledger.clone(),
         replay.prices,
+        usage_context,
         replay.config,
     );
     // The replay agent must be configured exactly like the recording agent:

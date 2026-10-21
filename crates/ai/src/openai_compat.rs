@@ -142,7 +142,9 @@ impl OpenAiCompatGateway {
                     } else {
                         "provider is unreachable".to_owned()
                     });
-                    continue;
+                    // A timeout can happen after the provider accepted the
+                    // request; retrying could create duplicate billable work.
+                    return Err(last_error);
                 }
             };
             let status = response.status();
@@ -208,21 +210,28 @@ fn subscription_limit_reached(code: u16, detail: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
-/// The request can succeed later on its own. Rate limits and server errors
-/// can. An empty balance or a spent plan cap cannot, so retrying only wastes
-/// time and money.
+/// Only an explicit rate-limit rejection is safe to retry: it proves the
+/// provider accepted no work. Server errors can follow accepted work.
 fn is_retryable(dialect: ProviderDialect, code: u16, detail: &str) -> bool {
     let spent = (dialect == ProviderDialect::Zai && zai_balance_exhausted(code, detail))
         || subscription_limit_reached(code, detail);
-    !spent && (code == 429 || (500..600).contains(&code))
+    !spent && code == 429
 }
 
 fn gateway_status_error(dialect: ProviderDialect, code: u16, detail: &str) -> AiError {
+    // A 408 may be emitted after the request reached a provider-side worker;
+    // without usage evidence, retain the reservation as ambiguous liability.
+    if code == 408 {
+        return AiError::Gateway("provider request timed out with an unknown outcome".to_owned());
+    }
     if dialect == ProviderDialect::Zai && zai_balance_exhausted(code, detail) {
-        return AiError::Gateway("provider account has insufficient balance".to_owned());
+        return AiError::ProviderRejected { status: code };
     }
     if subscription_limit_reached(code, detail) {
-        return AiError::SubscriptionLimit;
+        return AiError::ProviderRejectedSubscriptionLimit { status: code };
+    }
+    if (400..500).contains(&code) {
+        return AiError::ProviderRejected { status: code };
     }
     AiError::Gateway(match code {
         401 | 403 => "provider rejected the credentials".to_owned(),
@@ -231,14 +240,23 @@ fn gateway_status_error(dialect: ProviderDialect, code: u16, detail: &str) -> Ai
     })
 }
 
-fn usage(response: &Value) -> (u64, u64) {
+fn usage(response: &Value) -> (u64, u64, u64) {
     let read = |key: &str| {
         response
             .pointer(&format!("/usage/{key}"))
             .and_then(Value::as_u64)
             .unwrap_or(0)
     };
-    (read("prompt_tokens"), read("completion_tokens"))
+    let reasoning = response
+        .pointer("/usage/completion_tokens_details/reasoning_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            response
+                .pointer("/usage/reasoning_tokens")
+                .and_then(Value::as_u64)
+        })
+        .unwrap_or(0);
+    (read("prompt_tokens"), read("completion_tokens"), reasoning)
 }
 
 /// The longest provider revision label kept. Model names and fingerprints are far shorter.
@@ -366,13 +384,14 @@ impl AiGateway for OpenAiCompatGateway {
                     tracing::warn!(finish_reason = ?response.pointer("/choices/0/finish_reason"), "AI provider returned no structured text");
                     AiError::Gateway("provider returned no structured text".to_owned())
                 })?;
-            let (input_tokens, output_tokens) = usage(&response);
+            let (input_tokens, output_tokens, reasoning_tokens) = usage(&response);
             let (served_model, system_fingerprint) = provider_revision(&response);
             tracing::debug!(ai.provider = %request.route.provider, ai.model = %request.route.model, "structured completion finished");
             Ok(GatewayCompletion {
                 output_json: strip_code_fence(content).to_owned(),
                 input_tokens,
                 output_tokens,
+                reasoning_tokens,
                 cost_micros: None,
                 served_model,
                 system_fingerprint,
@@ -397,7 +416,7 @@ mod tests {
             r#"{"error":{"code":"1113","message":"Insufficient balance or no resource package."}}"#;
         assert_eq!(
             gateway_status_error(ProviderDialect::Zai, 429, body),
-            AiError::Gateway("provider account has insufficient balance".to_owned())
+            AiError::ProviderRejected { status: 429 }
         );
         assert!(!is_retryable(ProviderDialect::Zai, 429, body));
         assert!(is_retryable(
@@ -405,11 +424,11 @@ mod tests {
             429,
             r#"{"error":{"code":"1302","message":"Rate limit"}}"#
         ));
-        assert!(is_retryable(ProviderDialect::Zai, 503, ""));
+        assert!(!is_retryable(ProviderDialect::Zai, 503, ""));
         assert!(!is_retryable(ProviderDialect::Zai, 400, ""));
         assert_eq!(
             gateway_status_error(ProviderDialect::Zai, 429, "not json"),
-            AiError::Gateway("provider rate limit reached".to_owned())
+            AiError::ProviderRejected { status: 429 }
         );
     }
 
@@ -427,7 +446,7 @@ mod tests {
         ] {
             assert_eq!(
                 gateway_status_error(ProviderDialect::OpenCodeGo, code, body),
-                AiError::SubscriptionLimit,
+                AiError::ProviderRejectedSubscriptionLimit { status: code },
                 "{code} {body}"
             );
             assert!(
@@ -442,7 +461,7 @@ mod tests {
         let rate = r#"{"error":{"message":"Rate limit reached for requests, retry in 2s"}}"#;
         assert_eq!(
             gateway_status_error(ProviderDialect::OpenCodeGo, 429, rate),
-            AiError::Gateway("provider rate limit reached".to_owned())
+            AiError::ProviderRejected { status: 429 }
         );
         assert!(is_retryable(ProviderDialect::OpenCodeGo, 429, rate));
         assert_eq!(
@@ -451,7 +470,7 @@ mod tests {
                 403,
                 r#"{"error":"invalid api key"}"#
             ),
-            AiError::Gateway("provider rejected the credentials".to_owned())
+            AiError::ProviderRejected { status: 403 }
         );
         assert!(!is_retryable(
             ProviderDialect::OpenCodeGo,
@@ -461,7 +480,20 @@ mod tests {
         // A 402 on OpenCode is a spent plan, not Z.AI's balance wording.
         assert_eq!(
             gateway_status_error(ProviderDialect::OpenCodeGo, 402, ""),
-            AiError::SubscriptionLimit
+            AiError::ProviderRejectedSubscriptionLimit { status: 402 }
+        );
+    }
+
+    #[test]
+    fn request_timeout_is_ambiguous_and_cannot_prove_zero_liability() {
+        assert!(matches!(
+            gateway_status_error(ProviderDialect::OpenCodeGo, 408, ""),
+            AiError::Gateway(message) if message.contains("unknown outcome")
+        ));
+        assert!(
+            crate::ZeroLiabilityProof::ProviderRejected { status: 408 }
+                .validate()
+                .is_err()
         );
     }
 
@@ -611,6 +643,7 @@ mod tests {
             .unwrap_or_else(|_| unreachable!());
         let request = CompletionRequest {
             project_id: Some(ProjectId::new(uuid::Uuid::from_u128(9))),
+            usage_context: None,
             route: streaming_route(),
             system_prompt: "system".to_owned(),
             user_prompt: "user".to_owned(),
@@ -661,6 +694,7 @@ mod tests {
             .unwrap_or_else(|_| unreachable!());
         let request = CompletionRequest {
             project_id: None,
+            usage_context: None,
             route: streaming_route(),
             system_prompt: "system".to_owned(),
             user_prompt: "user".to_owned(),

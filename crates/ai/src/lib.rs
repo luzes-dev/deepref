@@ -50,8 +50,7 @@ pub use openai_compat::{
 };
 pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, RequestedAction};
 pub use pricing::{
-    GLM_5_3_FLASH_PRICE, ModelPrice, PriceBook, UNKNOWN_MODEL_PRICE, estimate_cost_micros,
-    price_for_model,
+    ModelPrice, PriceBook, UNKNOWN_MODEL_PRICE, estimate_cost_micros, price_for_model,
 };
 pub use prompts::{PromptDefinition, PromptRegistry, PromptVersion};
 pub use review_assistance::*;
@@ -74,7 +73,11 @@ pub use screening::{
     SuggestedDecision, criteria_for_stage,
 };
 pub use types::*;
-pub use usage::{BudgetSnapshot, MeteredGateway, UsageEntry, UsageLedger};
+pub use usage::{
+    MeteredGateway, UsageLedger, UsageObservation, UsagePriceSnapshot, UsageReservation,
+    UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof, service_usage_context,
+};
+pub(crate) use usage::{assistant_input_bound_tokens, assistant_reservation_request};
 
 #[cfg(test)]
 mod tests;

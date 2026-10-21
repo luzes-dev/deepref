@@ -1,29 +1,17 @@
 //! DeepRef lifecycle hooks for the Rig assistant runtime.
 //!
-//! Rig owns the agent state machine; these hooks keep DeepRef authoritative
-//! for budget, usage accounting, telemetry and plan consistency:
-//!
-//! * budget: checked before the run and before every model call; exhaustion
-//!   stops the run with [`BUDGET_STOP_REASON`], which the turn driver maps
-//!   to [`AiError::BudgetExceeded`].
-//! * token cap: checked before every model call AND after every model turn.
-//!   The pre-call check stops the next call; the post-turn check stops a run
-//!   whose latest turn just spent past `max_total_tokens`, so a tool-free
-//!   turn cannot buy one more call (not even the plan-consistency re-prompt).
-//!   Tool-bearing turns still continue so their already-requested tools run;
-//!   stopping there would drop committed work the trace must keep.
-//! * usage: every model turn's reported tokens are priced with DeepRef's
-//!   price book and recorded in the usage ledger (bookkeeping never fails
-//!   the turn, mirroring `MeteredGateway`).
-//! * plan consistency: a tool-free reply that claims a change was queued
-//!   while the turn collected no [`PlanAction`][crate::PlanAction] gets one
-//!   corrective re-prompt, exactly like the custom loop; a surviving claim
-//!   is annotated by the turn driver afterwards.
-//! * telemetry: run/model/tool lifecycle logged through `tracing`.
+//! Every completion reserves its conservative bound before Rig dispatches it.
+//! A finished turn persists observed usage and settles it. Provider errors
+//! keep the reservation unresolved unless the adapter proves zero liability;
+//! accounting failures stop the run.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use rig_agent::agent::{
@@ -31,31 +19,32 @@ use rig_agent::agent::{
     InvalidToolCallContext, ModelTurnAction, ModelTurnFinished, OutcomeAction, OutcomeEvent,
     RetryRequest, RunSettled, RunStart, RunStartAction, SettledOutcome,
 };
-use rig_core::completion::AssistantContent;
+use rig_core::{effect::EffectKind, message::AssistantContent};
 
 use crate::{
-    AgentLoopConfig, AiError, PriceBook, TokenUsage, UsageEntry, UsageLedger,
-    claims_pending_change,
+    AgentLoopConfig, AiError, AiUsageContext, PriceBook, TokenUsage, UsageLedger, UsageObservation,
+    UsageReservation, agent_tool_declarations, assistant_input_bound_tokens,
+    assistant_reservation_request, assistant_system_prompt, claims_pending_change,
     runtime::{
         context::DeepRefAgentContext,
         tools::{PlanCollector, ToolHostScope},
     },
 };
 
-/// Stop reason when the project budget is exhausted. The turn driver maps
-/// exactly this reason to [`AiError::BudgetExceeded`].
 pub const BUDGET_STOP_REASON: &str = "project AI budget is exhausted";
-/// Stop reason when the turn's token cap is reached. The driver synthesizes
-/// the same truncated reply the custom loop produces.
 pub const TOKEN_STOP_REASON: &str = "assistant turn token budget is exhausted";
+const RESERVATION_STOP_REASON: &str = "AI usage reservation failed";
+const SETTLEMENT_STOP_REASON: &str = "AI usage settlement failed";
 
-/// Shared per-turn state for DeepRef's hooks.
 #[derive(Clone)]
 pub struct DeepRefHooks {
     scope: ToolHostScope,
     ledger: Arc<dyn UsageLedger>,
     prices: Arc<PriceBook>,
+    usage_context: AiUsageContext,
     usage: Arc<Mutex<TokenUsage>>,
+    reservations: Arc<Mutex<BTreeMap<usize, UsageReservation>>>,
+    reservation_error: Arc<Mutex<Option<AiError>>>,
     consistency_retried: Arc<AtomicBool>,
     config: AgentLoopConfig,
 }
@@ -65,25 +54,41 @@ impl DeepRefHooks {
         scope: ToolHostScope,
         ledger: Arc<dyn UsageLedger>,
         prices: PriceBook,
+        usage_context: AiUsageContext,
         config: AgentLoopConfig,
     ) -> Self {
         Self {
             scope,
             ledger,
             prices: Arc::new(prices),
+            usage_context,
             usage: Arc::new(Mutex::new(TokenUsage::default())),
+            reservations: Arc::new(Mutex::new(BTreeMap::new())),
+            reservation_error: Arc::new(Mutex::new(None)),
             consistency_retried: Arc::new(AtomicBool::new(false)),
             config,
         }
     }
 
-    /// Total tokens spent by model calls so far this turn.
     pub fn usage(&self) -> TokenUsage {
         self.usage.lock().map(|usage| *usage).unwrap_or_default()
     }
 
-    /// Whether the plan-consistency hook already used its one corrective
-    /// re-prompt. The driver annotates a surviving claim afterwards.
+    pub(crate) fn take_reservation_error(&self) -> Option<AiError> {
+        self.reservation_error
+            .lock()
+            .ok()
+            .and_then(|mut error| error.take())
+    }
+
+    fn record_error(&self, error: AiError) {
+        if let Ok(mut stored) = self.reservation_error.lock()
+            && stored.is_none()
+        {
+            *stored = Some(error);
+        }
+    }
+
     pub(crate) fn consistency_retried(&self) -> bool {
         self.consistency_retried.load(Ordering::SeqCst)
     }
@@ -96,45 +101,55 @@ impl DeepRefHooks {
         &self.scope.plans
     }
 
-    async fn budget_exhausted(&self) -> Result<bool, AiError> {
-        Ok(self
-            .ledger
-            .budget(self.scope.context.project_id)
-            .await?
-            .exhausted())
+    fn take_reservation(&self, turn: usize) -> Option<UsageReservation> {
+        self.reservations
+            .lock()
+            .ok()
+            .and_then(|mut reservations| reservations.remove(&turn))
     }
 
-    async fn record_turn_usage(&self, input_tokens: u64, output_tokens: u64) {
+    async fn settle_turn_usage(
+        &self,
+        turn: usize,
+        input_tokens: u64,
+        output_tokens: u64,
+        reasoning_tokens: u64,
+    ) -> Result<(), AiError> {
         if let Ok(mut usage) = self.usage.lock() {
-            usage.input_tokens += input_tokens;
-            usage.output_tokens += output_tokens;
+            usage.input_tokens = usage.input_tokens.saturating_add(input_tokens);
+            usage.output_tokens = usage.output_tokens.saturating_add(output_tokens);
         }
-        let route = &self.scope.context.route;
-        let cost = self.prices.estimate_cost_micros(
-            &route.provider,
-            &route.model,
+        let reservation = self.take_reservation(turn).ok_or_else(|| {
+            AiError::Persistence("assistant model call had no usage reservation".to_owned())
+        })?;
+        let observation = UsageObservation {
             input_tokens,
             output_tokens,
-        );
-        let entry = UsageEntry {
-            project_id: Some(self.scope.context.project_id.as_uuid()),
-            profile: route.profile.as_str().to_owned(),
-            provider: route.provider.clone(),
-            model: route.model.clone(),
-            purpose: "chat",
-            input_tokens,
-            output_tokens,
-            cost_micros: cost,
+            reasoning_tokens,
+            commercial_units: None,
         };
-        if let Err(error) = self.ledger.record(entry).await {
-            // The provider call already happened; never fail the turn
-            // because bookkeeping failed.
-            tracing::warn!(?error, "failed to record assistant usage");
-        }
+        observation.validate()?;
+        let actual_cost_micros = reservation.price.actual_cost_micros(&observation)?;
+        self.ledger
+            .observe(&reservation, observation.clone())
+            .await?;
+        self.ledger
+            .settle(&reservation, observation, &self.prices.version())
+            .await?;
+        tracing::info!(actual_cost_micros, "assistant AI usage settled");
+        Ok(())
+    }
+
+    async fn retain_unresolved(&self, turn: usize, reason: &str) -> Result<(), AiError> {
+        let Some(reservation) = self.take_reservation(turn) else {
+            return Ok(());
+        };
+        self.ledger.unresolved(&reservation, None, reason).await?;
+        tracing::warn!("assistant AI usage remains unresolved");
+        Ok(())
     }
 }
 
-/// Assistant reply text of one finished model turn.
 fn turn_text(content: &[AssistantContent]) -> String {
     content
         .iter()
@@ -154,44 +169,75 @@ fn turn_has_tool_calls(content: &[AssistantContent]) -> bool {
 
 impl AgentHook for DeepRefHooks {
     fn name(&self) -> Option<String> {
-        Some("deepref-assistant-hooks-v1".to_owned())
+        Some("deepref-assistant-hooks-v2".to_owned())
     }
 
-    fn on_run_start(
-        &self,
-        _ctx: &HookContext,
-        _event: RunStart<'_>,
-    ) -> impl Future<Output = RunStartAction> + rig_core::wasm_compat::WasmCompatSend {
-        let hooks = self.clone();
-        async move {
-            tracing::info!(
-                project_id = %hooks.scope.context.project_id.as_uuid(),
-                "assistant turn started"
-            );
-            match hooks.budget_exhausted().await {
-                Ok(false) => RunStartAction::Continue,
-                Ok(true) => RunStartAction::Stop(BUDGET_STOP_REASON.to_owned()),
-                Err(error) => RunStartAction::Stop(format!("AI budget lookup failed: {error}")),
-            }
-        }
+    async fn on_run_start(&self, _ctx: &HookContext, _event: RunStart<'_>) -> RunStartAction {
+        tracing::info!("assistant turn started");
+        RunStartAction::Continue
     }
 
     fn on_completion_call(
         &self,
         _ctx: &HookContext,
-        _event: CompletionCallEvent<'_>,
+        event: CompletionCallEvent<'_>,
     ) -> impl Future<Output = CompletionCallAction> + rig_core::wasm_compat::WasmCompatSend {
         let hooks = self.clone();
+        let turn = event.turn;
+        let prompt = event.prompt.clone();
+        let history = event.history.to_vec();
         async move {
             let usage = hooks.usage();
-            if usage.input_tokens + usage.output_tokens >= hooks.config.max_total_tokens {
+            if usage.input_tokens.saturating_add(usage.output_tokens)
+                >= hooks.config.max_total_tokens
+            {
                 return CompletionCallAction::Stop(TOKEN_STOP_REASON.to_owned());
             }
-            match hooks.budget_exhausted().await {
-                Ok(false) => CompletionCallAction::Continue,
-                Ok(true) => CompletionCallAction::Stop(BUDGET_STOP_REASON.to_owned()),
+            let input_bound = match assistant_input_bound_tokens(
+                &assistant_system_prompt(hooks.scope.context.project_id),
+                &prompt,
+                &history,
+                &agent_tool_declarations(),
+            ) {
+                Ok(bound) => bound,
                 Err(error) => {
-                    CompletionCallAction::Stop(format!("AI budget lookup failed: {error}"))
+                    hooks.record_error(error);
+                    return CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned());
+                }
+            };
+            let request = assistant_reservation_request(
+                hooks.usage_context.clone(),
+                hooks.scope.context.project_id,
+                &hooks.scope.context.route,
+                turn,
+                Some(input_bound),
+                Some(u64::from(hooks.config.max_output_tokens_per_call)),
+                &hooks.prices,
+            );
+            let reserved_cost_micros = match request.reserved_cost_micros() {
+                Ok(cost) => cost,
+                Err(error) => {
+                    hooks.record_error(error);
+                    return CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned());
+                }
+            };
+            match hooks.ledger.reserve(request).await {
+                Ok(reservation) => {
+                    if let Ok(mut reservations) = hooks.reservations.lock() {
+                        reservations.insert(turn, reservation);
+                    } else {
+                        hooks.record_error(AiError::Persistence(
+                            "assistant reservation state could not be stored".to_owned(),
+                        ));
+                        return CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned());
+                    }
+                    tracing::info!(reserved_cost_micros, "assistant AI usage reserved");
+                    CompletionCallAction::Continue
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "assistant AI usage reservation denied");
+                    hooks.record_error(error);
+                    CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned())
                 }
             }
         }
@@ -203,40 +249,37 @@ impl AgentHook for DeepRefHooks {
         event: ModelTurnFinished<'_>,
     ) -> impl Future<Output = ModelTurnAction> + rig_core::wasm_compat::WasmCompatSend {
         let hooks = self.clone();
+        let turn = event.turn;
         let input_tokens = event.usage.input_tokens.unwrap_or(0);
         let output_tokens = event.usage.output_tokens.unwrap_or(0);
+        let reasoning_tokens = event.usage.reasoning_tokens.unwrap_or(0);
         let text = turn_text(event.content);
         let has_calls = turn_has_tool_calls(event.content);
         async move {
-            hooks.record_turn_usage(input_tokens, output_tokens).await;
+            if let Err(error) = hooks
+                .settle_turn_usage(turn, input_tokens, output_tokens, reasoning_tokens)
+                .await
+            {
+                tracing::error!(error = %error, "assistant AI usage settlement failed");
+                hooks.record_error(error);
+                return ModelTurnAction::Stop(SETTLEMENT_STOP_REASON.to_owned());
+            }
             tracing::debug!(
-                turn = event.turn,
+                turn,
                 input_tokens,
                 output_tokens,
+                reasoning_tokens,
                 has_tool_calls = has_calls,
                 "assistant model turn finished"
             );
-            // Token cap first: the pre-call hook can only refuse the *next*
-            // call, so a turn that just spent past the cap must stop here —
-            // otherwise the consistency re-prompt below would issue one more
-            // model call while already over budget. Tool-bearing turns are
-            // exempt: their tools were already requested and must still run
-            // (the pre-call hook stops the run before the following call).
-            // Token cap first: the pre-call hook can only refuse the *next*
-            // call, so a turn that just spent past the cap must stop here —
-            // otherwise the consistency re-prompt below would issue one more
-            // model call while already over budget. Tool-bearing turns are
-            // exempt: their tools were already requested and must still run
-            // (the pre-call hook stops the run before the following call).
             if !has_calls {
                 let spent = hooks.usage();
-                if spent.input_tokens + spent.output_tokens >= hooks.config.max_total_tokens {
+                if spent.input_tokens.saturating_add(spent.output_tokens)
+                    >= hooks.config.max_total_tokens
+                {
                     return ModelTurnAction::Stop(TOKEN_STOP_REASON.to_owned());
                 }
             }
-            // Plan consistency: a tool-free reply claiming a queued change
-            // with no plan action gets one corrective re-prompt; a surviving
-            // claim is annotated by the turn driver afterwards.
             if !has_calls
                 && hooks.scope.plans.is_empty()
                 && claims_pending_change(&text)
@@ -257,7 +300,7 @@ impl AgentHook for DeepRefHooks {
     ) -> impl Future<Output = Option<InvalidToolCallAction>> + rig_core::wasm_compat::WasmCompatSend
     {
         let feedback = format!(
-            "unknown tool `{}`. Use only the tools declared for this turn; if no change is needed, reply directly.",
+            "unknown tool {}. Use only the tools declared for this turn; if no change is needed, reply directly.",
             event.tool_name
         );
         async move { Some(InvalidToolCallAction::Retry { feedback }) }
@@ -268,8 +311,18 @@ impl AgentHook for DeepRefHooks {
         _ctx: &HookContext,
         event: OutcomeEvent<'_>,
     ) -> impl Future<Output = OutcomeAction> + rig_core::wasm_compat::WasmCompatSend {
+        let hooks = self.clone();
         let turn = event.turn;
+        let completion_failed =
+            matches!(event.kind, EffectKind::Completion { .. }) && event.outcome.is_err();
         async move {
+            if completion_failed
+                && let Err(error) = hooks
+                    .retain_unresolved(turn, "provider_outcome_ambiguous")
+                    .await
+            {
+                hooks.record_error(error);
+            }
             tracing::debug!(turn, "assistant effect resolved");
             OutcomeAction::Proceed
         }
@@ -280,12 +333,37 @@ impl AgentHook for DeepRefHooks {
         _ctx: &HookContext,
         event: RunSettled<'_>,
     ) -> impl Future<Output = ()> + rig_core::wasm_compat::WasmCompatSend {
-        let usage = self.usage();
+        let hooks = self.clone();
         let settled = match event.outcome {
             SettledOutcome::Response(_) => "completed",
             SettledOutcome::Error(_) => "error",
         };
         async move {
+            let pending = hooks
+                .reservations
+                .lock()
+                .map(|mut reservations| {
+                    let turns = reservations.keys().copied().collect::<Vec<_>>();
+                    turns
+                        .into_iter()
+                        .filter_map(|turn| {
+                            reservations
+                                .remove(&turn)
+                                .map(|reservation| (turn, reservation))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for (_, reservation) in pending {
+                if let Err(error) = hooks
+                    .ledger
+                    .unresolved(&reservation, None, "run_ended_without_settlement")
+                    .await
+                {
+                    hooks.record_error(error);
+                }
+            }
+            let usage = hooks.usage();
             tracing::info!(
                 input_tokens = usage.input_tokens,
                 output_tokens = usage.output_tokens,

@@ -24,6 +24,9 @@ pub struct DeepRefAgentContext {
     pub conversation_id: Uuid,
     pub actor: Actor,
     pub route: ResolvedModel,
+    /// Durable execution identity used to fence reservation recovery.
+    pub job_id: Option<Uuid>,
+    pub attempt_fence: Option<i64>,
 }
 
 /// Project-scoped read execution for Rig assistant tools.
