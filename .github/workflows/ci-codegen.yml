@@ -1,0 +1,49 @@
+name: CI / OpenAPI and Orval drift
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  drift:
+    name: Drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cargo-cache: restore
+          sccache: local-bundle
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+      - name: Verify generated API artifacts
+        run: pnpm run generate:api:check
+        env:
+          SQLX_OFFLINE: "true"
+      # The authorization policy table must cover every route and its generated
+      # documentation must stay in sync with the API.
+      - name: Verify authorization coverage artifacts
+        run: pnpm run generate:authz:check
+        env:
+          SQLX_OFFLINE: "true"
+      - name: Prove drift check left the tree clean
+        run: git diff --exit-code
+      - name: Show sccache statistics
+        if: always()
+        run: |
+          {
+            echo '```'
+            "${SCCACHE_PATH:-sccache}" --show-stats
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

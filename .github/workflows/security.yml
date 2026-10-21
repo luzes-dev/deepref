@@ -3,42 +3,58 @@ name: Security
 on:
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
     - cron: "17 3 * * 1"
 
 concurrency:
-  group: security-${{ github.event.pull_request.number || github.ref }}
+  group: security-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  codeql:
-    name: CodeQL / ${{ matrix.language }}
+  semgrep:
+    name: SAST / Semgrep CE
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [rust, javascript-typescript]
+    timeout-minutes: 30
     steps:
       - name: Checkout trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
-        with:
-          languages: ${{ matrix.language }}
-      - name: Analyze
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+      # The engine is pinned by the multi-arch image digest. The community rule
+      # packs are fetched anonymously at run time and are therefore mutable:
+      # a new rule release can surface a finding without a workflow change, so
+      # review Security job logs when a scan starts failing.
+      - name: Scan Rust, TypeScript, and JavaScript
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          docker run --rm \
+            --volume "$PWD:/src" \
+            --workdir /src \
+            semgrep/semgrep:1.181.0@sha256:81474464c1f07483ba0682a44787fd93c91397419762a04abe2bafaae396304b \
+            semgrep scan \
+              --config p/rust \
+              --config p/typescript \
+              --config p/javascript \
+              --metrics=off \
+              --disable-version-check \
+              --error \
+              --text 2>&1 | tee semgrep.txt || status=$?
+          {
+            echo '### Semgrep Community Edition'
+            echo '```text'
+            cat semgrep.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
   dependencies:
     name: Dependency policy
@@ -49,11 +65,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned Rust toolchain
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup override set 1.95.0
-      - name: Install pinned prebuilt dependency tools
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cargo-cache: none
+          sccache: none
+      - name: Install pinned Rust dependency tools
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-deny@0.20.2,cargo-shear@1.13.4
@@ -61,17 +78,96 @@ jobs:
           fallback: none
       - run: cargo deny --locked check
       - run: cargo shear --deny-warnings
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.3.0
+      - name: Install OSV-Scanner
+        env:
+          OSV_SCANNER_VERSION: v2.7.0
+          OSV_SCANNER_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --location \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" \
+            --output "$RUNNER_TEMP/osv-scanner"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check
+          install -m 0755 "$RUNNER_TEMP/osv-scanner" "$RUNNER_TEMP/bin/osv-scanner"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan Cargo.lock and pnpm-lock.yaml
+        run: osv-scanner scan source --recursive --config osv-scanner.toml --format=table .
       - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+        uses: ./.github/actions/setup-node
       - run: pnpm audit --audit-level high
+
+  secrets:
+    name: Secret scanning / Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted source with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/gitleaks.tar.gz" \
+            --directory "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan Git history
+        run: |
+          gitleaks git \
+            --config .gitleaks.toml \
+            --redact \
+            --no-color \
+            --verbose \
+            --exit-code 1 \
+            --log-opts="--all" \
+            .
+
+  configuration-security:
+    name: Configuration security / Trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: 0.76.0
+          TRIVY_SHA256: e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --proto '=https' --tlsv1.2 --fail --show-error --location \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            --output "$RUNNER_TEMP/trivy.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/trivy.tar.gz" \
+            --directory "$RUNNER_TEMP/bin" trivy
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # Trivy's config scanner covers Dockerfiles and supported IaC formats.
+      # It does not parse compose.yaml or docker-bake.hcl, so those are checked
+      # by the compose validation step below and by the reproducible container
+      # build's `docker buildx bake --print`.
+      - name: Scan Dockerfiles and supported configuration
+        run: |
+          trivy config \
+            --severity MEDIUM,HIGH,CRITICAL \
+            --exit-code 1 \
+            --format table \
+            --skip-dirs .git \
+            --skip-dirs node_modules \
+            --skip-dirs target \
+            .
+      - name: Validate compose configuration
+        run: docker compose -f compose.yaml config --quiet
 
   repository-policy:
     name: Workflow and shell policy
@@ -82,55 +178,40 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Require immutable action references with version comments
+      - name: Require immutable action references
+        run: python3 scripts/ci/check-action-pins.py
+      - name: Run actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - name: Run ShellCheck
         run: |
-          python3 - <<'PY'
-          import pathlib, re, sys
-
-          bad = []
-          pattern = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)(?:\s+#\s*(\S.*))?$")
-          for path in pathlib.Path(".github/workflows").glob("*.y*ml"):
-              for number, line in enumerate(path.read_text().splitlines(), 1):
-                  match = pattern.match(line)
-                  if not match:
-                      continue
-                  action, comment = match.groups()
-                  if action.startswith("./"):
-                      continue
-                  ref = action.rsplit("@", 1)[-1]
-                  if not re.fullmatch(r"[0-9a-f]{40}", ref) or not comment:
-                      bad.append(f"{path}:{number}: {line.strip()}")
-          if bad:
-              print("Every external action must use a 40-character SHA and version comment:", file=sys.stderr)
-              print("\n".join(bad), file=sys.stderr)
-              sys.exit(1)
-          PY
-      - name: Run actionlint and ShellCheck
-        run: |
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           mapfile -t scripts < <(git ls-files '*.sh')
           if [ "${#scripts[@]}" -gt 0 ]; then shellcheck "${scripts[@]}"; fi
 
   security-required:
     name: Security
     if: always()
-    needs: [codeql, dependencies, repository-policy]
+    needs: [semgrep, dependencies, secrets, configuration-security, repository-policy]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify security checks
         env:
-          CODEQL_RESULT: ${{ needs.codeql.result }}
-          DEPS_RESULT: ${{ needs.dependencies.result }}
+          SEMGREP_RESULT: ${{ needs.semgrep.result }}
+          DEPENDENCIES_RESULT: ${{ needs.dependencies.result }}
+          SECRETS_RESULT: ${{ needs.secrets.result }}
+          CONFIGURATION_RESULT: ${{ needs.configuration-security.result }}
           POLICY_RESULT: ${{ needs.repository-policy.result }}
         run: |
-          for result in "$CODEQL_RESULT" "$DEPS_RESULT" "$POLICY_RESULT"; do
-            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
-              echo "A substantive security check did not succeed (result: $result)"
-              exit 1
-            fi
-          done
-          echo "All substantive security checks passed or were intentionally skipped."
+          bash scripts/ci/check-required-results.sh --strict Security \
+            "SAST / Semgrep CE=$SEMGREP_RESULT" \
+            "Dependency policy=$DEPENDENCIES_RESULT" \
+            "Secret scanning / Gitleaks=$SECRETS_RESULT" \
+            "Configuration security / Trivy=$CONFIGURATION_RESULT" \
+            "Workflow and shell policy=$POLICY_RESULT"
 
   report-failure:
     if: always() && github.event_name == 'schedule' && needs.security-required.result == 'failure'

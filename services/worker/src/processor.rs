@@ -1701,6 +1701,10 @@ async fn parse_stored_document(
     parser: Option<Arc<dyn DocumentParser>>,
     config: &deepref_config::PdfConfig,
 ) -> anyhow::Result<deepref_documents::StructuredDocument> {
+    // The v4 UUID makes the name unpredictable, and create_new(true) refuses
+    // to follow or reuse an existing path, so this is not a predictable-temp
+    // file creation.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let path = std::env::temp_dir().join(format!("deepref-parse-{}.pdf", Uuid::new_v4()));
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)

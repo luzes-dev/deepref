@@ -1,0 +1,47 @@
+name: CI / Browser E2E
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      E2E_SKIP_WEB_BUILD: "1"
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+      # actions/cache's implicit post-save lost its reservation whenever cache
+      # traffic peaked ("another job may be creating this cache"). Restore and
+      # save are split explicitly, and save only runs when the lockfile key
+      # missed, i.e. once per Playwright version bump.
+      - name: Restore Playwright browsers
+        id: playwright-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            playwright-${{ runner.os }}-
+      - name: Install Chromium
+        run: pnpm --filter @deepref/web exec playwright install --with-deps chromium
+      - name: Save Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Build web preview bundle
+        run: pnpm --filter @deepref/web exec vite build
+      - name: Run browser tests
+        run: pnpm --filter @deepref/web test:e2e

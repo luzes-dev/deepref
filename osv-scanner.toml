@@ -1,0 +1,18 @@
+# Accepted-risk exceptions for OSV-Scanner. Every entry must identify the
+# vulnerability, package, affected version, and the reason it is accepted.
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+# paste 1.0.15 (transitive via biblatex 0.12.0) is unmaintained; no fixed
+# release exists. deny.toml carries the same accepted risk for cargo-deny.
+reason = "paste 1.0.15 is unmaintained and transitive through biblatex 0.12.0; no fixed release exists"
+ignoreUntil = 2027-10-20
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+# rsa 0.9.10 is transitive through jsonwebtoken 10.3.0. The production WorkOS
+# adapter only verifies RS256 signatures using public JWKs; the only signing
+# call is in workos_identity.rs using a committed, non-secret test fixture.
+# The Marvin timing leak affects private-key operations; no patch exists.
+# Keep this accepted risk aligned with deny.toml.
+reason = "rsa 0.9.10 via jsonwebtoken 10.3.0 only verifies public-key WorkOS RS256 signatures in production; private-key signing is confined to a public test fixture; no patch exists for the private-key timing leak"
+ignoreUntil = 2027-10-20
