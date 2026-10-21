@@ -4,6 +4,7 @@
 Policy:
   * External GitHub Actions must use a full 40-character commit SHA plus a
     readable version comment (for example ``# v7.0.1``).
+  * Action references must be written on one line, not as YAML block scalars.
   * Local action/workflow references (``./...``) are allowed.
   * ``docker://`` references must be pinned by digest instead of a tag.
 
@@ -24,7 +25,9 @@ USES_PATTERN = re.compile(
     r"^\s*(?:-\s+)?uses:\s*(?P<ref>\S+?)\s*(?:#\s*(?P<comment>.*?))?\s*$"
 )
 BLOCK_SCALAR_PATTERN = re.compile(
-    r"^\s*(?:-\s+)?[A-Za-z0-9_.-]+:\s*[|>][+-]?\s*(?:#.*)?$"
+    r"^\s*(?:-\s+)?(?P<key>[A-Za-z0-9_.-]+):\s*[|>]"
+    r"(?:(?P<indent_first>[1-9])[+-]?|[+-](?P<indent_last>[1-9])?)?"
+    r"\s*(?:#.*)?$"
 )
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -81,12 +84,21 @@ def scan_file(path: Path, display_path: Path) -> list[str]:
         indent = len(line) - len(line.lstrip(" "))
 
         if block_indent is not None:
-            if not stripped or indent > block_indent:
+            if not stripped or indent >= block_indent:
                 continue
             block_indent = None
 
-        if BLOCK_SCALAR_PATTERN.match(line):
-            block_indent = indent
+        block = BLOCK_SCALAR_PATTERN.match(line)
+        if block:
+            # A sequence item's mapping keys start after "- ", not at the dash.
+            # Explicit indicators are relative to that mapping indentation.
+            indicator = block.group("indent_first") or block.group("indent_last")
+            block_indent = block.start("key") + (int(indicator) if indicator else 1)
+            if block.group("key") == "uses":
+                errors.append(
+                    f"{display_path}:{number}: {stripped}: "
+                    "action references must be on one line, not a YAML block scalar"
+                )
             continue
 
         match = USES_PATTERN.match(line)

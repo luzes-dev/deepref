@@ -36,6 +36,15 @@ Run Fallow before larger TypeScript changes:
 mise exec -- pnpm run quality:ts
 ```
 
+Write Action `uses:` references on one line (no YAML block scalars): external Actions require a full lowercase 40-character commit SHA and readable version comment, local `./` references are allowed, and `docker://` references require a sha256 digest.
+
+Run the pin policy and its CLI regression tests with:
+
+```bash
+python3 scripts/ci/check-action-pins.py
+python3 -m unittest discover -s scripts/ci -p 'test_check_action_pins.py'
+```
+
 ## CI/CD
 
 GitHub Actions runs Rust, web, E2E, TypeScript quality, Docker build, and security checks on pull requests to `main`.
