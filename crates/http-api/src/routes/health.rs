@@ -44,6 +44,24 @@ pub struct DependencyDetail {
     pub live_workers: Option<i64>,
     /// The most recent worker heartbeat, live or not (worker only).
     pub last_heartbeat_at: Option<DateTime<Utc>>,
+    /// Per-workload queue and capacity measurements (worker only).
+    pub pools: Option<Vec<WorkloadPoolDetail>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WorkloadPoolDetail {
+    /// Fixed queue class name; contains no tenant or user identity.
+    pub class: String,
+    /// Due queued jobs in this pool.
+    pub queue_depth: i64,
+    /// Age in seconds of the oldest due queued job.
+    pub oldest_due_age_seconds: Option<i64>,
+    /// Jobs currently in the running state.
+    pub in_flight: i64,
+    /// Capacity summed across workers with a live heartbeat.
+    pub capacity: i64,
+    /// In-flight divided by capacity; absent when no worker serves the pool.
+    pub saturation: Option<f64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -78,7 +96,61 @@ fn available() -> DependencyDetail {
         recent_failed: None,
         live_workers: None,
         last_heartbeat_at: None,
+        pools: None,
     }
+}
+
+async fn workload_pool_health(
+    pool: &sqlx::PgPool,
+    project_id: Option<Uuid>,
+) -> Result<Vec<WorkloadPoolDetail>, sqlx::Error> {
+    let rows = sqlx::query(
+        "WITH classes(class) AS (
+             VALUES ('ai'::text),('documents'),('workflow'),('integration'),('projection')
+         ), capacities AS (
+             SELECT entry.key AS class, sum(entry.value::bigint)::bigint AS capacity
+             FROM worker_heartbeats heartbeat
+             CROSS JOIN LATERAL jsonb_each_text(heartbeat.pool_capacities) entry
+             WHERE heartbeat.seen_at > now() - make_interval(secs => $2::double precision)
+             GROUP BY entry.key
+         )
+         SELECT classes.class,
+                count(j.id) FILTER (
+                    WHERE j.state='queued' AND j.available_at <= now()
+                )::bigint AS queue_depth,
+                EXTRACT(EPOCH FROM (now() - min(j.available_at) FILTER (
+                    WHERE j.state='queued' AND j.available_at <= now()
+                )))::bigint AS oldest_due_age_seconds,
+                count(j.id) FILTER (WHERE j.state='running')::bigint AS in_flight,
+                COALESCE(capacities.capacity,0)::bigint AS capacity
+         FROM classes
+         LEFT JOIN jobs j
+           ON j.workload_class=classes.class
+          AND ($1::uuid IS NULL OR j.project_id=$1)
+         LEFT JOIN capacities ON capacities.class=classes.class
+         GROUP BY classes.class,capacities.capacity
+         ORDER BY classes.class",
+    )
+    .bind(project_id)
+    .bind(LIVE_WORKER_WINDOW_SECONDS as f64)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let in_flight: i64 = row.get("in_flight");
+            let capacity: i64 = row.get("capacity");
+            WorkloadPoolDetail {
+                class: row.get("class"),
+                queue_depth: row.get("queue_depth"),
+                oldest_due_age_seconds: row.get("oldest_due_age_seconds"),
+                in_flight,
+                capacity,
+                saturation: (capacity > 0).then(|| in_flight as f64 / capacity as f64),
+            }
+        })
+        .collect())
 }
 
 #[utoipa::path(get, path="/health/live", operation_id="getLiveness", tag="health",
@@ -185,6 +257,19 @@ async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> Depend
             let recent_dead: i64 = row.get("recent_dead");
             let oldest_age_seconds: Option<i64> = row.get("oldest_age_seconds");
             let live_workers: i64 = row.get("live_workers");
+            let pools = match workload_pool_health(&state.pool, project_id).await {
+                Ok(pools) => pools,
+                Err(error) => {
+                    tracing::warn!(%error, "worker workload pool check failed");
+                    return DependencyStatus {
+                        postgresql,
+                        worker: DependencyDetail {
+                            state: DependencyState::Unavailable,
+                            ..available()
+                        },
+                    };
+                }
+            };
             // Work is waiting and no worker is alive to take it.
             let state = if backlog > 0 && live_workers == 0 {
                 DependencyState::Degraded
@@ -200,6 +285,7 @@ async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> Depend
                 recent_failed: Some(recent_dead),
                 live_workers: Some(live_workers),
                 last_heartbeat_at: row.get("last_heartbeat_at"),
+                pools: Some(pools),
             }
         }
         Err(error) => {

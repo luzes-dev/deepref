@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_events SET lease_owner = NULL, lease_expires_at = NULL\n         WHERE event_id = $1 AND lease_owner = $2 AND claim_generation = $3\n           AND delivery_state = 'pending' AND lease_expires_at > clock_timestamp()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5f7798d744cc563eef410769afc99b3d5e53d8426287a7273717be70e94dc87"
+}

@@ -7,9 +7,11 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
+bytes.workspace = true
 deepref-application.workspace = true
 deepref-ai.workspace = true
 chrono.workspace = true
+futures.workspace = true
 deepref-domain.workspace = true
 deepref-documents.workspace = true
 deepref-review.workspace = true
@@ -31,7 +33,7 @@ test-support = []
 
 [dev-dependencies]
 deepref-app = { workspace = true, features = ["test-support"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 sha2.workspace = true

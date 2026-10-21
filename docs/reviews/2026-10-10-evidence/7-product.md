@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # DeepRef whole-application review: product strategy lens
 
 Reviewer 7 of 7. Read-only. Sources: README, docs/prd/*, docs/adr/* (especially ADR 0005), docs/acceptance/*, docs/ui-review.md, docs/ux-walkthrough/relatorio-2026-10-06.html, the handoff docs, docs/rete-workflow-migration.md, docs/openapi.json (166 operations), the route tree and navigation, crates/domain, crates/app/migrations (0001–0058), and targeted reads of the code that implements key capabilities. Every claim below about capabilities cites the code or contract I checked.

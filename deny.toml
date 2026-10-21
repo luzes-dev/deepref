@@ -4,6 +4,7 @@ ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste is transitive through neo4rs and utoipa-axum; no safe upgrade is available" },
   { id = "RUSTSEC-2025-0012", reason = "backoff is transitive through neo4rs 0.8; no maintained stable neo4rs release is available" },
   { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is transitive through neo4rs 0.8; no maintained stable neo4rs release is available" },
+  { id = "RUSTSEC-2023-0071", reason = "rsa is pulled in by jsonwebtoken's rust_crypto backend, which only verifies WorkOS RS256 signatures with public keys; the Marvin timing leak affects private-key operations and no patch exists" },
 ]
 
 [licenses]

@@ -222,7 +222,11 @@ async fn insert_document(pool: &PgPool, project: Uuid, report: Uuid) -> Uuid {
 /// and a run, a workflow file, and a report with a document. B owns PB with a
 /// report of its own.
 async fn world() -> Option<World> {
-    let h = Harness::new().await?;
+    let store = deepref_documents::DocumentStore::memory();
+    let h = Harness::with_state(support::authz::database().await?, {
+        let store = store.clone();
+        move |state| state.with_document_store(store)
+    });
     let a = h.sign_in("user_A", "a@example.org").await;
     let b = h.sign_in("user_B", "b@example.org").await;
     let pa = h.create_project(&a, "A's project").await;
@@ -288,12 +292,15 @@ async fn world() -> Option<World> {
 
     let file = deepref_app::create_workflow_file(
         &h.pool,
-        pa,
-        run,
-        "export",
-        "records.csv",
-        "text/csv",
-        b"id\n1\n",
+        &store,
+        deepref_app::NewWorkflowFile {
+            project_id: pa,
+            run_id: run,
+            node_id: "export",
+            name: "records.csv",
+            content_type: "text/csv",
+            content: b"id\n1\n",
+        },
     )
     .await
     .unwrap();

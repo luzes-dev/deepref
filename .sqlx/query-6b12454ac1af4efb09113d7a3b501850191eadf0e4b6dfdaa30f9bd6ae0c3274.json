@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT state FROM outbox_receipts WHERE event_id=$1 AND consumer=$2\n                   AND (state='delivered' OR (attempt_generation=$3 AND settled_generation=$3))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6b12454ac1af4efb09113d7a3b501850191eadf0e4b6dfdaa30f9bd6ae0c3274"
+}

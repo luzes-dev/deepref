@@ -34,6 +34,7 @@ use crate::{limiter, metadata};
 
 pub struct Context<'a> {
     pub pool: &'a PgPool,
+    pub documents: &'a deepref_documents::DocumentStore,
     pub ai: Option<&'a dyn AiGateway>,
     pub execution: &'a NodeExecution,
     pub runtime: &'a deepref_config::RuntimeConfig,
@@ -1219,12 +1220,15 @@ async fn export_records(context: &Context<'_>) -> NodeResult {
     }
     let file_id = deepref_app::create_workflow_file(
         context.pool,
-        execution.project_id,
-        execution.run_id,
-        &execution.node_id,
-        &name,
-        content_type,
-        content.as_bytes(),
+        context.documents,
+        deepref_app::NewWorkflowFile {
+            project_id: execution.project_id,
+            run_id: execution.run_id,
+            node_id: &execution.node_id,
+            name: &name,
+            content_type,
+            content: content.as_bytes(),
+        },
     )
     .await?;
     ok(

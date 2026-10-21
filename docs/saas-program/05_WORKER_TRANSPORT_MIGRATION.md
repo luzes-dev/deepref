@@ -8,7 +8,7 @@ Two phases.
 
 **05b** (trigger-gated by `T-NATS` in `00_PROGRAM.md`): stop using PostgreSQL polling as the primary transport/wakeup mechanism for scalable durable work by adding the JetStream `WorkTransport` adapter, while preserving the existing PostgreSQL lifecycle, leases, attempts and fencing.
 
-Read `00_PROGRAM.md`. Complete handoff 04 first (05a needs 04a's outbox/scheduler contract; 05b needs 04b's NATS foundation).
+Read `00_PROGRAM.md`. The launch sequence places 04a before 05a; 05b needs 04a's outbox and 04b's NATS foundation. Due-time scheduling belongs to 05: 05a's PostgreSQL claim loop picks up work when persisted `available_at` is due, and in 05b a 05-owned due-time publisher writes one wakeup record through the 04a outbox when due.
 
 ## Phases
 
@@ -54,7 +54,7 @@ Move only delivery/wakeup to the transport (JetStream in 05b).
 ```text
 application transaction
     writes authoritative queued step
-    writes outbox message
+    writes an outbox message for immediately eligible work
 COMMIT
 
 outbox relay
@@ -190,30 +190,31 @@ Set concurrency separately per pool (see Backpressure). Do not share one global 
 
 Authoritative state decides; delivery decides nothing. The delivery handler maps every row onto the existing delivery vocabulary (`DeliveryAction` in `services/worker/src/delivery.rs`: ACK / NAK with delay / term):
 
-| Authoritative state on delivery      | Action                                                                                              | Transport response       | Who re-publishes                                                        |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------- |
-| queued, eligible                     | claim/fence, execute                                                                                | ACK after result commit  | nobody                                                                  |
-| queued, not yet eligible (due later) | no-op                                                                                               | NAK with delay until due | outbox scheduler on due (05b); claim loop picks up on due (05a)         |
-| claimed by live lease                | no-op                                                                                               | ACK as idempotent no-op  | nobody; the lease holder finishes                                       |
-| claimed with expired lease           | no-op on delivery; store lease recovery (`recover_expired_jobs`, `crates/app/src/jobs.rs`) requeues | NAK with short delay     | reconciliation scanner after reset to queued                            |
-| stale generation                     | no-op                                                                                               | term                     | nobody; the generation can never become valid                           |
-| completed                            | no-op                                                                                               | ACK as idempotent no-op  | nobody                                                                  |
-| cancelled                            | no-op                                                                                               | term                     | nobody                                                                  |
-| superseded                           | no-op                                                                                               | term                     | nobody; the superseding generation carries the work                     |
-| lost fence                           | no-op                                                                                               | term                     | nobody; the fence holder owns execution, reconciliation covers its loss |
+| Authoritative state on delivery      | Action                                                                                                              | Transport response                                                                  | Who re-publishes                                                                                                                             |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| queued, eligible                     | claim/fence, execute                                                                                                | ACK after result commit                                                             | nobody                                                                                                                                       |
+| queued, not yet eligible (due later) | no-op; persisted `available_at` remains authoritative                                                               | ACK an early 05b notification once due time is persisted; 05a has no early delivery | 05a claim loop picks it up when due; 05b due-time publisher writes one wakeup record through the 04a outbox when due                         |
+| claimed by live lease                | no-op                                                                                                               | ACK as idempotent no-op                                                             | nobody; the lease holder finishes                                                                                                            |
+| claimed with expired lease           | no-op; store lease recovery (`recover_expired_jobs`, `crates/app/src/jobs.rs`) requeues with `available_at = now()` | ACK the old 05b notification after recovery commits; 05a has no early delivery      | 05a claim loop picks up requeued work when due; 05b due-time publisher writes a wakeup through the 04a outbox; reconciliation is repair only |
+| stale generation                     | no-op                                                                                                               | term                                                                                | nobody; the generation can never become valid                                                                                                |
+| completed                            | no-op                                                                                                               | ACK as idempotent no-op                                                             | nobody                                                                                                                                       |
+| cancelled                            | no-op                                                                                                               | term                                                                                | nobody                                                                                                                                       |
+| superseded                           | no-op                                                                                                               | term                                                                                | nobody; the superseding generation carries the work                                                                                          |
+| lost fence                           | no-op                                                                                                               | term                                                                                | nobody; the fence holder owns execution, reconciliation covers its loss                                                                      |
 
 Rules that hold across the matrix:
 
 ```text
 transport redelivery never increments business attempts
 business attempts increment only when a claim/fence is accepted
-delayed retries persist the due time in PostgreSQL and are published on due via outbox/scheduler
-transport delivery counters bound redelivery only (MAX_DELIVERIES, DELIVERY_BACKOFF_SECONDS in crates/domain/src/events/subjects.rs, applied by action_for in services/worker/src/delivery.rs)
+delayed retries persist `available_at` in PostgreSQL; 05a's claim loop picks up work when due, and 05b's 05-owned due-time publisher writes one wakeup record through the 04a outbox when due
+ACK early notifications once durable scheduling responsibility exists; do not NAK them while waiting for due time
+transport delivery counters bound redelivery only (`MAX_DELIVERIES`, `DELIVERY_BACKOFF_SECONDS` in `crates/domain/src/events/subjects.rs`); `action_for` in `services/worker/src/delivery.rs` terminates retryable backoff at delivery five
 exhausted transport deliveries must not strand authoritative queued work
-the reconciliation scanner republishes queued work lacking timely transport
+the reconciliation scanner republishes queued work lacking timely transport only as repair, not as the normal retry path
 ```
 
-A persisted due time is authoritative. In 05a `available_at` filtering in `claim_job` is sufficient; in 05b the outbox scheduler publishes the wakeup when the due time passes, and the store's eligibility check still refuses early execution.
+The persisted due time is authoritative. In 05a, the PostgreSQL claim loop filters on `available_at` and picks work up when due. In 05b, the 05-owned due-time publisher writes one wakeup record through the 04a outbox when due; the store's eligibility check still refuses early execution. The reconciliation scanner repairs queued work without timely transport and does not own normal retry publication.
 
 ## Database claim/fence remains authoritative
 
@@ -249,7 +250,7 @@ The existing durable attempt/retry model should remain the source of truth for c
 
 Use transport redelivery (JetStream in 05b) to recover lost consumers and transient transport failures.
 
-When application logic schedules a later retry generation, persist that state and publish the corresponding new work notification through the outbox.
+When application logic schedules a later retry generation, persist that state and its due time. The 05a claim loop picks it up when due; in 05b the 05-owned due-time publisher writes one corresponding wakeup record through the outbox when due.
 
 ## DB polling fallback (05b cutover)
 
@@ -322,7 +323,7 @@ reconciliation republishes
 3. shutdown during batch: SIGTERM mid-batch stops further claims immediately, drains in-flight handlers within the drain deadline, and leaves unclaimed rows queued and claimable;
 4. scoped jobs: workspace- and platform-scoped jobs enqueue, claim, retry and complete with no project row; project-scoped jobs keep requiring a project; no dummy project is ever created;
 5. no retry multiplication: repeated redeliveries of one delivery do not increment business attempts; only accepted claim/fence executions do;
-6. matrix conformance: one test per matrix row asserting the action and the ACK/NAK/term response, including persisted due time for delayed retries and reconciliation republish after exhausted deliveries.
+6. matrix conformance: one test per row asserting the action and ACK/NAK/term response, including persisted `available_at`, due-time pickup by the claim loop, and retryable delivery backoffs terminating at delivery five (`MAX_DELIVERIES`); reconciliation republishes only as repair after exhausted deliveries.
 
 ### 05b (JetStream)
 
@@ -336,7 +337,8 @@ reconciliation republishes
 8. NATS unavailable while new work is queued (PostgreSQL retains the work);
 9. NATS returns and reconciliation/outbox drains;
 10. graceful shutdown with in-flight work;
-11. exhausted transport deliveries do not strand authoritative queued work; the reconciliation scanner republishes it.
+11. exhausted transport deliveries do not strand authoritative queued work; the reconciliation scanner republishes it only as repair;
+12. an early notification for future `available_at` is ACKed after the due time is durable, and the 05-owned due-time publisher writes one wakeup record through the 04a outbox when due; reconciliation is not the normal retry path.
 
 Preserve existing durable-run regression tests.
 

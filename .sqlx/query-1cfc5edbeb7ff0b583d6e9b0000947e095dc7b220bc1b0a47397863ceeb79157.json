@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_receipts\n           SET state=CASE WHEN $3::boolean OR attempts >= $4 THEN 'quarantined' ELSE 'retrying' END,\n             settled_generation=$7,\n             next_attempt_at=clock_timestamp()+($5::double precision*interval '1 millisecond'),\n             last_error=$6\n           WHERE event_id=$1 AND consumer=$2 AND state='retrying'\n             AND attempt_generation=$7 AND settled_generation<>$7\n           RETURNING state",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_receipts",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Int4",
+        "Float8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1cfc5edbeb7ff0b583d6e9b0000947e095dc7b220bc1b0a47397863ceeb79157"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_events\n           SET lease_expires_at = clock_timestamp() + ($3::double precision * interval '1 millisecond')\n           WHERE event_id = $1 AND lease_owner = $2 AND claim_generation = $4\n             AND delivery_state = 'pending' AND lease_expires_at > clock_timestamp()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b586b1d9788252da05800dc0a2444af000654103e8ed952adea8f701d8023a5"
+}

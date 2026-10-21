@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use deepref_domain::WorkloadClass;
 use sqlx::PgPool;
 use tokio::sync::watch;
 
@@ -18,13 +19,14 @@ pub async fn run(
     owner: String,
     interval: Duration,
     mut shutdown: watch::Receiver<bool>,
+    pool_capacities: Vec<(WorkloadClass, usize)>,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                if let Err(error) = deepref_app::record_worker_heartbeat(&pool, &owner).await {
+                if let Err(error) = deepref_app::record_worker_heartbeat_with_capacities(&pool, &owner, &pool_capacities).await {
                     tracing::warn!(%error, owner, "worker heartbeat write failed");
                 }
             }

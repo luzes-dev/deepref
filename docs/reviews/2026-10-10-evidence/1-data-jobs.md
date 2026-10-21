@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Review 1: Data architecture, persistence, durable jobs, concurrency
 
 Reviewer lens: crates/app (migrations, src, tests), services/worker, crates/application, crates/domain, crates/events, apps/server, and how crates/http-api handlers write state.

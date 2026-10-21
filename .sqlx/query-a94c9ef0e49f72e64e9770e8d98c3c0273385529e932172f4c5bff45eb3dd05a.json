@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key)\n           VALUES ($1,$2,$3,$4,$5,$6,$7)\n           ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id\n           RETURNING id",
+  "query": "INSERT INTO jobs (id,project_id,workspace_id,scope,kind,workload_class,payload,priority,max_attempts,dedupe_key)\n           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)\n           ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id\n           RETURNING id",
   "describe": {
     "columns": [
       {
@@ -19,6 +19,9 @@
       "Left": [
         "Uuid",
         "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
         "Text",
         "Jsonb",
         "Int4",
@@ -30,5 +33,5 @@
       false
     ]
   },
-  "hash": "1bd397829c5114e4eeb577e4fc952dd84e143463a8e565f095d8fe8439132822"
+  "hash": "a94c9ef0e49f72e64e9770e8d98c3c0273385529e932172f4c5bff45eb3dd05a"
 }

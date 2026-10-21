@@ -23,7 +23,7 @@ pub use identity::{
     UserPrincipal, UserStatus,
 };
 pub use ingestion::{IngestionItemStatus, IngestionStatus};
-pub use jobs::{InvalidJobKind, JobKind};
+pub use jobs::{InvalidJobKind, InvalidWorkloadClass, JobKind, WorkloadClass};
 pub use provider::{InvalidProviderKind, ProviderKind};
 pub use reference::Reference;
 pub use scientific_assignment::ScientificAssignmentRole;

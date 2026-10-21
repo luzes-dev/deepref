@@ -26,9 +26,12 @@ pub mod durable_runs;
 mod extraction;
 mod graph;
 pub mod identity;
+pub mod inbox;
 mod jobs;
+mod leased_handler;
 mod legacy_actors;
 mod notifications;
+pub mod outbox;
 mod persistence;
 mod pmid_import;
 mod prisma;
@@ -47,6 +50,7 @@ mod study;
 #[cfg(feature = "test-support")]
 pub mod test_isolation;
 mod worker_runtime;
+mod workflow_files;
 mod workflows;
 pub mod workspaces;
 
@@ -166,8 +170,9 @@ pub use graph::{
     MAX_GRAPH_NODES, enqueue_metrics_recompute, load_project_graph, recompute_project_metrics,
 };
 pub use jobs::{
-    PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
-    recover_expired_jobs, renew_job,
+    PostgresClaimTransport, PostgresDurableExecutionStore, claim_job, claim_jobs, complete_job,
+    enqueue_job, enqueue_job_pool, fail_job, job, recover_expired_jobs, release_job, renew_job,
+    scoped_job,
 };
 pub use legacy_actors::{
     LegacyActorDecision, LegacyActorDecisionKind, LegacyActorError, LegacyActorKind,
@@ -235,8 +240,13 @@ pub use study::{
 };
 pub use worker_runtime::{
     MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,
-    record_worker_heartbeat, recover_expired_worker_state, remove_worker_heartbeat,
-    reserve_provider_permit,
+    record_worker_heartbeat, record_worker_heartbeat_with_capacities, recover_expired_worker_state,
+    remove_worker_heartbeat, reserve_provider_permit,
+};
+pub use workflow_files::{
+    MAX_WORKFLOW_FILE_BYTES, NewWorkflowFile, WORKFLOW_FILE_BACKFILL_BATCH, WorkflowFile,
+    WorkflowFileBackfill, WorkflowFileFallback, WorkflowFileSource, backfill_workflow_files,
+    create_workflow_file, get_workflow_file, schedule_workflow_file_backfills,
 };
 pub use workflows::*;
 pub use workspaces::{
