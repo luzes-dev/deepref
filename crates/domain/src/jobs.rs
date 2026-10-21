@@ -16,6 +16,7 @@ pub enum JobKind {
     RetrieveDocument,
     ParseDocument,
     AiUsageReconcile,
+    AiUsageExportReplay,
     BackfillWorkflowFiles,
 }
 
@@ -98,6 +99,7 @@ impl JobKind {
             Self::RetrieveDocument => "retrieve_document",
             Self::ParseDocument => "parse_document",
             Self::AiUsageReconcile => "ai_usage_reconcile",
+            Self::AiUsageExportReplay => "ai_usage_export_replay",
             Self::BackfillWorkflowFiles => "backfill_workflow_files",
         }
     }
@@ -106,8 +108,11 @@ impl JobKind {
     /// stored on the job row at enqueue so claims can filter by pool.
     pub const fn workload_class(self) -> WorkloadClass {
         match self {
-            // Model calls and workspace-scoped usage recovery.
-            Self::AssistantAgentRun | Self::AiUsageReconcile => WorkloadClass::Ai,
+            // Model calls, workspace-scoped usage recovery and the platform
+            // usage export replay.
+            Self::AssistantAgentRun | Self::AiUsageReconcile | Self::AiUsageExportReplay => {
+                WorkloadClass::Ai
+            }
             // The document pipeline: full-text retrieval feeds parsing, and
             // corpus deduplication is CPU/memory-bound local processing.
             Self::RetrieveDocument | Self::ParseDocument | Self::ImportDeduplication => {
@@ -162,6 +167,7 @@ impl std::str::FromStr for JobKind {
             "retrieve_document" => Ok(Self::RetrieveDocument),
             "parse_document" => Ok(Self::ParseDocument),
             "ai_usage_reconcile" => Ok(Self::AiUsageReconcile),
+            "ai_usage_export_replay" => Ok(Self::AiUsageExportReplay),
             "backfill_workflow_files" => Ok(Self::BackfillWorkflowFiles),
             _ => Err(InvalidJobKind(value.to_owned())),
         }
