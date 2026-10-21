@@ -56,9 +56,14 @@ pub(crate) async fn lock_project(
     Ok(())
 }
 pub(crate) fn user(actor: &Actor) -> Result<(), AiFirstError> {
-    if actor.kind() != ActorKind::User {
+    let Some(user_id) = actor.user_id().filter(|_| actor.kind() == ActorKind::User) else {
         return Err(AiFirstError::Invalid(
-            "a human actor must approve this action".into(),
+            "a human actor must come from an authenticated user principal".into(),
+        ));
+    };
+    if user_id.as_uuid().to_string() != actor.id() {
+        return Err(AiFirstError::Invalid(
+            "authenticated user provenance does not match the actor label".into(),
         ));
     }
     Ok(())
@@ -205,6 +210,7 @@ pub async fn start_ai_first_cohort(
         .await
         .map_err(|e| AiFirstError::Refused(e.to_string()))?;
     let mut tx = pool.begin().await?;
+    crate::legacy_actors::lock_identity_mappings_shared(&mut tx).await?;
     lock_project(&mut tx, project).await?;
     let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_cohorts WHERE project_id=$1 AND status IN ('open','closed','auditing','passed'))")
         .bind(project).fetch_one(&mut *tx).await?;
@@ -218,9 +224,10 @@ pub async fn start_ai_first_cohort(
     } else {
         "routing"
     };
-    sqlx::query("INSERT INTO project_ai_screening_authority(project_id,ceiling,approved_by) VALUES($1,$2,$3)
-       ON CONFLICT(project_id) DO UPDATE SET ceiling=$2,approved_by=$3,suspended_reason=NULL,updated_at=now()")
-        .bind(project).bind(ceiling).bind(actor.id()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO project_ai_screening_authority(project_id,ceiling,approved_by,approved_by_actor_user_id) VALUES($1,$2,$3,$4)
+       ON CONFLICT(project_id) DO UPDATE SET ceiling=$2,approved_by=$3,approved_by_actor_user_id=$4,suspended_reason=NULL,updated_at=now()")
+        .bind(project).bind(ceiling).bind(actor.id()).bind(actor.user_id().map(|id| id.as_uuid()))
+        .execute(&mut *tx).await?;
     let published:Option<Uuid>=sqlx::query_scalar("SELECT id FROM protocol_versions WHERE project_id=$1 AND status='published' ORDER BY version DESC LIMIT 1")
         .bind(project).fetch_optional(&mut *tx).await?;
     if published != Some(protocol.id) {
@@ -229,10 +236,11 @@ pub async fn start_ai_first_cohort(
         ));
     }
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO ai_screening_cohorts(id,project_id,protocol_version_id,semantic_bundle_hash,semantic_identity,policy_version,target_percent,approved_by)
-      VALUES($1,$2,$3,$4,$5,1,$6,$7)")
+    sqlx::query("INSERT INTO ai_screening_cohorts(id,project_id,protocol_version_id,semantic_bundle_hash,semantic_identity,policy_version,target_percent,approved_by,approved_by_actor_user_id)
+      VALUES($1,$2,$3,$4,$5,1,$6,$7,$8)")
         .bind(id).bind(project).bind(protocol.id).bind(contract_id.as_str()).bind(serde_json::to_value(&identity)?)
-        .bind(target as i32).bind(actor.id()).execute(&mut *tx).await?;
+        .bind(target as i32).bind(actor.id()).bind(actor.user_id().map(|id| id.as_uuid()))
+        .execute(&mut *tx).await?;
     let members = sqlx::query(
         "INSERT INTO ai_screening_cohort_members(project_id,cohort_id,report_id,evaluated_revision)
       SELECT pr.project_id,$2,pr.report_id,COALESCE(s.revision,0) FROM project_reports pr

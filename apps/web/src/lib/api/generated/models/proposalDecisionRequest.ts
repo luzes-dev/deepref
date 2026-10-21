@@ -7,10 +7,6 @@
 import type { ProposalDecisionInput } from './proposalDecisionInput.ts';
 
 export interface ProposalDecisionRequest {
-	/** @nullable */
-	actor_id?: string | null;
-	/** @nullable */
-	actor_kind?: string | null;
 	decision: ProposalDecisionInput;
 	reason: string;
 }

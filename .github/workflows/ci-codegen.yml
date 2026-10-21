@@ -31,6 +31,12 @@ jobs:
         run: pnpm run generate:api:check
         env:
           SQLX_OFFLINE: "true"
+      # The authorization policy table must cover every route and its generated
+      # documentation must stay in sync with the API.
+      - name: Verify authorization coverage artifacts
+        run: pnpm run generate:authz:check
+        env:
+          SQLX_OFFLINE: "true"
       - name: Prove drift check left the tree clean
         run: git diff --exit-code
       - name: Show sccache statistics

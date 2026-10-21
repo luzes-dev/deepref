@@ -46,8 +46,6 @@ export interface AssistantMessageRecord {
 export type ReviewDestination =
 	'screening' | 'deduplication' | 'studies' | 'extraction' | 'appraisal';
 
-const ACTOR_HEADERS = { 'x-actor-kind': 'user' } as const;
-
 const REVIEW_DESTINATIONS: Record<string, ReviewDestination> = {
 	propose_screening_decision: 'screening',
 	propose_duplicate_merge: 'deduplication',
@@ -76,7 +74,7 @@ export async function listAssistantConversations(
 ): Promise<AssistantConversation[]> {
 	const response = await customFetch<CustomFetchEnvelope<AssistantConversation[]>>(
 		`/api/projects/${projectId}/assistant/conversations`,
-		{ method: 'GET', headers: { ...ACTOR_HEADERS } }
+		{ method: 'GET' }
 	);
 	return response.data;
 }
@@ -89,7 +87,7 @@ export async function createAssistantConversation(
 		`/api/projects/${projectId}/assistant/conversations`,
 		{
 			method: 'POST',
-			headers: { ...ACTOR_HEADERS, 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ title })
 		}
 	);
@@ -102,7 +100,7 @@ export async function listAssistantMessages(
 ): Promise<AssistantMessageRecord[]> {
 	const response = await customFetch<CustomFetchEnvelope<AssistantMessageRecord[]>>(
 		`/api/projects/${projectId}/assistant/conversations/${conversationId}/messages`,
-		{ method: 'GET', headers: { ...ACTOR_HEADERS } }
+		{ method: 'GET' }
 	);
 	return response.data;
 }
@@ -113,7 +111,7 @@ export async function deleteAssistantConversation(
 ): Promise<void> {
 	await customFetch<CustomFetchEnvelope<undefined>>(
 		`/api/projects/${projectId}/assistant/conversations/${conversationId}`,
-		{ method: 'DELETE', headers: { ...ACTOR_HEADERS } }
+		{ method: 'DELETE' }
 	);
 }
 
@@ -186,7 +184,7 @@ export interface AiBudget {
 export async function fetchAiBudget(projectId: string): Promise<AiBudget> {
 	const response = await customFetch<CustomFetchEnvelope<AiBudget>>(
 		`/api/projects/${projectId}/ai/budget`,
-		{ method: 'GET', headers: { ...ACTOR_HEADERS } }
+		{ method: 'GET' }
 	);
 	return response.data;
 }

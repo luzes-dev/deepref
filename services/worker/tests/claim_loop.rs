@@ -137,10 +137,18 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     let result = tokio::time::timeout(
         Duration::from_secs(20),
         run_claim_loop(
-            pool.clone(),
+            deepref_app::PostgresClaimTransport {
+                store: deepref_app::PostgresDurableExecutionStore { pool: pool.clone() },
+            },
+            deepref_app::PostgresDurableExecutionStore { pool: pool.clone() },
             "claim-loop-test".to_owned(),
             ClaimLoopConfig {
-                concurrency: 1,
+                pools: deepref_domain::WorkloadClass::ALL.to_vec(),
+                pool_concurrency: deepref_domain::WorkloadClass::ALL
+                    .iter()
+                    .map(|class| (*class, 1))
+                    .collect(),
+                max_batch: 1,
                 claim_lease: Duration::from_secs(30),
                 drain_deadline: Duration::from_secs(5),
             },
@@ -209,6 +217,7 @@ async fn heartbeat_is_written_while_running_and_removed_on_shutdown() {
         "heartbeat-test-worker".to_owned(),
         Duration::from_millis(50),
         stopped,
+        Vec::new(),
     ));
     let seen = async {
         loop {

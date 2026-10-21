@@ -1,4 +1,3 @@
-use super::actor::extract_actor;
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -159,10 +158,11 @@ pub(crate) async fn get_overview(
 pub(crate) async fn start(
     State(state): State<AppState>,
     Path(project): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<StartAiFirstRequest>,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let cohort = deepref_app::start_ai_first_cohort(
         &state.pool,
         project,
@@ -183,9 +183,10 @@ pub(crate) async fn start(
 pub(crate) async fn close(
     State(state): State<AppState>,
     Path((project, cohort)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    deepref_app::close_ai_first_cohort(&state.pool, project, cohort, &extract_actor(&headers)?)
+    deepref_app::close_ai_first_cohort(&state.pool, project, cohort, &request_actor.actor)
         .await
         .map_err(map_error)?;
     Ok(Json(AiFirstActionDto {
@@ -199,7 +200,8 @@ pub(crate) async fn close(
 pub(crate) async fn draw(
     State(state): State<AppState>,
     Path((project, cohort)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<DrawAiFirstRequest>,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
     let count = deepref_app::draw_ai_first_audit(
@@ -207,7 +209,7 @@ pub(crate) async fn draw(
         project,
         cohort,
         body.sample_size,
-        &extract_actor(&headers)?,
+        &request_actor.actor,
     )
     .await
     .map_err(map_error)?;
@@ -221,16 +223,13 @@ pub(crate) async fn draw(
 pub(crate) async fn evaluate(
     State(state): State<AppState>,
     Path((project, cohort)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    let result = deepref_app::evaluate_ai_first_audit(
-        &state.pool,
-        project,
-        cohort,
-        &extract_actor(&headers)?,
-    )
-    .await
-    .map_err(map_error)?;
+    let result =
+        deepref_app::evaluate_ai_first_audit(&state.pool, project, cohort, &request_actor.actor)
+            .await
+            .map_err(map_error)?;
     Ok(Json(AiFirstActionDto {
         cohort_id: cohort,
         count: result.observed_relevant,
@@ -242,7 +241,8 @@ pub(crate) async fn evaluate(
 pub(crate) async fn finalize(
     State(state): State<AppState>,
     Path((project, cohort)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<FinalizeAiFirstRequest>,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
     let count = deepref_app::finalize_ai_first_cohort(
@@ -250,7 +250,7 @@ pub(crate) async fn finalize(
         project,
         cohort,
         body.acknowledge_reference_limits,
-        &extract_actor(&headers)?,
+        &request_actor.actor,
     )
     .await
     .map_err(map_error)?;
@@ -264,9 +264,10 @@ pub(crate) async fn finalize(
 pub(crate) async fn recover(
     State(state): State<AppState>,
     Path((project, cohort)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    deepref_app::recover_ai_first_cohort(&state.pool, project, cohort, &extract_actor(&headers)?)
+    deepref_app::recover_ai_first_cohort(&state.pool, project, cohort, &request_actor.actor)
         .await
         .map_err(map_error)?;
     Ok(Json(AiFirstActionDto {

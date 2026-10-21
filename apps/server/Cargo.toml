@@ -7,11 +7,13 @@ license.workspace = true
 [dependencies]
 deepref-http-api.workspace = true
 deepref-config.workspace = true
+deepref-domain.workspace = true
 deepref-telemetry.workspace = true
 deepref-worker = { path = "../../services/worker" }
 serde_json.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

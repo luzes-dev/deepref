@@ -7,6 +7,33 @@ DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a 
 PostgreSQL owns projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, domain events, durable jobs, graph status, and metric snapshots. The v2 evidence workspace is layered alongside the citation-ingestion model: records, reports, studies, screening events/state, review events, documents, audit rows, and leased jobs are all PostgreSQL tables.
 
 Authoritative state changes and their follow-up jobs are committed in one transaction. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, owns a lease with expiry renewal, retries failures with persisted attempts, marks terminal failures dead, and reclaims expired work. Stable dedupe keys prevent duplicate logical jobs. Ingestion preserves cached/fetched facts, discovered children, citations, events, and completion in the same transaction boundary; reconciliation repairs already-committed rows without silently dropping work.
+
+The generic transactional outbox (`outbox_events` with `outbox_receipts`) and
+the provider integration inbox (`integration_inbox_events`, migration `0083`)
+carry asynchronous publication and inbound WorkOS/Polar webhooks without a
+broker. Outbox rows are inserted in the same transaction as the authoritative
+change they describe and stay broker-independent: an in-process dispatcher in
+the worker claims bounded batches with lease expiry renewal and delivers to the
+typed handlers registered per message type and version, and a row is
+`delivered` only when every expected consumer's receipt — written in the
+consumer's own transaction, with its effect — has committed. Claiming or
+leasing never delivers; per-consumer retries back off and quarantine after
+their attempt budget, and quarantined rows are replayed explicitly with the
+same stable event identity. The inbox verifies provider signatures before any
+insert, deduplicates on `(provider, provider_event_id)`, acknowledges only
+after the insert commits, and moves events through
+`received -> processing -> processed | failed -> quarantined` with the same
+retry and replay discipline. The domain-specific `ai_autonomy_outbox` is
+deliberately kept separate from this generic outbox and is not consolidated
+into it; a later migration would need its own explicit decision and
+delivery/idempotency plan.
+
+Provider handlers treat duplicate and out-of-order webhook events as normal:
+they reload authoritative provider state or compare provider versions where
+available. Provider-specific reconciliation hooks run from the worker's
+existing periodic reconciler; WorkOS and Polar adapters register their hooks
+when those integrations land.
+
 Automation, compiled-review and workflow consumers read lifecycle status and
 timestamps from `durable_runs`, `durable_steps` and `durable_attempts`.
 Recipe, workflow graph and review provenance remain in their typed domain
@@ -81,6 +108,93 @@ Other contexts temporarily retain their existing app-root interfaces.
 review and assistant-plan transports; unmigrated contexts and dev-test targets
 are intentionally outside that source rule.
 
+### Acceptance status
+
+Handoff 04a is foundation-only until 02/08 wire real WorkOS/Polar verifiers,
+handlers, and reconciliation. Acceptance still needs provider fixtures for real
+signatures, out-of-order projection updates, missed-event reconciliation, and
+commit-before-ack behavior. Production registries are empty; metrics recompute
+continues to enqueue jobs directly. Dispatcher effects are synthetic test
+fixtures until the production pilot in 04b.
+
+Heartbeat ownership checks are polled before ready handler work where possible.
+Database effects must commit with the generation-fenced receipt or inbox
+completion; an inbox preflight check takes no row lock, and completion is the
+final write before commit so long effect transactions do not block renewal.
+Cancellation cannot retract an external request or COMMIT already submitted.
+External effects need downstream idempotency keys (outbox event ID + consumer,
+or inbox provider + provider event ID), and downstream fencing where supported.
+
+Inbox receipt rejects missing, empty, or whitespace-padded `event_type` with a
+typed error. Provider adapters must supply the verified event's explicit type;
+04a does not accept a provider contract that omits it.
+
+Each due outbox consumer reserves one attempt per claim generation. Failure
+bookkeeping and abandoned-claim recovery settle that reservation without
+charging it again; consumers in backoff reserve nothing. Unsupported frozen
+consumers are parked for five minutes with a diagnostic, and claims exclude
+incompatible sets even beyond the bounded parking batch.
+
+Inbox receipt accepts bodies up to 256 KiB. Processed payloads expire after
+30 days; the explicit `purge_processed_inbox_payloads` app operation replaces
+expired payloads with NULL while retaining `(provider, provider_event_id)` and
+processing evidence for deduplication. No purge scheduler is installed.
+
+## Object storage and blob inventory
+
+PostgreSQL keeps metadata and provenance; object storage keeps bytes. All object
+access goes through `deepref_documents::DocumentStore`, which wraps the
+`object_store` crate. Development uses the filesystem backend
+(`DOCUMENT_STORAGE_BACKEND=local`, allowed only when `APP_ENV=development`); production
+configures an S3-compatible bucket with an HTTPS endpoint. Domain and
+application code never see a provider type. Object keys are built by
+`ObjectKey` from stable identifiers only, never from a user-provided filename:
+`documents/{document_id}` for uploaded PDFs and
+`projects/{project_id}/workflow-runs/{run_id}/files/{file_id}` for workflow
+export files. Authorization is checked before a key is derived or read; the key
+layout is not an access boundary. The workspace prefix from the SaaS tenancy
+program is added with that gate.
+
+Inventory of binary and large-text columns in `crates/app/migrations/`:
+
+| Column | Holds | Status |
+| ------ | ----- | ------ |
+| `workflow_files.content bytea` (0028, up to 16 MiB) | Workflow export files (RIS, CSV, ...) | Moving to object storage, see below |
+| `document_blocks.text` (0006) | Parsed text of one PDF block, indexed by the generated `search_vector` for full-text search | Stays: it is searched in place and each value is a single block, not a file body |
+| `documents` rows (0006, 0013) | Metadata and an object key for the PDF; the PDF bytes are already in object storage | No change |
+| `document_references.raw`, `fetched_unresolved_reference_facts.raw_unstructured`, `unresolved_references.raw_unstructured` | One citation string each | Short text, stays |
+| `jsonb` payload and `raw` columns (`records.raw`, `reports.raw`, `works.raw`, dead-letter `payload`, `trigger_data`, review artifact `payload`) | Normalized or provider JSON | Relational data, out of scope |
+| `assistant_messages.content` (0023), `notifications.body` (0024, at most 500 characters) | Chat and notification text | Stays |
+
+`workflow_files.content` is the only column holding file bodies. It moves in
+stages. Migration `0084` adds nullable `storage_key`, `content_sha256` and
+`byte_size` (all null or all set) and keeps `content bytea NOT NULL`.
+
+- **Dual write.** `create_workflow_file` writes the object first, then inserts
+  the row with both `content` and the reference. If the insert fails the object
+  is removed; a crash between the two leaves only an unreferenced object, never
+  a row pointing at nothing.
+- **Read.** `get_workflow_file` prefers the object and checks its size and
+  SHA-256 against the row. A null key, a missing object, an unreadable object
+  or a mismatch is logged and served from `content`; the result reports which
+  case applied (`WorkflowFileSource`).
+- **Backfill.** The durable job kind `backfill_workflow_files` is scheduled
+  per project by the worker reconciler for rows without a key. It uploads
+  `content` under the row's deterministic key, reads the object back, compares
+  its SHA-256 with `content`, and only then sets the reference. It is idempotent
+  and resumable: rows are selected by their missing reference, so a run that
+  died resumes with what is left, and an object left by a dead run is
+  overwritten and verified again.
+
+Dropping `NOT NULL` on `content`, switching writers to object-only, and dropping
+the column follow in later releases once old binaries have drained. Cleanup of
+objects for deleted projects, replaced files and failed writes through durable
+jobs is not implemented yet.
+
+Assistant SSE (`crates/http-api/src/routes/assistant/run_events.rs`) replays
+persisted run events from PostgreSQL by `after_seq`, so a stream can reconnect
+to any API replica and needs no pub/sub.
+
 ## AI foundation and evidence grounding
 
 `deepref-ai` is the provider-neutral seam for structured AI work. It owns typed
@@ -142,7 +256,7 @@ domain commands remain the sole scientific-write authority.
 
 `deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.
 
-Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the live `JobQueue` port; `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns the OpenAlex, Crossref and DataCite metadata adapters, PubMed, import parsers, Unpaywall and GROBID; `deepref-app` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
+Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the durable-work ports (`DurableExecutionStore`, `WorkTransport`); `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns the OpenAlex, Crossref and DataCite metadata adapters, PubMed, import parsers, Unpaywall and GROBID; `deepref-app` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
 
 Runtime environment access belongs to `deepref-config`. Its typed
 `from_source` constructors support deterministic injected configuration tests;
@@ -156,6 +270,69 @@ distinct from production runtime configuration.
 for `DEEPREF_WORKFLOW_NICHE_NODES`, defaulting to false. Runtime configuration
 defines that value; workflow feature admission and behavior belong to the
 workflow context, not configuration loading.
+
+## Durable jobs: execution store, work transport and workload pools
+
+Durable job execution is split into two application ports
+(`crates/application/src/jobs.rs`). `DurableExecutionStore` owns persisted
+lifecycle semantics: enqueue, claim/fence, lease renewal, attempts, terminal
+transitions, retry due times and recovery. `WorkTransport` owns delivery
+mechanics: waking eligible work and handing it to the worker for a workload
+pool. The only transport today is the PostgreSQL claim path
+(`PostgresClaimTransport` over `PostgresDurableExecutionStore`,
+`crates/app/src/jobs.rs`): delivery means claiming, and the claim remains the
+authority. No provider SDK or SQLx type appears in the ports.
+
+`services/worker/src/delivery.rs` keeps a pure `delivery_matrix` helper for the
+05b broker response contract. The 05a PostgreSQL claim query checks queued
+state, due time, attempt budget and workload class; it does not inspect whether
+an owning run was cancelled or superseded. Runtime dispatch guards load the
+owning run and skip terminal work before invoking its handler. Broker
+ACK/NAK/term semantics belong to 05b, when a broker transport is introduced;
+the 05a claim path has no broker response to send.
+
+Business attempts increment when a claim is accepted and are refunded when an
+unstarted claim is released. The independent monotonic `claim_seq` advances on
+every claim and fences renew, complete, fail and release, even when a released
+claim is reclaimed by the same worker owner. Failure retries persist their due
+time in `available_at`, and expired-lease recovery reuses the attempt the
+crashed claim already spent.
+
+Every job row carries a typed scope — `project`, `workspace` or `platform`
+(`jobs.scope`, with `project_id` / `workspace_id` as the matching tenant
+references and a consistency CHECK). Workspace- and platform-scoped work runs
+with no project row; claiming filters on workload class, never on
+`project_id IS NOT NULL`, and no job fabricates a project.
+
+Every job kind maps to exactly one workload class, derived from the kind at
+enqueue (`JobKind::workload_class`, stored in `jobs.workload_class`) and never
+chosen by the caller. This table is the normative mapping:
+
+| Job kind               | Workload class | Bound / isolation rationale                              |
+| ---------------------- | -------------- | -------------------------------------------------------- |
+| `assistant_agent_run`  | `ai`           | model calls, bounded by provider and usage limits          |
+| `retrieve_document`    | `documents`    | document pipeline: full-text retrieval feeding parsing     |
+| `parse_document`       | `documents`    | CPU/memory-bound PDF parsing                              |
+| `run_deduplication`    | `documents`    | CPU/memory-bound deduplication of imported record corpora |
+| `durable_run_step`     | `workflow`     | durable automation, workflow and review step dispatch      |
+| `backfill_workflow_files` | `workflow`     | workflow export file copy to object storage                |
+| `work_fetch_requested` | `integration`  | external metadata provider traffic, rate-limit bounded     |
+| `pmid_import`          | `integration`  | external PubMed provider traffic, rate-limit bounded       |
+| `recompute_metrics`    | `projection`   | derived read-model recomputes                             |
+| `recompute_prisma`     | `projection`   | derived read-model recomputes (compatibility)             |
+
+The class set contains only classes real kinds need: there is no `review` class
+today because review work rides `durable_run_step` (handler kind is a dispatch
+detail, not a queue kind). Add a class only when a job kind needs it.
+
+`deepref-server worker --pool <class>[,<class>]` runs one process for the
+selected pools; without `--pool` a worker serves every class, preserving the
+single-process behavior. Several replicas of one pool share the same durable
+consumer. Concurrency is set per pool (`WORKER_CONCURRENCY_<CLASS>`, defaulting
+to `WORKER_CONCURRENCY`), so a saturated pool neither drains nor starves
+another, and each tick claims at most `min(free pool capacity,
+WORKER_CLAIM_BATCH_MAX)` jobs in one statement — never in an unbounded inner
+loop. Idle claim ticks back off instead of polling hot.
 
 ## API and web degradation
 
@@ -234,3 +411,49 @@ request. Publication alerts and PMID imports keep their own providers.
 
 Just remains the public command interface, Mise owns tool versions, and xtask
 owns the repository graph. Ordinary build, test, and service commands stay in Just.
+
+## Workspace tenancy: project backfill (handoff 03a)
+
+Every project belongs to one workspace. The staged rollout is expand-only until
+the final contract step:
+
+1. `deepref-server migrate` (once, before any new replica starts) creates the
+   workspace tables, the fixed migration workspace, the nullable
+   `projects.workspace_id`, and a BEFORE INSERT trigger that assigns the
+   migration workspace to any project inserted without one (previous-release
+   binaries). It also runs one bounded backfill batch and grants existing users
+   ownership of the migration workspace. The `projects (workspace_id)` index is
+   built `CONCURRENTLY` by its own `-- no-transaction` migration.
+2. Operator step, after the roll: `deepref-server backfill-project-workspaces`.
+   It moves projects that still lack a workspace in batches of 500, one
+   transaction per batch, then validates (total, unassigned, orphaned) in a
+   single statement. The same command marks existing users who hold an active
+   membership as onboarded, in bounded batches (sign-in does the same for any
+   it has not reached). It is resumable and safe to rerun; a nonzero unassigned or
+   orphaned count fails the command and changes nothing.
+3. Only after the command reports a clean validation may a later
+   `-- phase: contract` migration add `NOT NULL` and drop the trigger. That
+   migration needs a `requires-release-out-of-service` line.
+
+Onboarding is tracked by `users.onboarded_at`, not by the user insert, so a user
+the previous release provisioned (no memberships) is onboarded by their next
+sign-in. Invitations bind only to the address the provider verified
+(`users.verified_email`, which must equal the current `primary_email`). WorkOS reconciliation is serialized per Organization
+and rejects any snapshot that began before `workspaces.workos_reconciled_through`.
+
+## Migration recovery: the denial-window index (handoff 03b)
+
+Migration 0100 builds `admin_audit_denial_window_idx` with
+`CREATE UNIQUE INDEX CONCURRENTLY`, outside a transaction. If it is interrupted
+(process killed, lock timeout, a duplicate key found while building), PostgreSQL
+leaves an INVALID index of that name and the next run of 0100 fails with
+"relation already exists". Recover by hand, then rerun the migrations:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS admin_audit_denial_window_idx;
+```
+
+Migration 0101 asserts the index is valid, ready and unique and refuses to
+continue otherwise, so a skipped or half-built index can never be accepted. The
+two migrations are unreleased; once released they are immutable and any repair
+is a new migration.

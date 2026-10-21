@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Reviewer 4: Frontend architecture, state, data fetching, UX, accessibility, responsive, design system
 
 Scope: `apps/web` (SvelteKit 3 SPA, Svelte 5 runes, TanStack svelte-query 6, orval client) and `packages/ui` at `main` b0ad219. This was a read-only review.

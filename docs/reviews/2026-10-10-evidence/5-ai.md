@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Reviewer 5: AI subsystem, end to end
 
 Scope: `crates/ai`, `crates/review`, the AI parts of `crates/app` / `crates/http-api` / `services/worker`, and the web assistant and proposal UI. This was a read-only review.

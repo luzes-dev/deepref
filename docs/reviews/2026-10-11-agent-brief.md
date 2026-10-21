@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # Agent brief: applying the 2026-10-10 review (wave 1)
 
 **Recovered integration:** wave 1 and approved H2–H5 are integrated on `integration/review-resume`. Read [Integration results](2026-10-10-fix-handoff.md#integration-results-2026-10-14) for per-packet status, final gate counts, actual runtime evidence and unapproved owner gates. The instructions below describe the original track split, not a request to rerun completed work.

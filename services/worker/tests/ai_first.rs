@@ -14,9 +14,7 @@ use deepref_app::{
 use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
 };
-use deepref_domain::{
-    Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
-};
+use deepref_domain::{Actor, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -167,7 +165,10 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
             .unwrap();
         reports.push(id);
     }
-    let owner = Actor::new(ActorKind::User, "owner").unwrap();
+    deepref_app::identity::ensure_development_principal(&pool, true)
+        .await
+        .unwrap();
+    let owner = Actor::authenticated_user(deepref_app::identity::development_principal_id());
     let cohort = start_ai_first_cohort(&pool, project, 95, false, &owner)
         .await
         .unwrap();
@@ -183,7 +184,10 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
             else {
                 break;
             };
-            assert_eq!(job.project_id.as_uuid(), project);
+            assert_eq!(
+                job.project_id().expect("project-scoped test job").as_uuid(),
+                project
+            );
             let action = handle_job_with_documents_owned_and_ai(
                 pool.clone(),
                 &job,

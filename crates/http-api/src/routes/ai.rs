@@ -14,10 +14,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{
-    actor::extract_actor,
-    pagination::{PaginatedResponse, PaginationParams, page},
-};
+use super::pagination::{PaginatedResponse, PaginationParams, page};
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_receipts\n               SET state = 'retrying', attempts = 0, next_attempt_at = now(), last_error = NULL,\n                   attempt_generation=0,settled_generation=0\n               WHERE event_id = $1 AND state = 'quarantined'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7a184af5ed151f29395e3f7047c96a17989ccc5d4fa20df6f48bb00dddf0792d"
+}

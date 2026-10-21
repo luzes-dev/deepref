@@ -17,7 +17,7 @@ use deepref_ai::{
     AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters,
     ModelProfile, ResolvedModel, runtime::StaticModelFactory, sha256_bytes,
 };
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobScope};
 use deepref_config::RuntimeConfig;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
@@ -27,12 +27,21 @@ use sqlx::{PgPool, Row};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+const DEVELOPMENT_ACTOR_ID: &str = "00000000-0000-0000-0000-000000000003";
+
 async fn database() -> Option<PgPool> {
-    deepref_app::test_isolation::isolated_pool_from_env_first(
+    let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         8,
     )
+    .await?;
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        api_config().runtime.development_principal_enabled(),
+    )
     .await
+    .expect("development principal is initialized for the auth-off runtime");
+    Some(pool)
 }
 
 fn api_config() -> ApiConfig {
@@ -610,16 +619,17 @@ where
         let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
             leased_until=now()+interval '5 minutes',lease_renewed_at=now(),attempts=attempts+1
             WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
-            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.claim_seq,j.attempts,j.max_attempts")
             .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
         let job = ClaimedJob {
             id: row.get("id"),
-            project_id: row.get::<Uuid, _>("project_id").into(),
+            scope: JobScope::Project(row.get::<Uuid, _>("project_id").into()),
             kind: row
                 .get::<String, _>("kind")
                 .parse()
                 .expect("durable job kind"),
             payload: row.get("payload"),
+            claim_seq: row.get("claim_seq"),
             attempts: row.get("attempts"),
             max_attempts: row.get("max_attempts"),
         };
@@ -929,7 +939,7 @@ async fn classification_proposal_lifecycle_is_atomic_and_fail_closed() {
         .await
         .expect("classification history event");
     assert_eq!(event_type, "study_classified");
-    assert_eq!(actor_id, "classification-reviewer");
+    assert_eq!(actor_id, DEVELOPMENT_ACTOR_ID);
     assert_eq!((before_revision, result_revision), (0, 1));
     let (review_event, review_actor): (String, String) = sqlx::query_as(
         "SELECT event_type,actor_id FROM review_events
@@ -941,7 +951,7 @@ async fn classification_proposal_lifecycle_is_atomic_and_fail_closed() {
     .await
     .expect("classification review event");
     assert_eq!(review_event, "ai_proposal_resolved");
-    assert_eq!(review_actor, "classification-reviewer");
+    assert_eq!(review_actor, DEVELOPMENT_ACTOR_ID);
     cleanup(&pool, accepted).await;
 
     let stale = seed(&pool).await;
@@ -2185,6 +2195,7 @@ async fn assistant_event_stream_surfaces_database_failure_and_closes() {
         "event-test",
         &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
         deepref_ai::ASSISTANT_PROMPT_VERSION,
+        deepref_app::RunPrincipal::DevelopmentBypass,
     )
     .await
     .expect("submit run");

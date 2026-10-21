@@ -5,9 +5,9 @@ use crate::{ConfigError, flag, optional};
 pub const API_BIND_ADDR: &str = "API_BIND_ADDR";
 /// Opt-in for listening on anything other than a loopback address.
 ///
-/// The API has no authentication, so set this only when the API sits behind
-/// an authenticating proxy (or inside a container network that only such a
-/// proxy can reach).
+/// In local development, the API binds to loopback by default. Set this when
+/// running inside a container network or behind an ingress proxy where
+/// listening on non-loopback interfaces is required.
 pub const ALLOW_NETWORK_BIND: &str = "DEEPREF_ALLOW_NETWORK_BIND";
 pub const DEFAULT_API_BIND_ADDR: &str = "127.0.0.1:8080";
 

@@ -4,6 +4,7 @@ mod ai;
 mod ai_first;
 mod articles;
 mod assistant;
+mod auth;
 mod automations;
 mod autonomy;
 mod deduplication;
@@ -17,6 +18,7 @@ mod projection;
 mod projects;
 mod protocol;
 mod review;
+mod scientific_assignments;
 mod settings;
 mod study;
 mod workflows;
@@ -49,9 +51,19 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(health::ready))
         .routes(routes!(health::dependencies))
         .routes(routes!(health::deprecated_health))
+        .routes(routes!(health::project_dependencies))
+        .routes(routes!(auth::get_me))
+        .routes(routes!(auth::login))
+        .routes(routes!(auth::callback))
+        .routes(routes!(auth::logout))
         .routes(routes!(projection::get_projection))
         .routes(routes!(settings::get_settings, settings::update_settings))
         .routes(routes!(projects::list_projects, projects::create_project))
+        .routes(routes!(
+            scientific_assignments::list_scientific_assignments_route,
+            scientific_assignments::assign_scientific_role
+        ))
+        .routes(routes!(scientific_assignments::revoke_scientific_role))
         .routes(routes!(
             projects::get_project,
             projects::update_project,
@@ -292,6 +304,28 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
                 }
             })
         })
+        .layer(axum::middleware::from_fn_with_state(
+            crate::authz::Pep {
+                mode: crate::authz::AuthzMode::for_runtime(
+                    config.runtime.auth_enabled,
+                    config.runtime.environment.is_development(),
+                ),
+                state: state.clone(),
+            },
+            crate::authz::enforce,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::auth::SessionGate {
+                enabled: config.runtime.auth_enabled,
+                development: config.runtime.development_principal_enabled(),
+                state: state.clone(),
+            },
+            crate::auth::authenticate_requests,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::origin_guard::OriginGuard::new(&config.runtime.public_origin),
+            crate::origin_guard::reject_cross_origin_session_requests,
+        ))
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             crate::host_guard::AllowedHosts::from_config(config),
@@ -401,6 +435,10 @@ mod tests {
             "/health/live",
             "/health/ready",
             "/health/dependencies",
+            "/me",
+            "/auth/login",
+            "/auth/callback",
+            "/auth/logout",
             "/projects/{project_id}/projection",
             "/settings",
             "/projects",

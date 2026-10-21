@@ -28,7 +28,7 @@
 	// A copyable command that posts a sample call with a correct signature.
 	const curlExample = $derived(
 		endpoints
-			? webhookCurl(absoluteHookUrl(endpoints.webhook_path), endpoints.signature_header)
+			? webhookCurl(absoluteHookUrl(endpoints.webhook_path ?? ''), endpoints.signature_header)
 			: ''
 	);
 	let failed = $state(false);
@@ -95,6 +95,13 @@
 		<p class="text-sm text-muted-foreground">Could not load the address. Try again later.</p>
 	{:else if !endpoints}
 		<p class="text-sm text-muted-foreground">Loading…</p>
+	{:else if !endpoints.credentials_visible || !endpoints.webhook_path || !endpoints.webhook_secret || !endpoints.email_path}
+		<p class="text-sm text-muted-foreground" data-testid="credentials-hidden">
+			The address and signing secret are visible to people who can manage automations.
+			{endpoints.signature_required
+				? 'Calls must be signed.'
+				: 'Unsigned calls are accepted.'}
+		</p>
 	{:else if kind === 'webhook'}
 		<div class="flex flex-col gap-1.5">
 			<Label for="hook-url">Web address to call</Label>

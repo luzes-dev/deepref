@@ -1,11 +1,15 @@
+pub mod auth;
+pub mod authz;
 pub mod config;
 pub mod error;
 mod host_guard;
+mod origin_guard;
 pub mod routes;
 pub mod state;
 
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::future::Future;
+use uuid::Uuid;
 
 use crate::{config::ApiConfig, state::AppState};
 
@@ -14,6 +18,75 @@ pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
     deepref_app::migrate(&pool).await?;
     tracing::info!("database migrations completed");
     Ok(())
+}
+
+/// Operator step after `migrate` (docs/saas-program, handoff 03a): assigns the
+/// migration workspace to every project that predates workspaces, one
+/// committed batch at a time, then validates. Safe to interrupt and rerun.
+pub async fn backfill_project_workspaces(config: &ApiConfig) -> anyhow::Result<()> {
+    let pool = database_pool(config).await?;
+    let report = deepref_app::backfill_project_workspaces(&pool, 500).await?;
+    tracing::info!(
+        batches = report.batches,
+        moved = report.moved,
+        users_marked_onboarded = report.users_marked_onboarded,
+        total_projects = report.total_projects,
+        "project workspace backfill completed and validated"
+    );
+    Ok(())
+}
+
+/// Apply a trusted operator mapping from a pre-canonical actor label to a
+/// DeepRef user. The app store commits the mapping and its audit row together.
+pub async fn legacy_actor_map(
+    config: &ApiConfig,
+    actor_kind: &str,
+    actor_id: &str,
+    user_id: Uuid,
+    operator_user_id: Uuid,
+    source: &str,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let decision = deepref_app::map_legacy_actor(
+        &pool,
+        actor_kind,
+        actor_id,
+        deepref_domain::UserId::new(user_id),
+        deepref_domain::UserId::new(operator_user_id),
+        source,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&decision)?)
+}
+
+/// Record a trusted operator confirmation that a legacy actor label does not
+/// belong to a particular user.
+pub async fn legacy_actor_deny(
+    config: &ApiConfig,
+    actor_kind: &str,
+    actor_id: &str,
+    user_id: Uuid,
+    operator_user_id: Uuid,
+    source: &str,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let decision = deepref_app::record_legacy_actor_non_identity(
+        &pool,
+        actor_kind,
+        actor_id,
+        deepref_domain::UserId::new(user_id),
+        deepref_domain::UserId::new(operator_user_id),
+        source,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&decision)?)
+}
+
+/// List all operator-confirmed mapping and non-identity decisions.
+pub async fn legacy_actor_list(config: &ApiConfig) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let decisions = deepref_app::list_legacy_actor_decisions(&pool).await?;
+    Ok(serde_json::to_string_pretty(&decisions)?)
 }
 
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
@@ -27,6 +100,11 @@ pub async fn serve_with_shutdown(
     deepref_application::validate_shipped_appraisal_definitions()
         .map_err(|error| anyhow::anyhow!("invalid shipped appraisal definition: {error}"))?;
     let pool = database_pool(&config).await?;
+    deepref_app::identity::ensure_development_principal(
+        &pool,
+        config.runtime.development_principal_enabled(),
+    )
+    .await?;
 
     let document_store = deepref_documents::DocumentStore::from_config(&config.documents)?;
     anyhow::ensure!(
@@ -82,6 +160,20 @@ pub async fn serve_with_shutdown(
             "{} is not set; AI features are disabled",
             provider.api_key_variable()
         ),
+    }
+    if config.runtime.auth_enabled {
+        let workos =
+            config.runtime.workos.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("DEEPREF_AUTH_ENABLED requires the WorkOS settings")
+            })?;
+        state = state.with_auth(auth::AuthRuntime::new(
+            std::sync::Arc::new(deepref_integrations::WorkOsIdentityProvider::new(workos)),
+            &config.runtime.public_origin,
+            workos.cookie_password(),
+        ));
+        tracing::info!("authentication enabled");
+    } else {
+        tracing::warn!("DEEPREF_AUTH_ENABLED is off; the API serves requests without a session");
     }
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");

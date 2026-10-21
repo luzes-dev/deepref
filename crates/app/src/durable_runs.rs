@@ -5,6 +5,11 @@ use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
 pub const DURABLE_RUN_STEP_JOB_KIND: &str = deepref_domain::JobKind::DurableRunStep.as_str();
+/// Workload pool of the durable step kind, derived exactly like `enqueue_job`
+/// derives it: raw step enqueues never choose a class themselves.
+pub const DURABLE_RUN_STEP_WORKLOAD_CLASS: &str = deepref_domain::JobKind::DurableRunStep
+    .workload_class()
+    .as_str();
 
 /// Lock run before step everywhere, including cancellation and domain planning.
 async fn lock_step(
@@ -38,7 +43,7 @@ async fn live_lease(
     Ok(sqlx::query_scalar::<_, Uuid>(
         "SELECT j.id FROM jobs j JOIN durable_steps s ON s.project_id=j.project_id
          WHERE s.id=$1 AND j.id=$2 AND j.state='running' AND j.lease_owner=$3
-           AND j.attempts=$4 AND j.leased_until>clock_timestamp()
+           AND j.claim_seq=$4 AND j.leased_until>clock_timestamp()
            AND j.kind='durable_run_step' AND j.payload->>'run_id'=s.run_id::text
            AND j.payload->>'step_id'=s.id::text
            AND j.payload->>'handler_kind'=s.handler_kind
@@ -47,7 +52,7 @@ async fn live_lease(
     .bind(step_id)
     .bind(lease.id)
     .bind(&lease.owner)
-    .bind(lease.attempt)
+    .bind(lease.claim_seq)
     .fetch_optional(&mut **tx)
     .await?
     .is_some())

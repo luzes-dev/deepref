@@ -24,6 +24,9 @@ export const mockProjects: ProjectDto[] = [
 ];
 
 export const handlers = [
+	http.get('/api/me', () => {
+		return HttpResponse.json({ auth_enabled: false, user: null });
+	}),
 	http.get('/api/settings', () => {
 		return HttpResponse.json({ data: mockSettings, status: 200 });
 	}),

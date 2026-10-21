@@ -10,8 +10,14 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
+    auth::CurrentSession,
+    authz::require_for_handler,
     error::{ApiError, ErrorResponse},
     state::AppState,
+};
+use deepref_domain::{
+    UserId, WorkspaceId,
+    authorization::{Permission, Resource},
 };
 
 use super::{
@@ -36,6 +42,10 @@ pub(crate) struct CreateProject {
     name: String,
     description: Option<String>,
     default_max_depth: Option<i32>,
+    /// Workspace to create the project in. Optional when the caller belongs to
+    /// exactly one workspace that can hold projects; required otherwise. The
+    /// caller needs `project:create` there. Ignored when updating.
+    workspace_id: Option<Uuid>,
 }
 
 impl CreateProject {
@@ -64,20 +74,32 @@ impl CreateProject {
 )]
 pub(crate) async fn list_projects(
     State(state): State<AppState>,
+    session: Option<CurrentSession>,
     Query(pagination): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<ProjectDto>>, ApiError> {
     let limit = pagination.limit()?;
     let cursor: Option<(DateTime<Utc>, Uuid)> = pagination.decode()?;
-    let rows = sqlx::query(
+    // With authentication on, only projects the caller can view now. Without
+    // it (local development) every project.
+    let viewer = session
+        .as_ref()
+        .and_then(|session| session.0.principal.user_id());
+    let roles = deepref_app::authorization::ProjectViewRoles::current();
+    let rows = sqlx::query(concat!(
         "SELECT id,name,description,default_max_depth,created_at,updated_at,\
          (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count \
          FROM projects \
          WHERE ($1::timestamptz IS NULL OR (updated_at,id)<($1,$2)) \
-         ORDER BY updated_at DESC,id DESC LIMIT $3",
-    )
+           AND ($4::uuid IS NULL OR ",
+        deepref_app::viewable_project_predicate!("projects.id", "$4", "$5", "$6"),
+        ") ORDER BY updated_at DESC,id DESC LIMIT $3"
+    ))
     .bind(cursor.as_ref().map(|value| value.0))
     .bind(cursor.as_ref().map(|value| value.1))
     .bind(limit + 1)
+    .bind(viewer.map(UserId::as_uuid))
+    .bind(roles.workspace_roles())
+    .bind(roles.project_roles())
     .fetch_all(&state.pool)
     .await?;
     let projects = rows.into_iter().map(project_from_row).collect();
@@ -100,8 +122,10 @@ pub(crate) async fn list_projects(
 )]
 pub(crate) async fn create_project(
     State(state): State<AppState>,
+    session: Option<CurrentSession>,
     Json(input): Json<CreateProject>,
 ) -> Result<(StatusCode, Json<ProjectDto>), ApiError> {
+    let workspace = target_workspace(&state, session.as_ref(), input.workspace_id).await?;
     let input = input.validate()?;
     settings::ensure_settings(&state.pool).await?;
     let default_max_depth = match input.default_max_depth {
@@ -116,8 +140,8 @@ pub(crate) async fn create_project(
     let id = Uuid::new_v4();
     let row = sqlx::query(
         r#"
-        INSERT INTO projects (id, name, description, default_max_depth)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO projects (id, name, description, default_max_depth, workspace_id)
+        VALUES ($1, $2, $3, $4, $5)
         RETURNING id, name, description, default_max_depth, created_at, updated_at,
           0::bigint AS article_count
         "#,
@@ -126,9 +150,49 @@ pub(crate) async fn create_project(
     .bind(input.name)
     .bind(input.description)
     .bind(default_max_depth)
+    .bind(workspace.as_uuid())
     .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::CREATED, Json(project_from_row(row))))
+}
+
+/// The workspace a new project goes into, after `project:create` is required
+/// on it. A foreign workspace and a missing one are the same `404`. With
+/// authentication off (local development) there is no principal and the
+/// migration workspace holds the project.
+async fn target_workspace(
+    state: &AppState,
+    session: Option<&CurrentSession>,
+    requested: Option<Uuid>,
+) -> Result<WorkspaceId, ApiError> {
+    let Some(CurrentSession(context)) = session else {
+        return Ok(requested.map_or(
+            deepref_app::workspaces::MIGRATION_WORKSPACE_ID,
+            WorkspaceId::new,
+        ));
+    };
+    let Some(user) = context.principal.user_id() else {
+        return Err(ApiError::NotFound("resource not found".to_owned()));
+    };
+    let workspace = match requested {
+        Some(id) => WorkspaceId::new(id),
+        None => deepref_app::authorization::sole_project_creation_workspace(&state.pool, user)
+            .await?
+            .ok_or_else(|| {
+                ApiError::BadRequest(
+                    "workspace_id is required unless you belong to exactly one workspace"
+                        .to_owned(),
+                )
+            })?,
+    };
+    require_for_handler(
+        state,
+        Some(context),
+        Permission::ProjectCreate,
+        Resource::Workspace(workspace),
+    )
+    .await?;
+    Ok(workspace)
 }
 
 #[utoipa::path(
@@ -243,6 +307,7 @@ mod tests {
                 name: " ".to_owned(),
                 description: None,
                 default_max_depth: None,
+                workspace_id: None,
             }
             .validate()
             .is_err()

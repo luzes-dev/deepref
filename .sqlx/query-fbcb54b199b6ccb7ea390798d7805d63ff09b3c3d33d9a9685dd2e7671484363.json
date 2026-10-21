@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH candidate AS (\n             SELECT e.event_id,\n               'unsupported frozen outbox consumers: ' || array_to_string(ARRAY(\n                 SELECT consumer FROM unnest(e.expected_consumers) AS expected(consumer)\n                 WHERE NOT consumer=ANY(contract.consumers)), ', ') AS reason\n             FROM outbox_events e\n             JOIN jsonb_to_recordset($1::jsonb)\n               AS contract(message_type text,message_version integer,consumers text[])\n               USING (message_type,message_version)\n             WHERE e.delivery_state='pending' AND e.next_attempt_at <= clock_timestamp()\n               AND (e.lease_owner IS NULL OR e.lease_expires_at <= clock_timestamp())\n               AND NOT e.expected_consumers <@ contract.consumers\n             ORDER BY e.created_at,e.event_id FOR UPDATE OF e SKIP LOCKED LIMIT $2\n           )\n           UPDATE outbox_events e SET last_error=candidate.reason,\n             next_attempt_at=clock_timestamp()+interval '5 minutes',\n             lease_owner=NULL,lease_expires_at=NULL,claim_generation=claim_generation+1\n           FROM candidate WHERE e.event_id=candidate.event_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fbcb54b199b6ccb7ea390798d7805d63ff09b3c3d33d9a9685dd2e7671484363"
+}

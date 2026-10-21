@@ -29,11 +29,7 @@ describe('customFetch', () => {
 		expect(request.url).toBe('http://localhost/api/health?source=generated');
 	});
 
-	it('attributes API calls to the current reviewer without replacing explicit headers', async () => {
-		vi.stubGlobal('window', {
-			location: { origin: 'http://localhost' },
-			sessionStorage: { getItem: () => 'reviewer-a' }
-		});
+	it('does not send legacy actor headers, including caller-supplied values', async () => {
 		const requests: Request[] = [];
 		vi.stubGlobal('fetch', async (request: Request) => {
 			requests.push(request);
@@ -44,10 +40,10 @@ describe('customFetch', () => {
 			method: 'GET',
 			headers: { 'x-actor-id': 'override', 'x-actor-kind': 'system' }
 		});
-		expect(requests[0]?.headers.get('x-actor-id')).toBe('reviewer-a');
-		expect(requests[0]?.headers.get('x-actor-kind')).toBe('user');
-		expect(requests[1]?.headers.get('x-actor-id')).toBe('override');
-		expect(requests[1]?.headers.get('x-actor-kind')).toBe('system');
+		expect(requests[0]?.headers.get('x-actor-id')).toBeNull();
+		expect(requests[0]?.headers.get('x-actor-kind')).toBeNull();
+		expect(requests[1]?.headers.get('x-actor-id')).toBeNull();
+		expect(requests[1]?.headers.get('x-actor-kind')).toBeNull();
 	});
 
 	it('returns undefined data for no-content responses', async () => {

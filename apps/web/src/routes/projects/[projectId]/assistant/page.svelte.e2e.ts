@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '../../../../tests/e2e-test';
+import type { Page } from '@playwright/test';
 
 const api = 'http://localhost:4173/api';
 const project = {
@@ -198,8 +199,8 @@ test('streams a new chat turn with tool progress, proposals, and token totals', 
 	});
 	await page.route(`${api}/projects/project-1/assistant/chat`, async (route) => {
 		expect(route.request().method()).toBe('POST');
-		expect(route.request().headers()['x-actor-kind']).toBe('user');
-		expect(route.request().headers()['x-actor-id']).toBe('local-user');
+		expect(route.request().headers()['x-actor-kind']).toBeUndefined();
+		expect(route.request().headers()['x-actor-id']).toBeUndefined();
 		expect(route.request().postDataJSON()).toEqual({
 			conversation_id: conversationId,
 			message: 'What does the protocol say about inclusion criteria?'

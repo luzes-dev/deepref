@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, provider, provider_event_id, processing_state, attempts,\n                  last_error, quarantine_reason\n           FROM integration_inbox_events WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "provider",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "provider"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "provider_event_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "provider_event_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "processing_state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "processing_state"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "quarantine_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "quarantine_reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "ac280856702c7090ca2853c9bff59bf6a4ddf7e00d69bcb0a4e31f83c676c9f6"
+}

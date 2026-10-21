@@ -106,6 +106,7 @@ async fn submit(pool: &PgPool, project_id: Uuid, conversation_id: Uuid) -> Uuid 
         "tester",
         &serde_json::to_value(route()).expect("route serializes"),
         "assistant.agent.v2",
+        deepref_app::RunPrincipal::DevelopmentBypass,
     )
     .await
     .expect("submit succeeds")
@@ -629,4 +630,257 @@ async fn reconciler_fails_missing_and_dead_assistant_jobs_but_preserves_live_job
         run_record(&pool, live).await.status,
         deepref_ai::AssistantAgentRunStatus::Queued
     );
+}
+
+// ---------------------------------------------------------------------------
+// Authorization per call (handoff 03b)
+// ---------------------------------------------------------------------------
+
+async fn member_user(pool: &PgPool, project_id: Uuid) -> deepref_domain::UserId {
+    let user = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users (id, workos_user_id, primary_email, status)
+         VALUES ($1, $2, $3, 'active')",
+    )
+    .bind(user)
+    .bind(format!("user_{user}"))
+    .bind(format!("{user}@example.org"))
+    .execute(pool)
+    .await
+    .expect("user inserts");
+    sqlx::query(
+        "INSERT INTO project_access (id, project_id, user_id, role, grant_source)
+         VALUES (gen_random_uuid(), $1, $2, 'member', 'local')",
+    )
+    .bind(project_id)
+    .bind(user)
+    .execute(pool)
+    .await
+    .expect("grant inserts");
+    deepref_domain::UserId::new(user)
+}
+
+async fn submit_as(
+    pool: &PgPool,
+    project_id: Uuid,
+    conversation_id: Uuid,
+    principal: deepref_app::RunPrincipal,
+) -> Uuid {
+    submit_assistant_agent_run(
+        pool,
+        project_id,
+        conversation_id,
+        "look and propose",
+        "user",
+        "tester",
+        &serde_json::to_value(route()).expect("route serializes"),
+        "assistant.agent.v2",
+        principal,
+    )
+    .await
+    .expect("submit succeeds")
+    .id
+}
+
+fn overview_then_plan(report_id: Uuid, project_id: Uuid) -> MockCompletionModel {
+    MockCompletionModel::from_stream_turns(vec![
+        stream_call(
+            "c1",
+            "get_project_overview",
+            json!({ "project_id": project_id }),
+        ),
+        stream_call(
+            "c2",
+            "screen_reports",
+            json!({
+                "report_ids": [report_id],
+                "decision": "exclude",
+                "summary": "Exclude 1 off-topic record",
+                "rationale": "Not about the review question",
+            }),
+        ),
+        stream_text("Plan ready."),
+    ])
+}
+
+async fn error_code(pool: &PgPool, run_id: Uuid) -> Option<String> {
+    run_record(pool, run_id)
+        .await
+        .error
+        .and_then(|error| error["code"].as_str().map(str::to_owned))
+}
+
+#[tokio::test]
+async fn a_run_with_a_live_grant_completes_and_audits_nothing() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let report_id = project_report(&pool, project_id).await;
+    let user = member_user(&pool, project_id).await;
+    let run_id = submit_as(
+        &pool,
+        project_id,
+        conversation_id,
+        deepref_app::RunPrincipal::User(user),
+    )
+    .await;
+    let job = claim(&pool).await;
+    let action = handle_assistant_agent_run_with(
+        &pool,
+        &job,
+        &services(overview_then_plan(report_id, project_id)),
+    )
+    .await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+    assert_eq!(
+        run_record(&pool, run_id).await.status,
+        deepref_ai::AssistantAgentRunStatus::Completed
+    );
+}
+
+#[tokio::test]
+async fn a_run_enqueued_without_a_principal_fails_closed() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let report_id = project_report(&pool, project_id).await;
+    let run_id = submit_as(
+        &pool,
+        project_id,
+        conversation_id,
+        deepref_app::RunPrincipal::Unspecified,
+    )
+    .await;
+    let job = claim(&pool).await;
+    let action = handle_assistant_agent_run_with(
+        &pool,
+        &job,
+        &services(overview_then_plan(report_id, project_id)),
+    )
+    .await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+    let run = run_record(&pool, run_id).await;
+    assert_eq!(run.status, deepref_ai::AssistantAgentRunStatus::Failed);
+    assert_eq!(
+        error_code(&pool, run_id).await.as_deref(),
+        Some("assistant_principal_missing")
+    );
+    let plans: i64 = sqlx::query_scalar("SELECT count(*) FROM assistant_plans WHERE id = $1")
+        .bind(run.plan_id.expect("plan id"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(plans, 0);
+}
+
+#[tokio::test]
+async fn a_user_revoked_before_the_turn_starts_gets_no_run() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let report_id = project_report(&pool, project_id).await;
+    let user = member_user(&pool, project_id).await;
+    let run_id = submit_as(
+        &pool,
+        project_id,
+        conversation_id,
+        deepref_app::RunPrincipal::User(user),
+    )
+    .await;
+    sqlx::query("DELETE FROM project_access WHERE user_id = $1")
+        .bind(user.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let job = claim(&pool).await;
+    let action = handle_assistant_agent_run_with(
+        &pool,
+        &job,
+        &services(overview_then_plan(report_id, project_id)),
+    )
+    .await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+    assert_eq!(
+        error_code(&pool, run_id).await.as_deref(),
+        Some("assistant_access_revoked")
+    );
+    // The model was never asked: no tool ran.
+    let tools: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant_run_events WHERE run_id = $1 AND kind = 'tool_start'",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tools, 0);
+}
+
+#[tokio::test]
+async fn a_user_revoked_mid_turn_ends_the_run_without_an_answer_or_plan() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let report_id = project_report(&pool, project_id).await;
+    let user = member_user(&pool, project_id).await;
+    let run_id = submit_as(
+        &pool,
+        project_id,
+        conversation_id,
+        deepref_app::RunPrincipal::User(user),
+    )
+    .await;
+    // The first tool finishing revokes the grant, as a removal between calls.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE OR REPLACE FUNCTION revoke_after_first_tool() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+           DELETE FROM project_access WHERE user_id = '{}'::uuid;
+           RETURN NEW;
+         END $$",
+        user.as_uuid()
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER revoke_after_first_tool AFTER INSERT ON assistant_run_events
+         FOR EACH ROW WHEN (NEW.kind = 'tool_complete')
+         EXECUTE FUNCTION revoke_after_first_tool()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let job = claim(&pool).await;
+    let action = handle_assistant_agent_run_with(
+        &pool,
+        &job,
+        &services(overview_then_plan(report_id, project_id)),
+    )
+    .await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+    let run = run_record(&pool, run_id).await;
+    assert_eq!(run.status, deepref_ai::AssistantAgentRunStatus::Failed);
+    assert_eq!(
+        error_code(&pool, run_id).await.as_deref(),
+        Some("assistant_access_revoked")
+    );
+    let plans: i64 = sqlx::query_scalar("SELECT count(*) FROM assistant_plans WHERE id = $1")
+        .bind(run.plan_id.expect("plan id"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(plans, 0, "no plan survives a refused step");
+    let answers: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant_messages WHERE conversation_id = $1 AND role = 'assistant'",
+    )
+    .bind(conversation_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(answers, 0);
+    // The refused plan step was audited through the shared boundary.
+    let denials: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM admin_audit_events
+         WHERE event_type = 'authorization.denied' AND principal_user_id = $1",
+    )
+    .bind(user.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(denials >= 1, "the refusal is audited");
 }
