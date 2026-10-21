@@ -284,6 +284,8 @@ async fn a_long_healthy_inbox_transaction_does_not_block_its_renewal() {
     };
     let blocked = Arc::new(BlockedHandler::default());
     let registry = registry(&pool, Some(Arc::clone(&blocked)));
+    // Use the fixture's normal lease: this tests database lock compatibility,
+    // not elapsed-time heartbeat scheduling (covered by leased_handler tests).
     let lease = config().claim_lease;
     let project = Uuid::new_v4();
     let event = insert(&pool, project).await;
@@ -304,10 +306,15 @@ async fn a_long_healthy_inbox_transaction_does_not_block_its_renewal() {
         event_type: claim.event_type.clone(),
         claim_fence: claim.claim_fence.clone(),
     };
+    // Invoke the real registered handler without a concurrent heartbeat:
+    // its own brief renewal UPDATE must not race the NOWAIT lock probe.
     let task = tokio::spawn(async move { handler(context, claim.payload).await });
     tokio::time::timeout(Duration::from_secs(30), blocked.entered.notified())
         .await
         .unwrap();
+    // The real handler has passed preflight and holds its effect transaction
+    // open. NOWAIT diagnoses a row lock directly, rather than attributing a
+    // missed wall-clock heartbeat deadline to preflight locking.
     let mut renewal = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM integration_inbox_events WHERE id=$1 FOR UPDATE NOWAIT")
         .bind(event)
@@ -326,6 +333,8 @@ async fn a_long_healthy_inbox_transaction_does_not_block_its_renewal() {
         "the handler remains active while its effect transaction is open"
     );
     blocked.resume.notify_one();
+    // Await the handler's transactional completion and commit, not merely
+    // effect visibility; processor heartbeat/drain behavior is tested separately.
     tokio::time::timeout(Duration::from_secs(30), task)
         .await
         .expect("healthy inbox handler completes")
