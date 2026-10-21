@@ -222,12 +222,14 @@ async fn enqueue_recipe_step(
     step_id: Uuid,
 ) -> Result<Uuid, sqlx::Error> {
     sqlx::query_scalar(
-        "INSERT INTO jobs(id,project_id,kind,payload,state,priority,max_attempts,dedupe_key)
-        VALUES($1,$2,'durable_run_step',$3,'queued',0,5,$4)
+        "INSERT INTO jobs(id,project_id,kind,workload_class,payload,state,priority,max_attempts,dedupe_key)
+        VALUES($1,$2,$3,$4,$5,'queued',0,5,$6)
         ON CONFLICT(dedupe_key) DO UPDATE SET id=jobs.id RETURNING id",
     )
     .bind(Uuid::new_v4())
     .bind(project_id)
+    .bind(crate::durable_runs::DURABLE_RUN_STEP_JOB_KIND)
+    .bind(crate::durable_runs::DURABLE_RUN_STEP_WORKLOAD_CLASS)
     .bind(serde_json::json!({"run_id":run_id,"step_id":step_id,"handler_kind":"automation"}))
     .bind(format!("durable-step:{step_id}"))
     .fetch_one(&mut **transaction)
@@ -384,7 +386,7 @@ pub async fn get_leased_automation_run(
         " WHERE r.project_id=$1 AND r.id=$2 AND EXISTS(
          SELECT 1 FROM jobs active WHERE active.id=$3 AND active.project_id=r.project_id
          AND active.kind='durable_run_step' AND active.payload->>'run_id'=r.id::text
-         AND active.state='running' AND active.lease_owner=$4 AND active.attempts=$5
+         AND active.state='running' AND active.lease_owner=$4 AND active.claim_seq=$5
          AND active.leased_until>now())",
     );
     let row = query
@@ -393,7 +395,7 @@ pub async fn get_leased_automation_run(
         .bind(run_id.as_uuid())
         .bind(lease.id)
         .bind(&lease.owner)
-        .bind(lease.attempt)
+        .bind(lease.claim_seq)
         .fetch_optional(pool)
         .await?
         .ok_or(AutomationError::WorkerOwnership)?;
@@ -617,12 +619,12 @@ async fn ensure_live_lease(
 ) -> Result<(), AutomationError> {
     let valid: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND project_id=$2
-        AND state='running' AND lease_owner=$3 AND attempts=$4 AND leased_until>now())",
+        AND state='running' AND lease_owner=$3 AND claim_seq=$4 AND leased_until>now())",
     )
     .bind(lease.id)
     .bind(project_id.as_uuid())
     .bind(&lease.owner)
-    .bind(lease.attempt)
+    .bind(lease.claim_seq)
     .fetch_one(&mut **transaction)
     .await?;
     if !valid {

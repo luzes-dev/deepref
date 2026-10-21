@@ -5,6 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DependencyState } from './dependencyState.ts';
+import type { WorkloadPoolDetail } from './workloadPoolDetail.ts';
 
 export interface DependencyDetail {
 	/** @nullable */
@@ -25,6 +26,11 @@ export interface DependencyDetail {
 	live_workers?: number | null;
 	/** @nullable */
 	oldest_age_seconds?: number | null;
+	/**
+	 * Per-workload queue and capacity measurements (worker only).
+	 * @nullable
+	 */
+	pools?: WorkloadPoolDetail[] | null;
 	/**
 	 * Jobs that failed within the recent window (worker only).
 	 * @nullable

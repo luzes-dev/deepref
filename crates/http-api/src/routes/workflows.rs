@@ -31,7 +31,6 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use super::actor::extract_actor;
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -393,24 +392,31 @@ fn version_dto(record: WorkflowVersionRecord) -> Result<VersionDto, ApiError> {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct EndpointsDto {
+    /// Whether this response carries the credentials. They are capabilities
+    /// that start runs, so only a caller with `automation:manage` receives
+    /// them; anyone else who can view the workflow sees the settings alone.
+    pub credentials_visible: bool,
     /// Path of the webhook address, to be appended to the server address.
-    pub webhook_path: String,
-    /// Shared secret used to sign webhook calls.
-    pub webhook_secret: String,
+    /// Absent without `automation:manage`.
+    pub webhook_path: Option<String>,
+    /// Shared secret used to sign webhook calls. Absent without
+    /// `automation:manage`.
+    pub webhook_secret: Option<String>,
     pub signature_required: bool,
     /// Header carrying `sha256=<hex HMAC-SHA256 of the raw body>`.
     pub signature_header: String,
-    /// Path of the inbound e-mail address.
-    pub email_path: String,
+    /// Path of the inbound e-mail address. Absent without `automation:manage`.
+    pub email_path: Option<String>,
 }
 
-fn endpoints_dto(config: WebhookConfig) -> EndpointsDto {
+fn endpoints_dto(config: WebhookConfig, credentials_visible: bool) -> EndpointsDto {
     EndpointsDto {
-        webhook_path: format!("/hooks/workflows/{}", config.token),
-        webhook_secret: config.secret,
+        credentials_visible,
+        webhook_path: credentials_visible.then(|| format!("/hooks/workflows/{}", config.token)),
+        webhook_secret: credentials_visible.then_some(config.secret),
         signature_required: config.signature_required,
         signature_header: "X-DeepRef-Signature".to_owned(),
-        email_path: format!("/hooks/email/{}", config.email_token),
+        email_path: credentials_visible.then(|| format!("/hooks/email/{}", config.email_token)),
     }
 }
 
@@ -603,6 +609,7 @@ fn map_error(error: WorkflowError) -> ApiError {
         WorkflowError::Serialization(error) => ApiError::Json(error),
         WorkflowError::InvalidStoredValue(message) => ApiError::DataIntegrity(message),
         WorkflowError::Database(error) => ApiError::Database(error),
+        WorkflowError::ObjectStorage(error) => ApiError::Internal(error.into()),
     }
 }
 
@@ -731,7 +738,8 @@ pub(crate) async fn list_workflows(
 pub(crate) async fn create_workflow(
     State(state): State<AppState>,
     Path(project): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<CreateWorkflowRequest>,
 ) -> Result<(StatusCode, Json<WorkflowDto>), ApiError> {
     let project = project_id(project)?;
@@ -749,7 +757,7 @@ pub(crate) async fn create_workflow(
         &input.name,
         input.description.as_deref().unwrap_or_default(),
         graph,
-        &extract_actor(&headers)?,
+        &request_actor.actor,
         state.workflow.niche_nodes_enabled,
     )
     .await
@@ -773,7 +781,8 @@ pub(crate) async fn create_workflow(
 pub(crate) async fn create_workflow_from_template(
     State(state): State<AppState>,
     Path(project): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<FromTemplateRequest>,
 ) -> Result<(StatusCode, Json<WorkflowDto>), ApiError> {
     let project = project_id(project)?;
@@ -788,7 +797,7 @@ pub(crate) async fn create_workflow_from_template(
         &name,
         template.description,
         template.graph.clone(),
-        &extract_actor(&headers)?,
+        &request_actor.actor,
         state.workflow.niche_nodes_enabled,
     )
     .await
@@ -1018,7 +1027,8 @@ fn detail_kind_name(kind: wf::DetailKind) -> &'static str {
 pub(crate) async fn publish_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<PublishRequest>,
 ) -> Result<(StatusCode, Json<VersionDto>), ApiError> {
     ensure_draft_available(&state, project, workflow).await?;
@@ -1027,7 +1037,7 @@ pub(crate) async fn publish_workflow(
         project_id(project)?,
         workflow,
         input.note.as_deref(),
-        &extract_actor(&headers)?,
+        &request_actor.actor,
         state.smtp.is_configured(),
         state.workflow.niche_nodes_enabled,
     )
@@ -1247,6 +1257,7 @@ pub(crate) async fn start_workflow_run(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<RunRequest>,
 ) -> Result<(StatusCode, Json<RunStartedDto>), ApiError> {
     let project = project_id(project)?;
@@ -1257,7 +1268,7 @@ pub(crate) async fn start_workflow_run(
         .await
         .map_err(map_error)?;
     ensure_graph_available(&state, &graph)?;
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let trigger_data = input.trigger_data.unwrap_or_else(|| json!({}));
     let started = deepref_app::start_run(
         &state.pool,
@@ -1308,7 +1319,8 @@ pub(crate) async fn start_workflow_run(
 pub(crate) async fn start_test_run(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<TestRunRequest>,
 ) -> Result<Json<WorkflowRunDto>, ApiError> {
     let project = project_id(project)?;
@@ -1339,7 +1351,7 @@ pub(crate) async fn start_test_run(
     if !report.is_ok() {
         return Err(map_error(WorkflowError::Invalid(report)));
     }
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let sample = input.trigger_data.unwrap_or_else(|| json!({}));
     let started = deepref_app::start_run(
         &state.pool,
@@ -1395,12 +1407,21 @@ fn sample_trigger_data(sample: Value) -> Value {
 )]
 pub(crate) async fn get_endpoints(
     State(state): State<AppState>,
+    session: Option<crate::auth::CurrentSession>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<EndpointsDto>, ApiError> {
     let config = deepref_app::get_webhook_config(&state.pool, project_id(project)?, workflow)
         .await
         .map_err(map_error)?;
-    Ok(Json(endpoints_dto(config)))
+    // Viewing the workflow does not entitle the caller to its credentials.
+    let visible = crate::authz::holds(
+        &state,
+        session.as_ref().map(|session| &session.0),
+        deepref_domain::authorization::Permission::AutomationManage,
+        deepref_domain::authorization::Resource::Project(deepref_domain::ProjectId::new(project)),
+    )
+    .await?;
+    Ok(Json(endpoints_dto(config, visible)))
 }
 
 #[utoipa::path(
@@ -1425,7 +1446,7 @@ pub(crate) async fn update_endpoints(
     )
     .await
     .map_err(map_error)?;
-    Ok(Json(endpoints_dto(config)))
+    Ok(Json(endpoints_dto(config, true)))
 }
 
 async fn rotate(
@@ -1442,7 +1463,7 @@ async fn rotate(
     )
     .await
     .map_err(map_error)?;
-    Ok(Json(endpoints_dto(config)))
+    Ok(Json(endpoints_dto(config, true)))
 }
 
 #[utoipa::path(
@@ -1502,7 +1523,11 @@ pub(crate) async fn download_workflow_file(
     State(state): State<AppState>,
     Path((project, file)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
-    let file = deepref_app::get_workflow_file(&state.pool, project_id(project)?, file)
+    let store = state
+        .document_store
+        .as_ref()
+        .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
+    let file = deepref_app::get_workflow_file(&state.pool, store, project_id(project)?, file)
         .await
         .map_err(map_error)?;
     let safe_name: String = file

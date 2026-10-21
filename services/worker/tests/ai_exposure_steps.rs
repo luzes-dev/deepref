@@ -68,7 +68,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             return;
         };
         assert_eq!(
-            job.project_id.as_uuid(),
+            job.project_id().expect("project-scoped test job").as_uuid(),
             project,
             "unexpected job from another project"
         );
@@ -78,10 +78,11 @@ async fn drain(pool: &PgPool, project: Uuid) {
             &job.lease("ai-exposure-test"),
             None,
             &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
-                (name == "APP_ENV").then(|| "local".into())
+                (name == "APP_ENV").then(|| "development".into())
             })
             .expect("local runtime configuration"),
             &deepref_worker::metadata::MetadataClients::default(),
+            &deepref_documents::DocumentStore::memory(),
         )
         .await
         .expect("step")

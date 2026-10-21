@@ -244,7 +244,7 @@ async fn blind_audit_withholds_workflow_run_inspection() {
     };
     let f = Fixture::new(pool).await;
     let project = ProjectId::new(f.project);
-    let actor = Actor::new(ActorKind::User, "blinding-test").expect("actor");
+    let actor = Actor::new(ActorKind::User, Uuid::new_v4().to_string()).expect("actor");
     let graph = WorkflowGraph {
         nodes: vec![
             node("start", "trigger.manual"),

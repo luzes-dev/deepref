@@ -16,9 +16,9 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 	});
 
 	test('keeps evidence visible when dependency health is unavailable', async ({ page }) => {
-		// The overview asks for the status of one project's jobs (`?project_id=`), so the
-		// interception matches the path with or without that query.
-		await page.route(/\/api\/health\/dependencies(?:\?.*)?$/, (route) =>
+		// The overview asks for the status of one project's jobs, so the interception matches the
+		// project-scoped path with or without a query.
+		await page.route(/\/api\/projects\/[^/]+\/health\/dependencies(?:\?.*)?$/, (route) =>
 			route.fulfill({ status: 503, json: { detail: 'health unavailable' } })
 		);
 		await page.reload();

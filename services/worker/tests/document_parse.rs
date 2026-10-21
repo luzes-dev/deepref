@@ -7,7 +7,7 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use deepref_app::NewDocument;
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobScope};
 use deepref_documents::{
     DocumentParser, DocumentStore, PARSER_VERSION, ParsedBlock, ParsedDocument, ParsedPage,
     PdfParserError, RemoteDocumentFetcher, RemoteFetchError, content_sha256,
@@ -168,9 +168,10 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
         transaction.commit().await.unwrap();
         let job = ClaimedJob {
             id: Uuid::new_v4(),
-            project_id: project_id.into(),
+            scope: JobScope::Project(project_id.into()),
             kind: deepref_domain::JobKind::RetrieveDocument,
             payload: serde_json::json!({"document_id": document_id}),
+            claim_seq: 0,
             attempts: 1,
             max_attempts: 5,
         };
@@ -182,7 +183,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
             None,
             Some(Arc::new(FakeFetcher { fail })),
             &deepref_worker::config::WorkerConfig::from_source(&|name| {
-                (name == "APP_ENV").then(|| "local".into())
+                (name == "APP_ENV").then(|| "development".into())
             })
             .expect("local worker configuration"),
         )
@@ -216,7 +217,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
                 None,
                 Some(Arc::new(FakeFetcher { fail: false })),
                 &deepref_worker::config::WorkerConfig::from_source(&|name| {
-                    (name == "APP_ENV").then(|| "local".into())
+                    (name == "APP_ENV").then(|| "development".into())
                 })
                 .expect("local worker configuration"),
             )
@@ -286,14 +287,15 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
     });
     let job = ClaimedJob {
         id: Uuid::new_v4(),
-        project_id: project_id.into(),
+        scope: JobScope::Project(project_id.into()),
         kind: deepref_domain::JobKind::RetrieveDocument,
         payload: serde_json::json!({"document_id": document_id}),
+        claim_seq: 0,
         attempts: 1,
         max_attempts: 5,
     };
     let config = deepref_worker::config::WorkerConfig::from_source(&|name| {
-        (name == "APP_ENV").then(|| "local".into())
+        (name == "APP_ENV").then(|| "development".into())
     })
     .expect("local worker configuration");
     let first = handle_job_with_document_services(
@@ -350,7 +352,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         None,
         Some(fetcher),
         &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local worker configuration"),
     )
@@ -437,9 +439,10 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
     tx.commit().await.unwrap();
     let job = ClaimedJob {
         id: Uuid::new_v4(),
-        project_id: project_id.into(),
+        scope: JobScope::Project(project_id.into()),
         kind: deepref_domain::JobKind::ParseDocument,
         payload: serde_json::json!({"document_id": document_id, "parser_version": PARSER_VERSION}),
+        claim_seq: 0,
         attempts: 1,
         max_attempts: 5,
     };
@@ -452,7 +455,7 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
         Some(Arc::clone(&store)),
         Some(Arc::clone(&parser)),
         &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local worker configuration"),
     )
@@ -466,7 +469,7 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
         Some(store),
         Some(parser),
         &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local worker configuration"),
     )

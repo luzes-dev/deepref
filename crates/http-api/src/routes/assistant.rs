@@ -235,6 +235,10 @@ fn assistant_error_frame(error: AgentToolError) -> Result<Event, std::convert::I
             "ai_not_configured",
             "The assistant needs an AI provider, which is not configured for this workspace.",
         ),
+        AgentToolError::Forbidden => (
+            "assistant_forbidden",
+            "Your role does not allow the assistant to do that",
+        ),
         _ => ("assistant_failed", "assistant turn failed"),
     };
     sse_frame("error", &json!({ "code": code, "message": message }))

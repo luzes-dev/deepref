@@ -36,21 +36,27 @@ Workers spend an attempt when a lease expires: recovery backs off retries and de
 
 Local endpoints:
 
-| Service         | Address                 |
-| --------------- | ----------------------- |
-| Web             | `http://127.0.0.1:5173` |
-| API             | `http://127.0.0.1:8080` |
-| PostgreSQL      | `127.0.0.1:5432`        |
+| Service    | Address                 |
+| ---------- | ----------------------- |
+| Web        | `http://127.0.0.1:5173` |
+| API        | `http://127.0.0.1:8080` |
+| PostgreSQL | `127.0.0.1:5432`        |
 
 If port `5432` is already in use, set `POSTGRES_HOST_PORT` and update the
 port in `DATABASE_URL` in `.env` to the same value before starting the stack.
 
 Every published dependency port binds only to `127.0.0.1`.
 
-`just` recipes and Process Compose run with `APP_ENV=local`. The server binary itself
-defaults to `APP_ENV=production` and reads `.env` and `.env.local` only when the process
-environment already says `APP_ENV=local`. To run it by hand, export that first, for example
-`APP_ENV=local cargo run -p deepref-server -- serve`.
+`just` recipes and Process Compose run with `APP_ENV=development`. The server binary itself
+refuses to start when `APP_ENV` is unset, and `local` and `staging` are rejected: the only
+environments are `development` and `production`. It reads `.env` and `.env.local` only when
+the process environment already says `APP_ENV=development`; production never reads dotenv
+files. To run it by hand, export that first, for example
+`APP_ENV=development cargo run -p deepref-server -- serve`.
+
+`DEEPREF_PUBLIC_ORIGIN` is the canonical origin users reach the app at (scheme, host and
+optional port, no path). Development defaults to `http://127.0.0.1:5173`; production
+requires it and rejects anything but `https`.
 
 API `/health/ready` requires the latest embedded SQLx migration, not a fixed
 schema version. An older database returns 503; a newer database remains ready
@@ -84,6 +90,7 @@ mise exec -- bacon ai
 ```
 
 While running interactively in the terminal, keyboard shortcuts allow instant switching:
+
 - `c`: switch to `clippy`
 - `n`: switch to `nextest`
 - `a`: switch to `ai`
@@ -111,13 +118,13 @@ DeepRef's AI runs on the **OpenCode Go** subscription through its OpenAI-compati
 
 Settings:
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `DEEPREF_AI_PROVIDER` | `opencode-go` | `opencode-go`, or `zai` for the retired legacy provider |
-| `OPENCODE_API_KEY` | none | Required for OpenCode Go. Without it AI features are off |
-| `OPENCODE_BASE_URL` | `https://opencode.ai/zen/go/v1` | Endpoint override |
-| `DEEPREF_AI_DEFAULT_MODEL` | `glm-5.3-flash` | Model for new AI routes |
-| `DEEPREF_AI_MODEL_PRICES` | built-in | Price overrides: `provider/model=input:output`, US$ per million tokens |
+| Variable                   | Default                         | Meaning                                                                |
+| -------------------------- | ------------------------------- | ---------------------------------------------------------------------- |
+| `DEEPREF_AI_PROVIDER`      | `opencode-go`                   | `opencode-go`, or `zai` for the retired legacy provider                |
+| `OPENCODE_API_KEY`         | none                            | Required for OpenCode Go. Without it AI features are off               |
+| `OPENCODE_BASE_URL`        | `https://opencode.ai/zen/go/v1` | Endpoint override                                                      |
+| `DEEPREF_AI_DEFAULT_MODEL` | `glm-5.3-flash`                 | Model for new AI routes                                                |
+| `DEEPREF_AI_MODEL_PRICES`  | built-in                        | Price overrides: `provider/model=input:output`, US$ per million tokens |
 
 **Limits and budget.** OpenCode Go caps each model in dollars: a 5-hour window (20% of the monthly cap), a weekly window (50%) and the monthly cap. When a cap is spent, DeepRef stops that call without retrying and reports "AI subscription limit reached; try again later". The public docs do not give the provider's error text, so DeepRef matches the usual wording for usage, spending, weekly and monthly limits.
 

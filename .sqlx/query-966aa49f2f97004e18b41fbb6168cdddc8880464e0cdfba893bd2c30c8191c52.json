@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_events e\n           SET delivery_state = CASE\n                 WHEN e.delivery_state = 'quarantined' THEN 'quarantined'\n                 WHEN NOT EXISTS (\n                   SELECT 1 FROM unnest(e.expected_consumers) AS expected(consumer)\n                   WHERE NOT EXISTS (\n                     SELECT 1 FROM outbox_receipts r\n                     WHERE r.event_id = e.event_id\n                       AND r.consumer = expected.consumer\n                       AND r.state = 'delivered'))\n                 THEN 'delivered'\n                 WHEN EXISTS (\n                   SELECT 1 FROM outbox_receipts r\n                   WHERE r.event_id = e.event_id AND r.state = 'quarantined')\n                 THEN 'quarantined'\n                 ELSE 'pending' END,\n               delivered_at = CASE\n                 WHEN e.delivered_at IS NOT NULL THEN e.delivered_at\n                 WHEN NOT EXISTS (\n                   SELECT 1 FROM unnest(e.expected_consumers) AS expected(consumer)\n                   WHERE NOT EXISTS (\n                     SELECT 1 FROM outbox_receipts r\n                     WHERE r.event_id = e.event_id\n                       AND r.consumer = expected.consumer\n                       AND r.state = 'delivered'))\n                 THEN now()\n                 ELSE NULL END,\n               next_attempt_at = CASE\n                 WHEN EXISTS (\n                   SELECT 1 FROM unnest(e.expected_consumers) AS expected(consumer)\n                   WHERE NOT EXISTS (\n                     SELECT 1 FROM outbox_receipts r\n                     WHERE r.event_id = e.event_id AND r.consumer = expected.consumer))\n                 THEN now()\n                 ELSE COALESCE((\n                   SELECT min(r.next_attempt_at) FROM outbox_receipts r\n                   WHERE r.event_id = e.event_id AND r.state = 'retrying'), now())\n               END,\n               lease_owner = NULL,\n               lease_expires_at = NULL\n           WHERE e.event_id = $1 AND e.lease_owner = $2\n             AND e.claim_generation = $3 AND e.lease_expires_at > clock_timestamp()\n           RETURNING e.delivery_state",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "delivery_state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "outbox_events",
+            "name": "delivery_state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "966aa49f2f97004e18b41fbb6168cdddc8880464e0cdfba893bd2c30c8191c52"
+}

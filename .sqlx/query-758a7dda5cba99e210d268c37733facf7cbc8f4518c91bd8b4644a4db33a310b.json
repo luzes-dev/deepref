@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE outbox_receipts SET state=$4,settled_generation=$3,\n                     next_attempt_at=clock_timestamp()+($5::double precision*interval '1 millisecond'),last_error=$6\n                   WHERE event_id=$1 AND consumer=$2 AND attempt_generation=$3\n                     AND settled_generation<>$3 AND state='retrying'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8",
+        "Text",
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "758a7dda5cba99e210d268c37733facf7cbc8f4518c91bd8b4644a4db33a310b"
+}

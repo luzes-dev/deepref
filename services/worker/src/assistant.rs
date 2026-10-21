@@ -190,7 +190,48 @@ async fn drive_assistant_run(
         actor: actor.clone(),
         route: route.clone(),
     };
-    let host: Arc<dyn AssistantToolHost> = Arc::new(PostgresAssistantToolHost::new(pool));
+    // Who this run acts for decides how every tool call and plan action is
+    // authorized. A run enqueued without a principal (an older release) is
+    // refused: the worker never guesses a user from the actor label.
+    let authorization = match record.principal {
+        deepref_app::RunPrincipal::User(user) => Some(deepref_app::HostAuthorization::new(
+            deepref_app::authorization::AuditedAuthorizer::postgres(pool),
+            deepref_domain::Principal::user(user),
+        )),
+        deepref_app::RunPrincipal::DevelopmentBypass => None,
+        deepref_app::RunPrincipal::Unspecified => {
+            fail_run(
+                pool,
+                record.id,
+                "assistant_principal_missing",
+                "The run carries no authorization principal; ask again.",
+            )
+            .await
+            .map_err(RunFailure::Fatal)?;
+            return Ok(());
+        }
+    };
+    if let Some(authorization) = &authorization
+        && authorization
+            .check(ProjectId::new(record.project_id), "get_project_overview")
+            .await
+            .is_err()
+    {
+        fail_run(
+            pool,
+            record.id,
+            "assistant_access_revoked",
+            "Your access to this project changed before the assistant could run.",
+        )
+        .await
+        .map_err(RunFailure::Fatal)?;
+        return Ok(());
+    }
+    let mut tool_host = PostgresAssistantToolHost::new(pool);
+    if let Some(authorization) = &authorization {
+        tool_host = tool_host.with_authorization(authorization.clone());
+    }
+    let host: Arc<dyn AssistantToolHost> = Arc::new(tool_host);
     let ledger = Arc::new(PostgresUsageLedger::new(pool));
     let recorder = rig_cassette::effect_log::EffectLogRecorder::keeping_stream_events();
     let turn = RigTurn {
@@ -228,6 +269,23 @@ async fn drive_assistant_run(
         persist_event(pool, record.id, &mut text_buffer, &event).await?;
     }
     flush_text(pool, record.id, &mut text_buffer).await?;
+    // A refused call means the person lost access mid-turn. The run ends
+    // without an answer or plan: nothing the model produced after (or from)
+    // a refused step is kept.
+    if authorization
+        .as_ref()
+        .is_some_and(deepref_app::HostAuthorization::was_refused)
+    {
+        fail_run(
+            pool,
+            record.id,
+            "assistant_access_revoked",
+            "Your access to this project changed while the assistant was working.",
+        )
+        .await
+        .map_err(RunFailure::Fatal)?;
+        return Ok(());
+    }
     match outcome {
         Ok(finished) => {
             emit_plan_event(pool, record.id, record.plan_id, finished.actions.len()).await?;

@@ -6,10 +6,14 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use deepref_app::{list_notifications, mark_notifications_read, unread_summary};
+use deepref_app::{
+    list_notifications, list_notifications_visible_to, mark_notifications_read,
+    mark_notifications_read_visible_to, unread_summary, unread_summary_visible_to,
+};
 
 use super::pagination::{PaginatedResponse, PaginationParams, page};
 use crate::{
+    auth::CurrentSession,
     error::{ApiError, ErrorResponse},
     state::AppState,
 };
@@ -100,6 +104,7 @@ fn dto_from_record(record: deepref_app::NotificationRecord) -> NotificationDto {
 )]
 pub(crate) async fn list_notifications_route(
     State(state): State<AppState>,
+    session: Option<CurrentSession>,
     Query(params): Query<ListNotificationsParams>,
 ) -> Result<Json<PaginatedResponse<NotificationDto>>, ApiError> {
     let project_id = params.project_id;
@@ -109,7 +114,18 @@ pub(crate) async fn list_notifications_route(
     };
     let limit = pagination.limit()?;
     let cursor: Option<i64> = pagination.decode()?;
-    let result = list_notifications(&state.pool, project_id, cursor, limit).await?;
+    // With authentication on, the inbox is the caller's: only notifications of
+    // projects they can still view. Without it (local development) it is the
+    // whole inbox.
+    let result = match session
+        .as_ref()
+        .and_then(|session| session.0.principal.user_id())
+    {
+        Some(viewer) => {
+            list_notifications_visible_to(&state.pool, viewer, project_id, cursor, limit).await?
+        }
+        None => list_notifications(&state.pool, project_id, cursor, limit).await?,
+    };
     Ok(Json(page(
         result.items.into_iter().map(dto_from_record).collect(),
         limit as usize,
@@ -130,9 +146,16 @@ pub(crate) async fn list_notifications_route(
 )]
 pub(crate) async fn get_unread_notification_count(
     State(state): State<AppState>,
+    session: Option<CurrentSession>,
     Query(params): Query<UnreadNotificationParams>,
 ) -> Result<Json<NotificationUnreadDto>, ApiError> {
-    let summary = unread_summary(&state.pool, params.project_id).await?;
+    let summary = match session
+        .as_ref()
+        .and_then(|session| session.0.principal.user_id())
+    {
+        Some(viewer) => unread_summary_visible_to(&state.pool, viewer, params.project_id).await?,
+        None => unread_summary(&state.pool, params.project_id).await?,
+    };
     Ok(Json(NotificationUnreadDto {
         count: summary.count,
         latest_revision: summary.latest_revision,
@@ -153,16 +176,20 @@ pub(crate) async fn get_unread_notification_count(
 )]
 pub(crate) async fn mark_notifications_read_route(
     State(state): State<AppState>,
+    session: Option<CurrentSession>,
     Json(input): Json<MarkNotificationsReadRequest>,
 ) -> Result<Json<MarkNotificationsReadResponse>, ApiError> {
-    let updated = mark_notifications_read(
-        &state.pool,
-        &deepref_app::MarkNotificationsRead {
-            ids: input.ids,
-            all: input.all,
-            project_id: input.project_id,
-        },
-    )
-    .await?;
+    let request = deepref_app::MarkNotificationsRead {
+        ids: input.ids,
+        all: input.all,
+        project_id: input.project_id,
+    };
+    let updated = match session
+        .as_ref()
+        .and_then(|session| session.0.principal.user_id())
+    {
+        Some(viewer) => mark_notifications_read_visible_to(&state.pool, viewer, &request).await?,
+        None => mark_notifications_read(&state.pool, &request).await?,
+    };
     Ok(Json(MarkNotificationsReadResponse { updated }))
 }

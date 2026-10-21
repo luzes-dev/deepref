@@ -599,6 +599,8 @@ async fn schedule_data_extraction_review_with_origin(
     study_id: Uuid,
     context: ReviewScheduleContext,
 ) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    // The study must belong to the project before anything is scheduled from it.
+    get_study(pool, project_id, study_id).await?;
     ensure_ai_task_enabled(pool, project_id, AutonomyTask::Extraction).await?;
     let definitions = list_field_definitions(pool, project_id).await?;
     if definitions.is_empty() {
