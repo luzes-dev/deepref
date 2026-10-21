@@ -67,7 +67,55 @@ Deleting a project with open, observed, or unresolved reservations detaches its 
 - Production OpenAI-compatible adapters are created through `build_metered_provider`. The low-level `RigGateway` has no production callers. `RigEmbeddingGateway` has no workspace caller, so embedding dispatch is not enabled in this slice.
 - HTTP assistant routes enqueue durable runs. They do not dispatch model calls; assistant tools execute deterministic host operations.
 
-Tracing records reservation acceptance and denial, reserved and settled amounts, actual cost, overage blocks, unresolved liabilities, and reconciliation counts without customer identifiers as metric labels. Provider-neutral export is deferred: Slice 09b will replay retained usage facts, so Slice 09a writes no export outbox rows.
+Tracing records reservation acceptance and denial, reserved and settled amounts, actual cost, overage blocks, unresolved liabilities, and reconciliation counts without customer identifiers as metric labels. Provider-neutral export ships in Slice 09b: see [Export](#export) below. Slice 09a writes no export outbox rows, and settlement still writes none — export emits by replaying retained usage facts.
+
+## Export
+
+Slice 09b exports settled usage to the billing provider through a provider-neutral port. The provider is undecided (`BUSINESS_DECISIONS.md`), so no code outside a future adapter names a vendor.
+
+### Identity
+
+Each immutable usage fact id is the commercial event identity: the ledger row id for a settled fact, the correction record id for a correction. That id is also the outbox event id and the provider idempotency key. It is never reissued and never rewritten. A correction record exports as its own fact — its payload carries the corrected cost and price version and references the original in `correction_of` — and the original event is never edited.
+
+### Emission
+
+Export emits by **replaying retained usage facts**. Settlement commits the ledger row and its bucket adjustments only; it writes no export row and never waits for export, so the AI hot path is untouched. The replay keysets retained facts by `(settled_at, id)` and inserts one `ai_usage.fact` v1 outbox event per fact through the 04a `insert_outbox_event` contract, with `event_id` equal to the fact id. That insert is `ON CONFLICT (event_id) DO NOTHING`, so re-emission is a committed no-op, exactly one event exists per fact, and two replay tasks running concurrently converge on the same rows. A fact is *pending emission* when its outbox event does not exist yet: emission state is derived from the outbox row itself rather than from a cursor table, so no scan cursor can fall behind a late-committing settlement transaction and skip a fact forever. Facts settled while export is disabled are emitted by a later replay, never lost.
+
+The replay is bounded and resumable: one run inspects at most its limit (pages of 200 rows per source), and any run may stop at a page boundary. It runs twice:
+
+- as a durable `ai_usage_export_replay` job, platform-scoped on the 05a execution store and pooled in the `ai` workload class beside `ai_usage_reconcile`. The worker reconciler schedules one job per minute while export is enabled, and each run drains up to 20 batches;
+- as an operator command, `deepref-server ai-usage export-replay [--since <rfc3339>] [--limit <rows>]` (default limit 10,000 rows per invocation).
+
+A separate `ai_usage_export_cursor` or per-fact emitted-marker table was considered and rejected (handoff 09, export state options a and b). Such a table would still need the outbox event id's uniqueness to stop double emission, could drift from the outbox, and a cursor could fall behind a late-committing settlement transaction and skip a fact forever. The chosen option (b) — emission inside the replay with `event_id = fact id` — makes the outbox row itself the emission record, so replay is idempotent by construction.
+
+The event payload carries facts only: fact id, workspace id (the external customer identity), project id when applicable, principal *kind* (`user` or `service` — never which principal), provider, model, input/output/reasoning tokens, `provider_cost_micros`, nullable `commercial_units`, price version (null only for facts settled before price versions existed), the one UTC period, `settled_at`, and `correction_of` for corrections. No email, no names, no prompt text, no secrets, no principal identity.
+
+### Sink contract
+
+`UsageExportSink` (`crates/application/src/usage_export.rs`) delivers one fact event and returns exactly one of `Accepted`, `Duplicate`, `RetryableFailure`, `PermanentFailure`, or `Ambiguous`. The `billing_usage_export` outbox consumer calls the sink and always sends the fact id as the provider idempotency key.
+
+- `Accepted` or `Duplicate` commit the consumer receipt in the same transaction; only then is the outbox row marked delivered.
+- `RetryableFailure` retries with the same event id on the outbox's capped backoff (30 s doubling to 15 min).
+- `PermanentFailure` quarantines the recipient immediately for review; the row keeps its payload and is never silently discarded.
+- `Ambiguous` (for example a client timeout, where the provider may have accepted) is **not** success. The event is retried with the same event id and the row stays pending until the sink returns `Accepted` or `Duplicate`. Retries after an ambiguous outcome can double-charge a provider that does not deduplicate by event id, so **a real adapter must verify the provider's event-ingestion idempotency and deduplication semantics before retries are enabled** (spec "Idempotency"). Aggregation or batching of facts into fewer provider events is likewise allowed only after the provider's ingestion, deduplication, correction and billing-period semantics are verified; until then it is one event per immutable fact.
+
+`DisabledUsageExportSink` is the default while no billing provider is configured. It never claims success: every event it sees stays pending and retries through the outbox backoff, so nothing is lost and nothing is dropped as delivered. Usage fact events use a 1,000-attempt budget (`USAGE_EXPORT_MAX_ATTEMPTS`), so an unavailable provider retries for roughly ten days before an operator review, instead of quarantining an ordinary outage.
+
+### Disabled mode
+
+`DEEPREF_USAGE_EXPORT_ENABLED` (default `false`) is the switch, and while it is off the emitter emits nothing at all and the worker registers no `billing_usage_export` consumer. No rows exist, no delivery attempt is spent, and nothing can be quarantined by waiting: retained facts simply sit in the ledger and a later replay emits every one of them. The alternative — registering a consumer that always answers retryable — was rejected because it burns the per-consumer attempt budget into quarantine for a state that is not an incident. `DEEPREF_USAGE_EXPORT_REPLAY_BATCH_SIZE` (default 500, range 1–1000) bounds one replay batch.
+
+### Observability
+
+Export counts facts emitted, delivered, duplicates, ambiguous outcomes, retryable failures and permanent failures (`UsageExportCounters`, fixed fields with no label dimension), and the backlog is reported as SQL: emitted and pending events, unemitted facts and corrections, unattributed facts, and the oldest pending and unemitted ages. Counter labels are fixed and carry no workspace, project, user or cost identifiers. Facts whose workspace cannot be resolved are counted and warned about, never exported to no customer and never hidden.
+
+### Runbook: enabling a billing provider later
+
+1. Confirm the billing provider and its event-ingestion idempotency, deduplication, correction and billing-period semantics in writing (handoff 08, `BUSINESS_DECISIONS.md`).
+2. Implement `UsageExportSink` as the provider adapter and verify its dedup semantics against a sandbox before enabling retries; wire it where `services/worker` currently builds `DisabledUsageExportSink`.
+3. Set `DEEPREF_USAGE_EXPORT_ENABLED=true` on the worker and restart it. The reconciler starts scheduling `ai_usage_export_replay` jobs and the consumer drains what the replay emits.
+4. Run `deepref-server ai-usage export-replay` to drain any backlog immediately; rerun until the summary reports `"complete": true`.
+5. Watch the export counters and the backlog ages. A growing `oldest_pending_age_seconds` is the provider outage signal; `permanent_failure` counters and quarantined `ai_usage.fact` rows need operator review (`outbox_events.last_error` names the cause).
 
 ## Migrations
 
@@ -77,4 +125,9 @@ Tracing records reservation acceptance and denial, reserved and settled amounts,
 - `0124_ai_usage_reconcile_job.sql` maps the workspace recovery job into the AI workload pool.
 - There is no 0127 validation migration in this slice. The `NOT VALID` period-start check remains until the follow-up validation migration after production backfill.
 
-The ledger does not cascade with projects and retains workspace identity directly. No export outbox table or settlement insert is added in this slice.
+Slice 09b (export):
+
+- `0130_ai_usage_export.sql` maps the `ai_usage_export_replay` job into the AI workload pool beside `ai_usage_reconcile`, and indexes correction records for the replay keyset.
+- `0131_ai_usage_export_keyset_index.sql` builds the `(created_at, id)` keyset index on the usage ledger concurrently in a no-transaction migration.
+
+The ledger does not cascade with projects and retains workspace identity directly. No export outbox table is added: the 04a `outbox_events` row keyed by the fact id is the export event and the emission record, and settlement writes no export row — export emits by replaying retained facts.
