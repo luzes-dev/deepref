@@ -10,7 +10,6 @@
 		recoverAiFirstCohort
 	} from '#lib/api/generated/ai/ai.js';
 	import type { AiFirstForecastDto } from '#lib/api/generated/models/index.js';
-	import { currentReviewerId, saveReviewerId } from '#lib/api/reviewer.js';
 	import { notifyError } from '#lib/features/notifications/toast.js';
 	import * as Alert from '@deepref/ui/alert';
 	import * as Card from '@deepref/ui/card';
@@ -26,9 +25,6 @@
 	let target = $state<95 | 98>(95);
 	let allowFinalization = $state(false);
 	let acknowledgement = $state<string | null>(null);
-	let reviewerDraft = $state(currentReviewerId());
-	let reviewerError = $state('');
-	let reviewerSaved = $state(false);
 	let sampleDraft = $state('');
 	let sampleError = $state('');
 	const queryClient = useQueryClient();
@@ -127,20 +123,6 @@
 		sampleError = '';
 		action.mutate({ kind: 'draw', cohortId, sampleSize });
 	}
-
-	async function changeReviewer(): Promise<void> {
-		try {
-			saveReviewerId(reviewerDraft);
-			reviewerDraft = currentReviewerId();
-			reviewerError = '';
-			reviewerSaved = true;
-			await queryClient.cancelQueries();
-			await queryClient.resetQueries();
-		} catch (error) {
-			reviewerSaved = false;
-			reviewerError = error instanceof Error ? error.message : 'Could not save reviewer ID.';
-		}
-	}
 </script>
 
 <section class="flex flex-col gap-6" aria-labelledby="ai-first-title" data-testid="ai-first-panel">
@@ -166,35 +148,6 @@
 			decisions.
 		</Alert.Description>
 	</Alert.Root>
-	<Field.FieldGroup>
-		<Field.Field data-invalid={Boolean(reviewerError)}>
-			<Field.FieldLabel for="ai-first-reviewer">Current reviewer ID</Field.FieldLabel>
-			<div class="flex max-w-lg items-center gap-2">
-				<Input
-					id="ai-first-reviewer"
-					bind:value={reviewerDraft}
-					maxlength={128}
-					aria-invalid={Boolean(reviewerError)}
-					aria-describedby="ai-first-reviewer-description"
-				/>
-				<Button
-					variant="outline"
-					disabled={action.isPending}
-					onclick={() => void changeReviewer()}>Use ID</Button
-				>
-			</div>
-			<Field.FieldDescription id="ai-first-reviewer-description">
-				Local, self-asserted identity for this browser tab; this is not authentication. Use
-				your own consistent ID. Two independent people must use fresh, different IDs and
-				must not have seen AI opinions or earlier human decisions on this cohort. Reusing an
-				ID or changing your ID does not make you an independent reviewer.
-			</Field.FieldDescription>
-			{#if reviewerError}<Field.FieldError>{reviewerError}</Field.FieldError>
-			{:else if reviewerSaved}<p class="text-xs text-muted-foreground" role="status">
-					Reviewer ID saved; queues refreshed.
-				</p>{/if}
-		</Field.Field>
-	</Field.FieldGroup>
 	{#if overviewQuery.isPending}
 		<Skeleton class="h-32 w-full" />
 	{:else if overviewQuery.error}

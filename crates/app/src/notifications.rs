@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use deepref_domain::UserId;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -314,6 +315,119 @@ pub async fn mark_notifications_read(
                      WHERE read_at IS NULL AND id = ANY($1)",
                 )
                 .bind(ids)
+                .execute(pool)
+                .await?
+            }
+            _ => return Ok(0),
+        }
+    };
+    Ok(result.rows_affected() as i64)
+}
+
+/// As [`list_notifications`], restricted to projects `viewer` can view right
+/// now (handoff 03b). A notification with no project belongs to no tenant and
+/// is never shown to a user.
+pub async fn list_notifications_visible_to(
+    pool: &PgPool,
+    viewer: UserId,
+    project_id: Option<Uuid>,
+    before_revision: Option<i64>,
+    limit: i64,
+) -> Result<NotificationPage, sqlx::Error> {
+    let roles = crate::authorization::ProjectViewRoles::current();
+    let rows = sqlx::query_as::<_, NotificationRecord>(concat!(
+        "SELECT n.id,n.revision,n.kind,n.severity,n.project_id,n.title,n.body,n.payload,
+                n.read_at,n.created_at,p.name AS project_name
+         FROM notifications n
+         JOIN projects p ON p.id = n.project_id
+         WHERE ($1::uuid IS NULL OR n.project_id = $1)
+           AND ($2::bigint IS NULL OR n.revision < $2)
+           AND ",
+        crate::viewable_project_predicate!("n.project_id", "$4", "$5", "$6"),
+        " ORDER BY n.revision DESC
+         LIMIT $3"
+    ))
+    .bind(project_id)
+    .bind(before_revision)
+    .bind(limit + 1)
+    .bind(viewer.as_uuid())
+    .bind(roles.workspace_roles())
+    .bind(roles.project_roles())
+    .fetch_all(pool)
+    .await?;
+    let mut items: Vec<NotificationRecord> = rows.into_iter().collect();
+    let next_cursor = if items.len() > limit as usize {
+        items.truncate(limit as usize);
+        items.last().map(|item| item.revision)
+    } else {
+        None
+    };
+    Ok(NotificationPage { items, next_cursor })
+}
+
+/// As [`unread_summary`], over viewable projects only. `latest_revision` is
+/// the newest *visible* revision, so another tenant's activity is not
+/// observable through it.
+pub async fn unread_summary_visible_to(
+    pool: &PgPool,
+    viewer: UserId,
+    project_id: Option<Uuid>,
+) -> Result<NotificationUnreadSummary, sqlx::Error> {
+    let roles = crate::authorization::ProjectViewRoles::current();
+    let row = sqlx::query(concat!(
+        "SELECT count(*) FILTER (
+                  WHERE n.read_at IS NULL AND ($1::uuid IS NULL OR n.project_id = $1)
+                )::bigint AS unread,
+                COALESCE(max(n.revision),0)::bigint AS latest_revision
+         FROM notifications n
+         WHERE ",
+        crate::viewable_project_predicate!("n.project_id", "$2", "$3", "$4")
+    ))
+    .bind(project_id)
+    .bind(viewer.as_uuid())
+    .bind(roles.workspace_roles())
+    .bind(roles.project_roles())
+    .fetch_one(pool)
+    .await?;
+    Ok(NotificationUnreadSummary {
+        count: row.get("unread"),
+        latest_revision: row.get("latest_revision"),
+    })
+}
+
+/// As [`mark_notifications_read`], touching only notifications of projects
+/// `viewer` can view. An id of an invisible notification changes nothing and
+/// is not distinguishable from an unknown id.
+pub async fn mark_notifications_read_visible_to(
+    pool: &PgPool,
+    viewer: UserId,
+    request: &MarkNotificationsRead,
+) -> Result<i64, sqlx::Error> {
+    let roles = crate::authorization::ProjectViewRoles::current();
+    let result = if request.all {
+        sqlx::query(concat!(
+            "UPDATE notifications n SET read_at=now()
+             WHERE n.read_at IS NULL AND ($1::uuid IS NULL OR n.project_id = $1) AND ",
+            crate::viewable_project_predicate!("n.project_id", "$2", "$3", "$4")
+        ))
+        .bind(request.project_id)
+        .bind(viewer.as_uuid())
+        .bind(roles.workspace_roles())
+        .bind(roles.project_roles())
+        .execute(pool)
+        .await?
+    } else {
+        match &request.ids {
+            Some(ids) if !ids.is_empty() => {
+                sqlx::query(concat!(
+                    "UPDATE notifications n SET read_at=now()
+                     WHERE n.read_at IS NULL AND n.id = ANY($1) AND ",
+                    crate::viewable_project_predicate!("n.project_id", "$2", "$3", "$4")
+                ))
+                .bind(ids)
+                .bind(viewer.as_uuid())
+                .bind(roles.workspace_roles())
+                .bind(roles.project_roles())
                 .execute(pool)
                 .await?
             }

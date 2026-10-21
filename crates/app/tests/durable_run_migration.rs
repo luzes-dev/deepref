@@ -270,6 +270,7 @@ async fn terminal_review_history_closes_the_old_running_envelope_without_replaci
     let lease = deepref_application::jobs::JobLease {
         id: job,
         owner: "migration-worker".into(),
+        claim_seq: 0,
         attempt: 1,
     };
     assert!(

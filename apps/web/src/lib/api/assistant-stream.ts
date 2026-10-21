@@ -1,5 +1,4 @@
 import type { AssistantRunDto } from './generated/models/index.js';
-import { currentReviewerId } from './reviewer';
 
 export type AssistantChatStreamEvent =
 	| { event: 'token'; delta: string }
@@ -304,13 +303,6 @@ function runUrl(projectId: string, runId: string): string {
 	return `/api/projects/${projectId}/assistant/runs/${runId}`;
 }
 
-function actorHeaders(): Record<string, string> {
-	return {
-		'x-actor-kind': 'user',
-		'x-actor-id': currentReviewerId()
-	};
-}
-
 async function throwForRunResponse(response: Response): Promise<never> {
 	const detail = await response.text().catch(() => '');
 	const message =
@@ -380,7 +372,6 @@ export async function streamAssistantRunEvents(
 	const afterSeq = options?.afterSeq ?? -1;
 	// fallow-ignore-next-line security-sink -- Fixed-origin internal API proxy endpoint
 	const response = await fetch(runEventsUrl(projectId, runId, afterSeq), {
-		headers: actorHeaders(),
 		signal: options?.signal
 	});
 
@@ -420,7 +411,6 @@ export async function getAssistantRun(
 ): Promise<AssistantRunDto> {
 	// fallow-ignore-next-line security-sink -- Fixed-origin internal API proxy endpoint
 	const response = await fetch(runUrl(projectId, runId), {
-		headers: actorHeaders(),
 		signal
 	});
 
@@ -631,11 +621,7 @@ export async function streamAssistantChat(
 	// fallow-ignore-next-line security-sink -- Fixed-origin internal API proxy endpoint
 	const response = await fetch(`/api/projects/${projectId}/assistant/chat`, {
 		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			'x-actor-kind': 'user',
-			'x-actor-id': currentReviewerId()
-		},
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(body),
 		signal
 	});

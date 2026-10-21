@@ -11,4 +11,11 @@ export interface CreateProject {
 	/** @nullable */
 	description?: string | null;
 	name: string;
+	/**
+	 * Workspace to create the project in. Optional when the caller belongs to
+	 * exactly one workspace that can hold projects; required otherwise. The
+	 * caller needs `project:create` there. Ignored when updating.
+	 * @nullable
+	 */
+	workspace_id?: string | null;
 }

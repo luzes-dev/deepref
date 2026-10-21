@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE integration_inbox_events SET processing_state='received',lease_owner=NULL,lease_expires_at=NULL\n           WHERE id=$1 AND lease_owner=$2 AND claim_generation=$3\n             AND processing_state='processing' AND lease_expires_at > clock_timestamp()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "87304377aa4cd67227035a1bffe6f14b395d0e26de4b0b92c64e820fbb501f81"
+}

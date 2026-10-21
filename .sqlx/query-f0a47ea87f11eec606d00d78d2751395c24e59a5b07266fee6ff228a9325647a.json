@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(SELECT 1 FROM outbox_receipts r JOIN outbox_events e USING(event_id)\n                 WHERE r.event_id=$1 AND r.consumer=ANY(e.expected_consumers)\n                   AND r.state='quarantined') AS \"exhausted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exhausted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f0a47ea87f11eec606d00d78d2751395c24e59a5b07266fee6ff228a9325647a"
+}

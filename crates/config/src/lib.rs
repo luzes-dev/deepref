@@ -63,6 +63,12 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    /// The same gate used by the API session layer for its fixed local user.
+    /// It is enabled only when authentication is explicitly off in development.
+    pub const fn development_principal_enabled(&self) -> bool {
+        self.environment.is_development() && !self.auth_enabled
+    }
+
     pub fn from_env(service_name: &str) -> Result<Self, ConfigError> {
         Self::from_source(service_name, &|name| std::env::var(name).ok())
     }
@@ -158,4 +164,27 @@ pub(crate) fn section<const N: usize>(
         return Err(ConfigError::PartialSection { section, missing });
     }
     Ok(Some(values.map(Option::unwrap_or_default)))
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn development_principal_uses_the_session_gate_conditions() {
+        let development = RuntimeConfig::from_map(
+            "development-principal-test",
+            &HashMap::from([("APP_ENV".to_owned(), "development".to_owned())]),
+        )
+        .expect("development config");
+        assert!(development.development_principal_enabled());
+
+        let mut authenticated = development.clone();
+        authenticated.auth_enabled = true;
+        assert!(!authenticated.development_principal_enabled());
+
+        let mut production = development;
+        production.environment = Environment::Production;
+        assert!(!production.development_principal_enabled());
+    }
 }

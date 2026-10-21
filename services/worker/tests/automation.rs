@@ -89,7 +89,7 @@ async fn claimed_job(
              leased_until=now()+interval '30 seconds',
              lease_renewed_at=now(), attempts=attempts+1
          WHERE id=$1 AND state='queued' AND available_at <= now()
-         RETURNING id,project_id,kind,payload,attempts,max_attempts",
+         RETURNING id,project_id,kind,payload,claim_seq,attempts,max_attempts",
     )
     .bind(job_id)
     .bind(owner)
@@ -98,9 +98,10 @@ async fn claimed_job(
     .ok_or_else(|| anyhow::anyhow!("expected automation job to be claimable"))?;
     Ok(deepref_application::jobs::ClaimedJob {
         id: row.get("id"),
-        project_id: ProjectId::new(row.get("project_id")),
+        scope: deepref_application::jobs::JobScope::Project(ProjectId::new(row.get("project_id"))),
         kind: row.get::<String, _>("kind").parse()?,
         payload: row.get("payload"),
+        claim_seq: row.get("claim_seq"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
     })
@@ -166,6 +167,57 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
     .await;
     cleanup(&pool, project_id).await?;
     result
+}
+
+#[tokio::test]
+async fn cancelled_durable_run_is_skipped_by_the_runtime_dispatch_guard() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let project_id = project(&pool, "worker cancelled run guard").await;
+    let (run_id, job_id) = started_job(&pool, project_id, "cancelled-guard").await?;
+    let mut transaction = pool.begin().await?;
+    ensure!(
+        deepref_app::durable_runs::cancel_run(
+            &mut transaction,
+            run_id.as_uuid(),
+            "cancelled guard fixture",
+        )
+        .await?
+    );
+    transaction.commit().await?;
+
+    let owner = "worker-cancelled-guard";
+    let claimed = claimed_job(&pool, job_id, owner).await?;
+    let action = handle_job_with_documents_owned(
+        pool.clone(),
+        &claimed,
+        &claimed.lease(owner),
+        Duration::from_secs(30),
+        None,
+        None,
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "development".into())
+        })?,
+    )
+    .await?;
+    ensure!(action == DeliveryAction::Ack);
+
+    let (status, attempt_count): (String, i64) = sqlx::query_as(
+        "SELECT r.status,(SELECT count(*) FROM durable_attempts a WHERE a.run_id=r.id)
+         FROM durable_runs r WHERE r.id=$1",
+    )
+    .bind(run_id.as_uuid())
+    .fetch_one(&pool)
+    .await?;
+    ensure!(status == "cancelled");
+    ensure!(
+        attempt_count == 0,
+        "the terminal run starts no handler attempt"
+    );
+    ensure!(complete_job(&pool, &claimed.lease(owner)).await?);
+    cleanup(&pool, project_id).await?;
+    Ok(())
 }
 
 #[tokio::test]

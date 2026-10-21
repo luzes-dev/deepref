@@ -292,6 +292,56 @@ impl DocumentStore {
             .map_err(DocumentStoreError::from)
     }
 
+    /// Stores `bytes` at `key`, replacing any object already there, and
+    /// returns the size and SHA-256 of what was written. Callers pass their own
+    /// `max_bytes`: workflow files are bounded by their table, not by the PDF
+    /// upload limit.
+    pub async fn put_object(
+        &self,
+        key: &ObjectKey,
+        bytes: Bytes,
+        max_bytes: usize,
+    ) -> Result<StoredObject, DocumentStoreError> {
+        if bytes.len() > max_bytes {
+            return Err(DocumentStoreError::TooLarge {
+                actual: bytes.len(),
+                maximum: max_bytes,
+            });
+        }
+        let stored = StoredObject {
+            byte_size: bytes.len(),
+            sha256: hex_digest(Sha256::digest(&bytes).as_slice()),
+            opaque_id: key.as_str().to_owned(),
+        };
+        self.inner
+            .put(&Path::from(key.as_str()), PutPayload::from_bytes(bytes))
+            .await?;
+        Ok(stored)
+    }
+
+    /// Reads the whole object, refusing one larger than `max_bytes` before
+    /// downloading it.
+    pub async fn get_object(
+        &self,
+        key: &ObjectKey,
+        max_bytes: usize,
+    ) -> Result<Bytes, DocumentStoreError> {
+        let result = self.inner.get(&Path::from(key.as_str())).await?;
+        let size = usize::try_from(result.meta.size).unwrap_or(usize::MAX);
+        if size > max_bytes {
+            return Err(DocumentStoreError::TooLarge {
+                actual: size,
+                maximum: max_bytes,
+            });
+        }
+        Ok(result.bytes().await?)
+    }
+
+    pub async fn delete_object(&self, key: &ObjectKey) -> Result<(), DocumentStoreError> {
+        self.inner.delete(&Path::from(key.as_str())).await?;
+        Ok(())
+    }
+
     /// Reports whether the object is still stored. A missing object is
     /// `Ok(false)`; any other store failure stays an error.
     pub async fn exists(&self, key: &str) -> Result<bool, DocumentStoreError> {
@@ -301,6 +351,48 @@ impl DocumentStore {
             Err(object_store::Error::NotFound { .. }) => Ok(false),
             Err(error) => Err(DocumentStoreError::from(error)),
         }
+    }
+}
+
+/// A validated object-store key. Every shape is built from stable identifiers,
+/// never from a user-provided filename, so a key reveals nothing a caller typed
+/// and cannot escape its prefix.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ObjectKey(String);
+
+impl ObjectKey {
+    pub fn document(id: Uuid) -> Self {
+        Self(format!("documents/{id}"))
+    }
+
+    pub fn workflow_file(project_id: Uuid, run_id: Uuid, file_id: Uuid) -> Self {
+        Self(format!(
+            "projects/{project_id}/workflow-runs/{run_id}/files/{file_id}"
+        ))
+    }
+
+    /// Accepts only the key shapes this module builds.
+    pub fn parse(key: &str) -> Result<Self, DocumentStoreError> {
+        let segments: Vec<&str> = key.split('/').collect();
+        let is_uuid = |segment: &str| {
+            Uuid::parse_str(segment).is_ok_and(|id| id.hyphenated().to_string() == segment)
+        };
+        let valid = match segments.as_slice() {
+            ["documents", id] => is_uuid(id),
+            ["projects", project, "workflow-runs", run, "files", file] => {
+                is_uuid(project) && is_uuid(run) && is_uuid(file)
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(Self(key.to_owned()))
+        } else {
+            Err(DocumentStoreError::InvalidKey)
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -419,13 +511,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 fn validate_object_key(key: &str) -> Result<(), DocumentStoreError> {
-    let Some(identifier) = key.strip_prefix("documents/") else {
-        return Err(DocumentStoreError::InvalidKey);
-    };
-    if Uuid::parse_str(identifier).is_err() {
-        return Err(DocumentStoreError::InvalidKey);
-    }
-    Ok(())
+    ObjectKey::parse(key).map(|_| ())
 }
 
 fn storage_key(id: deepref_application::DocumentStorageId) -> String {
@@ -506,6 +592,81 @@ mod tests {
             .await
             .expect("put should succeed");
         assert!(store.exists(key).await.expect("exists should succeed"));
+    }
+
+    #[test]
+    fn object_keys_are_built_from_identifiers_and_reject_anything_else() {
+        let (project, run, file) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let key = ObjectKey::workflow_file(project, run, file);
+        assert_eq!(
+            key.as_str(),
+            format!("projects/{project}/workflow-runs/{run}/files/{file}")
+        );
+        assert_eq!(ObjectKey::parse(key.as_str()).unwrap(), key);
+        let document = ObjectKey::document(file);
+        assert_eq!(ObjectKey::parse(document.as_str()).unwrap(), document);
+        for invalid in [
+            "",
+            "documents/report.pdf",
+            "documents/../etc/passwd",
+            &format!("projects/{project}/workflow-runs/{run}/files/export.csv"),
+            &format!("projects/{project}/workflow-runs/{run}/files/{file}/extra"),
+            &format!(
+                "projects/{project}/workflow-runs/{run}/files/{}",
+                file.as_simple()
+            ),
+            &format!(
+                "projects/{project}/workflow-runs/{run}/files/{}",
+                file.to_string().to_uppercase()
+            ),
+            &format!("projects/{project}/other/{run}/files/{file}"),
+        ] {
+            assert!(
+                matches!(
+                    ObjectKey::parse(invalid),
+                    Err(DocumentStoreError::InvalidKey)
+                ),
+                "{invalid} must be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn put_object_reports_what_it_wrote_and_get_object_bounds_reads() {
+        let store = DocumentStore::memory();
+        let key = ObjectKey::workflow_file(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let stored = store
+            .put_object(&key, Bytes::from_static(b"id,title\n"), 1024)
+            .await
+            .expect("object should be written");
+        assert_eq!(stored.byte_size, 9);
+        assert_eq!(stored.sha256, content_sha256(b"id,title\n"));
+        assert_eq!(stored.opaque_id, key.as_str());
+        assert_eq!(
+            store.get_object(&key, 1024).await.unwrap(),
+            Bytes::from_static(b"id,title\n")
+        );
+        assert!(matches!(
+            store.get_object(&key, 4).await,
+            Err(DocumentStoreError::TooLarge {
+                actual: 9,
+                maximum: 4
+            })
+        ));
+        assert!(matches!(
+            store
+                .put_object(&key, Bytes::from_static(b"12345"), 4)
+                .await,
+            Err(DocumentStoreError::TooLarge { .. })
+        ));
+        store.delete_object(&key).await.expect("delete");
+        assert!(
+            store
+                .get_object(&key, 1024)
+                .await
+                .unwrap_err()
+                .is_not_found()
+        );
     }
 
     #[tokio::test]
