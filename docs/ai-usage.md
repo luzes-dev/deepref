@@ -81,6 +81,8 @@ Each immutable usage fact id is the commercial event identity: the ledger row id
 
 Export emits by **replaying retained usage facts**. Settlement commits the ledger row and its bucket adjustments only; it writes no export row and never waits for export, so the AI hot path is untouched. The replay keysets retained facts by `(settled_at, id)` and inserts one `ai_usage.fact` v1 outbox event per fact through the 04a `insert_outbox_event` contract, with `event_id` equal to the fact id. That insert is `ON CONFLICT (event_id) DO NOTHING`, so re-emission is a committed no-op, exactly one event exists per fact, and two replay tasks running concurrently converge on the same rows. A fact is *pending emission* when its outbox event does not exist yet: emission state is derived from the outbox row itself rather than from a cursor table, so no scan cursor can fall behind a late-committing settlement transaction and skip a fact forever. Facts settled while export is disabled are emitted by a later replay, never lost.
 
+Usage facts and correction records share one id namespace, enforced in the database (`ai_usage_fact_ids`, with triggers on both fact tables) so every writer is covered, including N-1 ledger inserts. An outbox event that holds a fact id but is not that fact's export event is an identity collision, never a successful earlier emission: the replay raises `UsageExportError::EventIdentityConflict`, the backlog counts it under `conflicting_facts` instead of `emitted`, and the fact stays unreleased until an operator resolves the collision.
+
 The replay is bounded and resumable: one run inspects at most its limit (pages of 200 rows per source), and any run may stop at a page boundary. It runs twice:
 
 - as a durable `ai_usage_export_replay` job, platform-scoped on the 05a execution store and pooled in the `ai` workload class beside `ai_usage_reconcile`. The worker reconciler schedules one job per minute while export is enabled, and each run drains up to 20 batches;
@@ -105,6 +107,18 @@ The event payload carries facts only: fact id, workspace id (the external custom
 
 `DEEPREF_USAGE_EXPORT_ENABLED` (default `false`) is the switch, and while it is off the emitter emits nothing at all and the worker registers no `billing_usage_export` consumer. No rows exist, no delivery attempt is spent, and nothing can be quarantined by waiting: retained facts simply sit in the ledger and a later replay emits every one of them. The alternative — registering a consumer that always answers retryable — was rejected because it burns the per-consumer attempt budget into quarantine for a state that is not an incident. `DEEPREF_USAGE_EXPORT_REPLAY_BATCH_SIZE` (default 500, range 1–1000) bounds one replay batch.
 
+### Rollout gate (N-1 compatibility)
+
+An N-1 binary dead-letters any job kind it cannot decode: it claims by workload class and quarantines the row through its claim-decode path. `ai_usage_export_replay` (like 09a's `ai_usage_reconcile`) is therefore scheduled only behind a durable platform flag in addition to the environment switch:
+
+- `ai_usage_export_replay` jobs are created only while `DEEPREF_USAGE_EXPORT_ENABLED` is true **and** `ai_usage_rollout_state.ai_usage_export_activated` is set by `deepref-server ai-usage enable-export`. The job re-checks both gates and emits nothing when either is closed.
+- `ai_usage_reconcile` jobs are created only once `deepref-server ai-usage enable-hard-caps` has set `ai_hard_caps_enforced`, the gate whose preconditions already refuse N-1 activity.
+- `enable-export` refuses until every **live** worker declares `ai_usage_export_replay` in the job kinds its binary decodes (`worker_heartbeats.known_job_kinds`; a heartbeat without the declaration is an old binary) and the N-1 quiet window has passed, mirroring `enable-hard-caps`. The operator precondition is that every deployed worker binary decodes the kind.
+- `deepref-server ai-usage disable-export` clears the flag and **parks** every queued `ai_usage_export_replay` job in a state no claim accepts (`state = 'failed'`, `last_error` naming the command), so a rollback cannot expose the kind to a binary that would dead-letter it. `disable-hard-caps` parks queued `ai_usage_reconcile` jobs the same way. Running jobs are untouched.
+- N's own claim is capability-aware: it claims only the kinds its binary decodes, so a future unknown kind waits in `queued` for a deployment that understands it instead of being destroyed.
+
+**Rollback requires `disable-export` first** (and `disable-hard-caps` for the recovery kind), then drain workers before rolling the binary back.
+
 ### Observability
 
 Export counts facts emitted, delivered, duplicates, ambiguous outcomes, retryable failures and permanent failures (`UsageExportCounters`, fixed fields with no label dimension), and the backlog is reported as SQL: emitted and pending events, unemitted facts and corrections, unattributed facts, and the oldest pending and unemitted ages. Counter labels are fixed and carry no workspace, project, user or cost identifiers. Facts whose workspace cannot be resolved are counted and warned about, never exported to no customer and never hidden.
@@ -113,9 +127,12 @@ Export counts facts emitted, delivered, duplicates, ambiguous outcomes, retryabl
 
 1. Confirm the billing provider and its event-ingestion idempotency, deduplication, correction and billing-period semantics in writing (handoff 08, `BUSINESS_DECISIONS.md`).
 2. Implement `UsageExportSink` as the provider adapter and verify its dedup semantics against a sandbox before enabling retries; wire it where `services/worker` currently builds `DisabledUsageExportSink`.
-3. Set `DEEPREF_USAGE_EXPORT_ENABLED=true` on the worker and restart it. The reconciler starts scheduling `ai_usage_export_replay` jobs and the consumer drains what the replay emits.
-4. Run `deepref-server ai-usage export-replay` to drain any backlog immediately; rerun until the summary reports `"complete": true`.
-5. Watch the export counters and the backlog ages. A growing `oldest_pending_age_seconds` is the provider outage signal; `permanent_failure` counters and quarantined `ai_usage.fact` rows need operator review (`outbox_events.last_error` names the cause).
+3. Roll the N binary out to **every** worker and drain N-1: an N-1 claim dead-letters the `ai_usage_export_replay` kind it cannot decode.
+4. Run `deepref-server ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>`. It refuses while any live worker does not declare the kind (its heartbeat carries no capability declaration or an older one) or while N-1 AI activity is inside the quiet window. This opens the durable `ai_usage_export_activated` gate the scheduler requires.
+5. Set `DEEPREF_USAGE_EXPORT_ENABLED=true` on the worker and restart it. The reconciler starts scheduling `ai_usage_export_replay` jobs and the consumer drains what the replay emits.
+6. Run `deepref-server ai-usage export-replay` to drain any backlog immediately; rerun until the summary reports `"complete": true`.
+7. Watch the export counters and the backlog ages. A growing `oldest_pending_age_seconds` is the provider outage signal; `permanent_failure` counters, quarantined `ai_usage.fact` rows and `conflicting_facts` need operator review (`outbox_events.last_error` names the cause).
+8. **Rollback** (including rolling the binary back to N-1): run `deepref-server ai-usage disable-export <operator-user-uuid>` **first**. It clears the gate and parks every queued replay job in a state no claim accepts, so N-1 can never claim and dead-letter the kind. Then drain workers and roll back. `deepref-server ai-usage disable-hard-caps <operator-user-uuid>` does the same for queued `ai_usage_reconcile` jobs.
 
 ## Migrations
 
@@ -129,5 +146,8 @@ Slice 09b (export):
 
 - `0130_ai_usage_export.sql` maps the `ai_usage_export_replay` job into the AI workload pool beside `ai_usage_reconcile`, and indexes correction records for the replay keyset.
 - `0131_ai_usage_export_keyset_index.sql` builds the `(created_at, id)` keyset index on the usage ledger concurrently in a no-transaction migration.
+- `0132_usage_export_rollout_gate.sql` adds the durable `ai_usage_export_activated` rollout gate and the `worker_heartbeats.known_job_kinds` capability declaration.
+- `0133_ai_usage_fact_ids.sql` installs the shared usage fact id namespace (audit, registry, triggers on both fact tables).
+- `0134_ai_usage_export_audit.sql` extends the administrative audit shapes with `ai.usage_export_enabled` / `ai.usage_export_disabled` and the parked-job count of both disable commands. The audit checks stay `NOT VALID` here; the validating migration follows in a later release, the same posture as the 09a period-start check.
 
 The ledger does not cascade with projects and retains workspace identity directly. No export outbox table is added: the 04a `outbox_events` row keyed by the fact id is the export event and the emission record, and settlement writes no export row — export emits by replaying retained facts.
