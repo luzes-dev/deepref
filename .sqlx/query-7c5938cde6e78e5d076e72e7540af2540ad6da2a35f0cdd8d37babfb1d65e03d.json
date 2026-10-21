@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO integration_inbox_events\n             (provider, provider_event_id, event_type, payload)\n           VALUES ($1, $2, $3, $4)\n           ON CONFLICT (provider, provider_event_id) DO NOTHING\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7c5938cde6e78e5d076e72e7540af2540ad6da2a35f0cdd8d37babfb1d65e03d"
+}

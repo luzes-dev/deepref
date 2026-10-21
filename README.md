@@ -24,7 +24,7 @@ DeepRef is a single-user application for a trusted machine. The API has no authe
 - The API binds `127.0.0.1:8080` by default and refuses a non-loopback address unless `DEEPREF_ALLOW_NETWORK_BIND=1` is set.
 - It rejects requests addressed to an unknown `Host` or port, which blocks DNS rebinding from web pages you visit. Loopback names use the API bind port; `API_CORS_ORIGINS` adds browser/proxy authorities (including their ports). Set it to the site's public origin when using Caddy or a published container port. Health probes must use an allowed Host too.
 - HTTP clients act only as `user`; automation and system actors are created by the server itself.
-- An unset `APP_ENV` means `production`, with its fail-fast checks. Local development sets `APP_ENV=local`.
+- `APP_ENV` is required and must be `development` or `production`; an unset value stops startup. Developer machines use `APP_ENV=development`, every deployed service uses `APP_ENV=production` with its fail-fast checks.
 
 Never expose the API, or the web image that proxies to it, to a network without an authenticating proxy in front. The API container image sets `DEEPREF_ALLOW_NETWORK_BIND=1` only so that such a proxy can reach it. See [SECURITY.md](SECURITY.md) to report a vulnerability.
 

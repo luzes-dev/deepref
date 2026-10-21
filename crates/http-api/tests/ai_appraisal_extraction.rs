@@ -20,6 +20,8 @@ use sqlx::{PgPool, Row};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+const DEVELOPMENT_ACTOR_ID: &str = "00000000-0000-0000-0000-000000000003";
+
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
@@ -27,12 +29,12 @@ async fn database() -> Option<PgPool> {
 fn api_config() -> ApiConfig {
     let runtime = deepref_config::RuntimeConfig::from_map(
         "deepref-api-appraisal-extraction-test",
-        &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
+        &HashMap::from([("APP_ENV".to_owned(), "development".to_owned())]),
     )
     .expect("local test runtime should parse");
     ApiConfig {
         documents: deepref_config::DocumentConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
+            (name == "APP_ENV").then(|| "development".into())
         })
         .expect("local test document configuration"),
         runtime,
@@ -733,7 +735,7 @@ async fn appraisal_reviewed_acceptance_persists_edited_answer_and_audit_without_
     assert_eq!(assessment.get::<String, _>("actor_kind"), "user");
     assert_eq!(
         assessment.get::<String, _>("actor_id"),
-        "appraisal-extraction-http-reviewer"
+        DEVELOPMENT_ACTOR_ID
     );
 
     let appraisal_event: serde_json::Value =
@@ -887,10 +889,7 @@ async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_aud
     assert_eq!(sample_value["source_parser_version"], "parser.v2");
     assert_eq!(sample_value["source_content_hash"], source_hash());
     assert_eq!(sample_value["approved_by_actor_kind"], "user");
-    assert_eq!(
-        sample_value["approved_by_actor_id"],
-        "appraisal-extraction-http-reviewer"
-    );
+    assert_eq!(sample_value["approved_by_actor_id"], DEVELOPMENT_ACTOR_ID);
     assert!(values.iter().any(|value| {
         value["field_definition_id"] == fields.blinded.to_string()
             && value["value"] == serde_json::json!({"kind": "boolean", "value": true})
@@ -928,7 +927,7 @@ async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_aud
     .await
     .expect("extraction event actor");
     assert_eq!(event_actor_kind, "user");
-    assert_eq!(event_actor_id, "appraisal-extraction-http-reviewer");
+    assert_eq!(event_actor_id, DEVELOPMENT_ACTOR_ID);
     let review_event: serde_json::Value = sqlx::query_scalar(
         "SELECT payload FROM review_events
          WHERE project_id=$1 AND aggregate_type='ai_proposal' AND aggregate_id=$2",

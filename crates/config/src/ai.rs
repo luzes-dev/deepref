@@ -1,5 +1,7 @@
 use std::fmt;
 
+use secrecy::{ExposeSecret, SecretString};
+
 use crate::ConfigError;
 
 /// OpenCode Go subscription endpoint. Chat models are served at
@@ -61,9 +63,9 @@ pub struct ModelPriceOverride {
 
 /// AI provider settings. API keys are never printed: `Debug` redacts them and
 /// there is intentionally no `Display`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct AiProviderConfig {
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
     pub provider: AiProviderKind,
     pub base_url: String,
     pub default_model: String,
@@ -127,7 +129,8 @@ impl AiProviderConfig {
         }
         Ok(Self {
             api_key: crate::optional(get, provider.api_key_variable())
-                .filter(|key| key != "replace-me"),
+                .filter(|key| key != "replace-me")
+                .map(SecretString::from),
             provider,
             base_url,
             default_model: crate::optional(get, "DEEPREF_AI_DEFAULT_MODEL")
@@ -146,7 +149,7 @@ impl AiProviderConfig {
     /// The only accessor for the secret; callers must hand it straight to the
     /// HTTP client and never log it.
     pub fn api_key(&self) -> Option<&str> {
-        self.api_key.as_deref()
+        self.api_key.as_ref().map(ExposeSecret::expose_secret)
     }
 
     /// Plain-language notices about deprecated settings that were read. Log
@@ -244,7 +247,10 @@ mod tests {
         assert_eq!(config.default_model, DEFAULT_AI_MODEL);
         assert!(config.is_configured());
         assert!(config.deprecations().is_empty());
-        assert!(!format!("{config:?}").contains("super-secret"));
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("super-secret"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        assert_eq!(config.api_key(), Some("super-secret"));
     }
 
     #[test]

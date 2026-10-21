@@ -6,13 +6,15 @@ pub enum SmtpTls {
     StartTls,
 }
 
+use secrecy::{ExposeSecret, SecretString};
+
 #[derive(Clone, Default)]
 pub struct SmtpConfig {
     pub host: String,
     pub from: String,
     pub port: u16,
     pub tls: SmtpTls,
-    pub credentials: Option<(String, String)>,
+    credentials: Option<(String, SecretString)>,
 }
 
 impl std::fmt::Debug for SmtpConfig {
@@ -30,7 +32,9 @@ impl std::fmt::Debug for SmtpConfig {
 impl SmtpConfig {
     pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> Self {
         let credentials = match (get("SMTP_USERNAME"), get("SMTP_PASSWORD")) {
-            (Some(user), Some(password)) if !user.is_empty() => Some((user, password)),
+            (Some(user), Some(password)) if !user.is_empty() => {
+                Some((user, SecretString::from(password)))
+            }
             _ => None,
         };
         Self {
@@ -46,6 +50,14 @@ impl SmtpConfig {
             },
             credentials,
         }
+    }
+
+    /// The only accessor for the SMTP password: `(username, password)`. Hand
+    /// it straight to the mail transport and never log it.
+    pub fn credentials(&self) -> Option<(&str, &str)> {
+        self.credentials
+            .as_ref()
+            .map(|(user, password)| (user.as_str(), password.expose_secret()))
     }
 
     pub fn is_configured(&self) -> bool {
@@ -72,6 +84,19 @@ mod tests {
         });
         assert!(config.is_configured());
         assert_eq!(config.port, 587);
-        assert!(config.credentials.is_none());
+        assert!(config.credentials().is_none());
+    }
+
+    #[test]
+    fn the_smtp_password_is_exposed_only_through_the_accessor() {
+        let config = SmtpConfig::from_source(&|name| match name {
+            "SMTP_USERNAME" => Some("mailer".into()),
+            "SMTP_PASSWORD" => Some("smtp-secret".into()),
+            _ => None,
+        });
+        assert_eq!(config.credentials(), Some(("mailer", "smtp-secret")));
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("smtp-secret"), "{debug}");
+        assert!(debug.contains("credentials_present: true"), "{debug}");
     }
 }

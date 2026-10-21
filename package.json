@@ -18,6 +18,8 @@
     "generate:client": "pnpm --filter @deepref/web generate:client",
     "generate:api": "pnpm generate:openapi && pnpm generate:client",
     "generate:api:check": "bash scripts/check-api-codegen.sh",
+    "generate:authz": "cargo xtask authz-matrix --write",
+    "generate:authz:check": "cargo xtask authz-matrix --check",
     "test": "pnpm -r run test",
     "test:web": "pnpm --filter @deepref/web test",
     "test:ui": "pnpm --filter @deepref/ui test",

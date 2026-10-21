@@ -1,3 +1,4 @@
+mod authz_matrix;
 mod boundaries;
 mod doctor;
 mod generate;
@@ -13,6 +14,15 @@ fn main() -> Result<()> {
     match args.as_slice() {
         [command] if command == "boundaries" => boundaries::run(),
         [command] if command == "doctor" => doctor::run(),
+        [command] if command == "authz-matrix" => {
+            authz_matrix::run(authz_matrix::MatrixMode::Check)
+        }
+        [command, flag] if command == "authz-matrix" && flag == "--check" => {
+            authz_matrix::run(authz_matrix::MatrixMode::Check)
+        }
+        [command, flag] if command == "authz-matrix" && flag == "--write" => {
+            authz_matrix::run(authz_matrix::MatrixMode::Write)
+        }
         [command] if command == "generate" => generate::run(generate::GenerateMode::Write),
         [command, flag] if command == "generate" && flag == "--check" => {
             generate::run(generate::GenerateMode::Check)
@@ -33,6 +43,7 @@ fn main() -> Result<()> {
             "unknown command; usage:\n  \
              cargo xtask boundaries\n  \
              cargo xtask doctor\n  \
+             cargo xtask authz-matrix [--check|--write]\n  \
              cargo xtask generate\n  \
              cargo xtask generate --check\n  \
              cargo xtask migrations check [--base <git-ref>] [--report-only]\n  \

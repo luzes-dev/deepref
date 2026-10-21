@@ -15,7 +15,6 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::{
-    actor::extract_actor,
     extraction::{ExtractionValueDto, map_extraction_error, value_dto},
     pagination::{PaginatedResponse, PaginationParams, page},
 };
@@ -216,10 +215,11 @@ pub(crate) async fn get_ai_autonomy(
 pub(crate) async fn update_ai_autonomy(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<UpdateAiAutonomyRequest>,
 ) -> Result<Json<AiAutonomyDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let mut parsed = Vec::new();
     for change in &body.changes {
         if LOCKED_TASKS.contains(&change.task.as_str()) {
@@ -506,9 +506,10 @@ pub(crate) async fn get_ai_activity_overview(
 pub(crate) async fn undo_ai_activity(
     State(state): State<AppState>,
     Path((project_id, activity_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<AiActivityDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let record = deepref_app::undo_activity(&state.pool, project_id, activity_id, &actor)
         .await
         .map_err(map_activity_error)?;
@@ -547,9 +548,10 @@ pub(crate) struct BatchUndoDto {
 pub(crate) async fn undo_ai_activity_batch(
     State(state): State<AppState>,
     Path((project_id, batch_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<BatchUndoDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let result = deepref_app::undo_batch(&state.pool, project_id, batch_id, &actor)
         .await
         .map_err(map_activity_error)?;
@@ -693,10 +695,11 @@ pub(crate) struct ResolveReviewerConflictRequest {
 pub(crate) async fn resolve_ai_reviewer_conflict(
     State(state): State<AppState>,
     Path((project_id, decision_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(body): Json<ResolveReviewerConflictRequest>,
 ) -> Result<Json<AiReviewerDecisionDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let decision = match body.decision.as_str() {
         "include" => ScreeningDecision::Include,
         "exclude" => ScreeningDecision::Exclude,
@@ -820,9 +823,10 @@ pub(crate) async fn get_ai_reviewer_agreement(
 pub(crate) async fn confirm_extraction_value(
     State(state): State<AppState>,
     Path((project_id, study_id, value_id)): Path<(Uuid, Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<ExtractionValueDto>, ApiError> {
-    let actor = extract_actor(&headers)?;
+    let actor = request_actor.actor.clone();
     let record = deepref_app::confirm_value(&state.pool, project_id, study_id, value_id, &actor)
         .await
         .map_err(map_extraction_error)?;

@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT processing_state, count(*) AS \"count!\"\n           FROM integration_inbox_events GROUP BY processing_state",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "processing_state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "integration_inbox_events",
+            "name": "processing_state"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "076cfdcbff89dda6209eb1ab78ee99c0676538ab89400977df612f5266e8248f"
+}

@@ -44,10 +44,10 @@ docker start deepref-human-touch-postgres
 docker exec -i deepref-human-touch-postgres psql -v ON_ERROR_STOP=1 -U postgres -d deepref_ui_review < scripts/seed-ui.sql
 
 # API (run from repository root):
-APP_ENV=local DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5443/deepref_ui_review API_BIND_ADDR=127.0.0.1:8083 DOCUMENT_STORAGE_BACKEND=local DOCUMENT_STORAGE_ROOT=/tmp/deepref-ui-documents target/debug/deepref-server serve
+APP_ENV=development DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5443/deepref_ui_review API_BIND_ADDR=127.0.0.1:8083 DOCUMENT_STORAGE_BACKEND=local DOCUMENT_STORAGE_ROOT=/tmp/deepref-ui-documents target/debug/deepref-server serve
 
 # Worker (another terminal, for background tasks):
-APP_ENV=local DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5443/deepref_ui_review DOCUMENT_STORAGE_BACKEND=local DOCUMENT_STORAGE_ROOT=/tmp/deepref-ui-documents target/debug/deepref-server worker
+APP_ENV=development DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5443/deepref_ui_review DOCUMENT_STORAGE_BACKEND=local DOCUMENT_STORAGE_ROOT=/tmp/deepref-ui-documents target/debug/deepref-server worker
 
 # Web (another terminal):
 API_PROXY_TARGET=http://127.0.0.1:8083 mise exec -- pnpm dev:web --host 127.0.0.1 --port 5183

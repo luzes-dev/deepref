@@ -236,7 +236,7 @@ async fn bind_review_step_acceptance_in_transaction(
            AND r.project_id=s.project_id AND r.id=s.run_id
            AND j.project_id=r.project_id AND j.id=$6
            AND j.payload->>'run_id'=r.id::text
-           AND j.state='running' AND j.lease_owner=$3 AND j.attempts=$5 AND j.leased_until > now()
+           AND j.state='running' AND j.lease_owner=$3 AND j.claim_seq=$7 AND j.leased_until > now()
            AND EXISTS(SELECT 1 FROM durable_attempts current
              JOIN review_attempt_details cd ON cd.id=current.id
              WHERE current.run_id=s.run_id AND current.project_id=s.project_id
@@ -250,6 +250,7 @@ async fn bind_review_step_acceptance_in_transaction(
     .bind(accepted_attempt_id)
     .bind(lease.attempt)
     .bind(lease.id)
+    .bind(lease.claim_seq)
     .execute(&mut **transaction)
     .await?
     .rows_affected();

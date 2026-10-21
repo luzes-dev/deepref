@@ -2,6 +2,7 @@ export * from './acquisitions/acquisitions.ts';
 export * from './ai/ai.ts';
 export * from './appraisal/appraisal.ts';
 export * from './assistant/assistant.ts';
+export * from './auth/auth.ts';
 export * from './automations/automations.ts';
 export * from './deduplication/deduplication.ts';
 export * from './documents/documents.ts';

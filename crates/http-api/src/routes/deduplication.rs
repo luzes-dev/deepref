@@ -10,7 +10,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::actor::{Actor, client_actor_kind, extract_actor};
+use super::actor::Actor;
 use super::pagination::{PaginatedResponse, PaginationParams, page};
 use crate::{
     error::{ApiError, ErrorResponse},
@@ -23,8 +23,6 @@ const MAX_BATCH: i64 = 100;
 pub(crate) struct RunDeduplicationRequest {
     /// Number of unresolved source records to process, from 1 through 100.
     pub limit: Option<i64>,
-    pub actor_kind: Option<String>,
-    pub actor_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -89,8 +87,6 @@ pub(crate) struct DedupeProposalDto {
 pub(crate) struct ProposalDecisionRequest {
     pub decision: ProposalDecisionInput,
     pub reason: String,
-    pub actor_kind: Option<String>,
-    pub actor_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -115,8 +111,6 @@ pub(crate) struct RecordResolutionRequest {
     pub report_id: Option<Uuid>,
     pub proposal_id: Option<Uuid>,
     pub reason: String,
-    pub actor_kind: Option<String>,
-    pub actor_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -137,7 +131,7 @@ pub(crate) enum RecordResolutionActionInput {
     request_body = RunDeduplicationRequest,
     responses(
         (status = 200, description = "Bounded deduplication run summary", body = DedupeRunDto),
-        (status = 400, description = "Invalid run bounds or actor", body = ErrorResponse),
+        (status = 400, description = "Invalid run bounds", body = ErrorResponse),
         (status = 404, description = "Project not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
@@ -145,12 +139,12 @@ pub(crate) enum RecordResolutionActionInput {
 pub(crate) async fn run_project_deduplication(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<RunDeduplicationRequest>,
 ) -> Result<Json<DedupeRunDto>, ApiError> {
     let limit = bounded_limit(input.limit)?;
-    let (actor_kind, actor_id) =
-        actor(&extract_actor(&headers)?, input.actor_kind, input.actor_id)?;
+    let (actor_kind, actor_id) = actor(&request_actor.actor);
     let summary = deepref_app::run_deduplication(
         &state.pool,
         deepref_app::DedupeRunRequest {
@@ -244,11 +238,11 @@ pub(crate) async fn list_project_dedupe_proposals(
 pub(crate) async fn decide_project_dedupe_proposal(
     State(state): State<AppState>,
     Path((project_id, proposal_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<ProposalDecisionRequest>,
 ) -> Result<Json<ResolutionDto>, ApiError> {
-    let (actor_kind, actor_id) =
-        actor(&extract_actor(&headers)?, input.actor_kind, input.actor_id)?;
+    let (actor_kind, actor_id) = actor(&request_actor.actor);
     let result = deepref_app::decide_proposal(
         &state.pool,
         deepref_app::ProposalDecisionRequest {
@@ -286,11 +280,11 @@ pub(crate) async fn decide_project_dedupe_proposal(
 pub(crate) async fn resolve_project_record(
     State(state): State<AppState>,
     Path((project_id, record_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
+    request_actor: crate::routes::actor::AuthenticatedActor,
     Json(input): Json<RecordResolutionRequest>,
 ) -> Result<Json<ResolutionDto>, ApiError> {
-    let (actor_kind, actor_id) =
-        actor(&extract_actor(&headers)?, input.actor_kind, input.actor_id)?;
+    let (actor_kind, actor_id) = actor(&request_actor.actor);
     let result = deepref_app::resolve_record(
         &state.pool,
         ResolveRecordCommand {
@@ -340,24 +334,9 @@ fn bounded_limit(limit: Option<i64>) -> Result<i64, ApiError> {
     Ok(limit)
 }
 
-/// The acting user: the request's header actor, which the optional body fields
-/// may restate. Like the header, the body accepts only `user`.
-fn actor(
-    header: &Actor,
-    kind: Option<String>,
-    id: Option<String>,
-) -> Result<(String, String), ApiError> {
-    let kind = match kind {
-        Some(kind) => client_actor_kind(&kind, "actor_kind")?,
-        None => header.kind(),
-    };
-    let id = id.unwrap_or_else(|| header.id().to_owned());
-    if id.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "actor_id must not be empty".to_owned(),
-        ));
-    }
-    Ok((kind.as_str().to_owned(), id))
+/// Persist the identity selected by authentication, never by request data.
+fn actor(actor: &Actor) -> (String, String) {
+    (actor.kind().as_str().to_owned(), actor.id().to_owned())
 }
 
 fn proposal_dto(proposal: deepref_app::DedupeProposal) -> DedupeProposalDto {
@@ -436,33 +415,22 @@ pub(crate) fn map_dedupe_error(error: deepref_app::DedupeError) -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use deepref_domain::{Principal, UserId};
+    use uuid::Uuid;
+
     use super::*;
 
     #[test]
-    fn body_actor_defaults_to_the_header_actor_and_rejects_non_users() {
-        let header = extract_actor(&HeaderMap::new()).map_err(|error| error.to_string());
-        let Ok(header) = header else {
-            panic!("default header actor: {header:?}");
-        };
+    fn request_actor_fields_cannot_override_the_authenticated_user() {
+        let user_id = UserId::new(Uuid::from_u128(42));
+        let authenticated = super::super::actor::actor_from_principal(Principal::user(user_id))
+            .expect("user principal produces an actor");
         assert_eq!(
-            actor(&header, None, None).map_err(|error| error.to_string()),
-            Ok(("user".to_owned(), "local-user".to_owned()))
+            actor(&authenticated),
+            (
+                "user".to_owned(),
+                "00000000-0000-0000-0000-00000000002a".to_owned()
+            )
         );
-        let mut headers = HeaderMap::new();
-        headers.insert("x-actor-id", axum::http::HeaderValue::from_static("tab-42"));
-        let tab = extract_actor(&headers).map_err(|error| error.to_string());
-        let Ok(tab) = tab else {
-            panic!("tab header actor: {tab:?}");
-        };
-        assert_eq!(
-            actor(&tab, Some("user".to_owned()), None).map_err(|error| error.to_string()),
-            Ok(("user".to_owned(), "tab-42".to_owned()))
-        );
-        for kind in ["automation", "system"] {
-            assert!(
-                actor(&header, Some(kind.to_owned()), Some("ai:model".to_owned())).is_err(),
-                "body actor_kind {kind} must be rejected"
-            );
-        }
     }
 }

@@ -4,7 +4,7 @@
 
 Make AI usage safe under concurrency, attributable to SaaS tenants and exportable to Polar without making Polar part of the execution hot path.
 
-Read `00_PROGRAM.md`. Complete handoff 03, handoff 04a (the broker-independent PostgreSQL outbox), and handoff 05a: reservation recovery and reconciliation run as workspace-scoped durable jobs on the 05a execution store. The Polar export depends on 04a, not on the 04b broker relay. Complete handoff 08 before enabling commercial credit/meter synchronization.
+Read `00_PROGRAM.md`. Complete handoff 03, handoff 04a (the broker-independent PostgreSQL outbox), and handoff 05a: reservation recovery and reconciliation run as workspace-scoped durable jobs on the 05a execution store. The Polar export depends on 04a, not on the 04b broker relay. Complete handoff 08 before enabling commercial credit/meter synchronization. The billing provider is undecided (`BUSINESS_DECISIONS.md`): build the usage export behind a provider-neutral port and read "Polar" below as "the billing provider" until 08 picks one.
 
 ## Scope
 

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE integration_inbox_events\n               SET processing_state=$4,last_error=$5,quarantine_reason=$6,\n                 next_attempt_at=clock_timestamp()+($7::double precision*interval '1 millisecond'),\n                 lease_owner=NULL,lease_expires_at=NULL,claim_generation=claim_generation+1\n               WHERE id=$1 AND lease_owner=$2 AND claim_generation=$3\n                 AND processing_state='processing' AND lease_expires_at <= clock_timestamp()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "40b5089051b0f2c5701d1759c47d09406abd4d8cbc19664f36d9c3b0ee4a7f6d"
+}
