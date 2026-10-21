@@ -11,7 +11,8 @@ ALTER TABLE admin_audit_events ADD CONSTRAINT admin_audit_events_event_type_chec
   'project_access.granted', 'project_access.role_changed', 'project_access.removed',
   'invitation.created', 'invitation.accepted', 'invitation.revoked', 'invitation.expired',
   'authorization.denied', 'legacy_actor.mapped', 'legacy_actor.non_identity_recorded',
-  'ai.usage_limit_changed', 'ai.usage_overage_waived'
+  'ai.usage_limit_changed', 'ai.usage_overage_waived', 'ai.hard_caps_enabled',
+  'ai.hard_caps_disabled', 'ai.usage_reservation_resolved'
 )) NOT VALID;
 ALTER TABLE admin_audit_events ADD CONSTRAINT admin_audit_events_check CHECK (
   -- Identity events (0085), unchanged and never workspace-scoped.
@@ -136,4 +137,31 @@ ALTER TABLE admin_audit_events ADD CONSTRAINT admin_audit_events_check CHECK (
       AND jsonb_typeof(metadata->'overage_micros') = 'number'
       AND (metadata->>'overage_micros')::numeric > 0
       AND workspace_id IS NOT NULL AND project_id IS NULL)
+  OR (event_type = 'ai.hard_caps_enabled'
+      AND principal_kind = 'user' AND principal_user_id IS NOT NULL AND target_user_id IS NULL
+      AND metadata ? 'quiet_window_seconds'
+      AND metadata - 'quiet_window_seconds' = '{}'::jsonb
+      AND jsonb_typeof(metadata->'quiet_window_seconds') = 'number'
+      AND (metadata->>'quiet_window_seconds')::numeric > 0
+      AND workspace_id IS NULL AND project_id IS NULL)
+  OR (event_type = 'ai.hard_caps_disabled'
+      AND principal_kind = 'user' AND principal_user_id IS NOT NULL AND target_user_id IS NULL
+      AND metadata = '{}'::jsonb
+      AND workspace_id IS NULL AND project_id IS NULL)
+  OR (event_type = 'ai.usage_reservation_resolved'
+      AND principal_kind = 'user' AND principal_user_id IS NOT NULL AND target_user_id IS NULL
+      AND metadata ? 'reservation_id' AND metadata ? 'resolution'
+      AND metadata->>'reservation_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      AND metadata->>'resolution' IN ('settle', 'void')
+      AND ((metadata->>'resolution' = 'settle'
+            AND metadata ? 'cost_micros'
+            AND metadata - 'reservation_id' - 'resolution' - 'cost_micros' = '{}'::jsonb
+            AND jsonb_typeof(metadata->'cost_micros') = 'number'
+            AND (metadata->>'cost_micros')::numeric >= 0)
+        OR (metadata->>'resolution' = 'void'
+            AND metadata ? 'reason'
+            AND metadata - 'reservation_id' - 'resolution' - 'reason' = '{}'::jsonb
+            AND jsonb_typeof(metadata->'reason') = 'string'
+            AND length(btrim(metadata->>'reason')) BETWEEN 1 AND 500))
+      AND workspace_id IS NOT NULL)
 ) NOT VALID;

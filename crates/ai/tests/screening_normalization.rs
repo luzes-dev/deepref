@@ -813,6 +813,22 @@ impl Script {
 }
 
 impl AiGateway for Script {
+    fn prepare(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<crate::PreparedCompletionRequest, AiError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": request.route.model.clone(),
+            "system_prompt": request.system_prompt.clone(),
+            "user_prompt": request.user_prompt.clone(),
+            "evidence": request.evidence.clone(),
+            "schema": request.schema.clone(),
+            "max_tokens": request.route.parameters.max_tokens,
+        }))
+        .map_err(|_| AiError::UnboundedInput)?;
+        Ok(crate::PreparedCompletionRequest::new(request, body))
+    }
+
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
             self.requests.lock().expect("requests").push(request);
@@ -824,10 +840,12 @@ impl AiGateway for Script {
                 .unwrap_or_else(|| Err(AiError::Gateway("no scripted answer".to_owned())))?;
             Ok(GatewayCompletion {
                 output_json: next,
-                input_tokens: 100,
-                output_tokens: 50,
-                reasoning_tokens: 0,
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -943,7 +961,10 @@ impl ModelRouter for Route {
                 provider: "opencode-go".to_owned(),
                 model: "glm-5.3-flash".to_owned(),
                 model_version: "glm-5.3-flash".to_owned(),
-                parameters: ModelParameters::default(),
+                parameters: ModelParameters {
+                    max_tokens: Some(2_048),
+                    ..ModelParameters::default()
+                },
                 route_id: None,
             })
         })

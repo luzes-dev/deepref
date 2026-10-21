@@ -237,6 +237,20 @@ fn map_usage_error(error: deepref_app::AiUsageError) -> ApiError {
         deepref_app::AiUsageError::Reconciliation => {
             ApiError::Internal(anyhow::anyhow!("AI usage reconciliation failed"))
         }
+        deepref_app::AiUsageError::InvalidBackfillBatchSize
+        | deepref_app::AiUsageError::InvalidResolution => {
+            ApiError::BadRequest("AI usage command arguments are invalid".to_owned())
+        }
+        deepref_app::AiUsageError::HardCapsGate(reason) => ApiError::Conflict {
+            code: "ai_hard_caps_gate_closed".to_owned(),
+            message: reason,
+            details: serde_json::Value::Null,
+        },
+        deepref_app::AiUsageError::ReservationNotResolvable => ApiError::Conflict {
+            code: "ai_reservation_not_resolvable".to_owned(),
+            message: "AI usage reservation is missing or already terminal".to_owned(),
+            details: serde_json::Value::Null,
+        },
         deepref_app::AiUsageError::InvalidBudget => {
             ApiError::BadRequest("budget must be between 0 and 100000 USD".to_owned())
         }

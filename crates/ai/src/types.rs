@@ -50,6 +50,10 @@ pub enum AiError {
     MissingUsageWorkspace,
     #[error("AI usage reservation was refused because the cost bound is invalid")]
     InvalidUsageBound,
+    #[error("AI usage metering does not support provider route {provider}/{model}")]
+    UnsupportedUsageRoute { provider: String, model: String },
+    #[error("paid AI dispatch is disabled until hard caps are enabled")]
+    HardCapsDisabled,
     #[error("AI provider rejected the request before accepting work (HTTP {status})")]
     ProviderRejected { status: u16 },
     #[error(
@@ -389,10 +393,12 @@ pub struct CompletionRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayCompletion {
     pub output_json: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
     pub cost_micros: Option<i64>,
+    pub provider_request_id: Option<String>,
+    pub provider_response_id: Option<String>,
     /// The model the provider reports it served (the response `model`). Audit only, see
     /// [`AiRunRecord::provider_served_model`].
     pub served_model: Option<String>,
@@ -448,6 +454,9 @@ pub struct AiUsageContext {
     pub workspace_id: Option<WorkspaceId>,
     pub principal: Option<UsagePrincipal>,
     pub run_id: Uuid,
+    /// Stable lifetime budget shared by every model invocation in one durable
+    /// run or review. `run_id` remains the invocation attribution.
+    pub run_budget_id: Uuid,
     pub step_id: Option<String>,
     /// Durable job identity and claim fence, when this invocation belongs to
     /// a 05a job. Both values must be present together.

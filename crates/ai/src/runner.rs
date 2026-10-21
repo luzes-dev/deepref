@@ -305,6 +305,9 @@ where
             .usage_context
             .clone()
             .unwrap_or_else(|| crate::service_usage_context(run.id, "ai-task-runner"));
+        if execution.usage_context.is_none() {
+            usage_context.run_budget_id = execution.parent_automation_run_id.unwrap_or(run.id);
+        }
         usage_context.run_id = run.id;
         // Every provider call is counted on the run, so a repaired run carries
         // the usage of both calls. Each iteration gets its own reservation
@@ -543,14 +546,12 @@ fn schema_reason(raw: &Value, pointer: &str) -> String {
 }
 
 fn record_completion(run: &mut AiRunRecord, completion: &GatewayCompletion) {
-    run.usage.input_tokens = run
-        .usage
-        .input_tokens
-        .saturating_add(completion.input_tokens);
-    run.usage.output_tokens = run
-        .usage
-        .output_tokens
-        .saturating_add(completion.output_tokens);
+    if let Some(input_tokens) = completion.input_tokens {
+        run.usage.input_tokens = run.usage.input_tokens.saturating_add(input_tokens);
+    }
+    if let Some(output_tokens) = completion.output_tokens {
+        run.usage.output_tokens = run.usage.output_tokens.saturating_add(output_tokens);
+    }
     if let Some(cost) = completion.cost_micros {
         run.cost_micros = Some(run.cost_micros.unwrap_or(0).saturating_add(cost));
     }
@@ -602,6 +603,8 @@ pub fn safe_error_metadata(error: &AiError) -> SafeErrorMetadata {
         AiError::UnboundedInput => "unbounded_input",
         AiError::UnboundedOutput => "unbounded_output",
         AiError::MissingUsageWorkspace => "missing_usage_workspace",
+        AiError::UnsupportedUsageRoute { .. } => "unsupported_usage_route",
+        AiError::HardCapsDisabled => "hard_caps_disabled",
         AiError::InvalidUsageBound => "invalid_usage_bound",
         AiError::ProviderRejected { .. } => "provider_rejected",
         AiError::ProviderRejectedSubscriptionLimit { .. } | AiError::SubscriptionLimit => {
@@ -617,6 +620,8 @@ pub fn safe_error_metadata(error: &AiError) -> SafeErrorMetadata {
         "unbounded_input" => "AI request could not be safely bounded",
         "unbounded_output" => "AI route is missing an output token cap",
         "missing_usage_workspace" => "AI usage tenant attribution is missing",
+        "unsupported_usage_route" => "AI route billing capability is not supported",
+        "hard_caps_disabled" => "paid AI dispatch is disabled until hard caps are enabled",
         "invalid_usage_bound" => "AI request cost bound is invalid",
         "provider_rejected" => "provider rejected the AI request",
         "subscription_limit" => "AI subscription limit reached; try again later",

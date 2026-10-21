@@ -8,4 +8,3 @@ ALTER TABLE ai_usage_ledger VALIDATE CONSTRAINT ai_usage_ledger_reasoning_tokens
 ALTER TABLE ai_usage_ledger VALIDATE CONSTRAINT ai_usage_ledger_commercial_units_check;
 ALTER TABLE ai_usage_ledger VALIDATE CONSTRAINT ai_usage_ledger_principal_check;
 ALTER TABLE ai_usage_ledger VALIDATE CONSTRAINT ai_usage_ledger_step_id_check;
-ALTER TABLE ai_usage_ledger ALTER COLUMN period_start SET NOT NULL;

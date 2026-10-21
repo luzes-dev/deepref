@@ -156,6 +156,7 @@ pub async fn replay_rig_turn(
                 }),
         ),
         run_id: cassette.run_id,
+        run_budget_id: cassette.run_id,
         step_id: None,
         job_id: replay.context.job_id,
         attempt_fence: replay.context.attempt_fence,

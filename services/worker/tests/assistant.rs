@@ -25,7 +25,18 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    let pool = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
+    sqlx::query(
+        "UPDATE ai_usage_backfill_state SET completed_at = COALESCE(completed_at, now()) WHERE singleton",
+    )
+    .execute(&pool)
+    .await
+    .expect("test fixture marks legacy usage backfilled");
+    sqlx::query("UPDATE ai_usage_rollout_state SET ai_hard_caps_enforced = true WHERE singleton")
+        .execute(&pool)
+        .await
+        .expect("test fixture enables assistant usage reservations");
+    Some(pool)
 }
 
 async fn project(pool: &PgPool) -> (Uuid, Uuid) {
@@ -35,6 +46,36 @@ async fn project(pool: &PgPool) -> (Uuid, Uuid) {
         .execute(pool)
         .await
         .expect("project inserts");
+    let workspace_id: Uuid = sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .expect("project has a workspace");
+    // Mocked assistant runs need room at every level. Project creation does
+    // not create parent allowance in production.
+    sqlx::query(
+        "UPDATE ai_usage_limits SET limit_micros = 100000000000
+         WHERE scope_kind = 'platform'
+            OR (scope_kind = 'workspace' AND scope_id = $1)
+            OR (scope_kind = 'project' AND scope_id = $2)",
+    )
+    .bind(workspace_id)
+    .bind(project_id)
+    .execute(pool)
+    .await
+    .expect("assistant fixture caps allow bounded mocked calls");
+    sqlx::query(
+        "UPDATE ai_usage_period_buckets SET limit_micros = 100000000000
+         WHERE period_start = date_trunc('month', now() AT TIME ZONE 'UTC')::date
+           AND (scope_kind = 'platform'
+             OR (scope_kind = 'workspace' AND scope_id = $1)
+             OR (scope_kind = 'project' AND scope_id = $2))",
+    )
+    .bind(workspace_id)
+    .bind(project_id)
+    .execute(pool)
+    .await
+    .expect("assistant fixture buckets follow their test caps");
     let conversation_id: Uuid = sqlx::query_scalar(
         "INSERT INTO assistant_conversations (id,project_id,title) VALUES ($1,$2,'t') RETURNING id",
     )
@@ -66,8 +107,8 @@ async fn project_report(pool: &PgPool, project_id: Uuid) -> Uuid {
 fn route() -> ResolvedModel {
     ResolvedModel {
         profile: ModelProfile::Reasoning,
-        provider: "test-provider".to_owned(),
-        model: "test-model".to_owned(),
+        provider: "opencode-go".to_owned(),
+        model: "glm-5.3-flash".to_owned(),
         model_version: "v1".to_owned(),
         parameters: ModelParameters::default(),
         route_id: None,
@@ -313,7 +354,7 @@ async fn exhausted_budget_fails_the_run_without_an_answer() {
         .expect("budget");
     sqlx::query(
         "INSERT INTO ai_usage_ledger (project_id,profile,provider,model,purpose,input_tokens,output_tokens,cost_micros)
-         VALUES ($1,'reasoning','test-provider','test-model','chat',1,1,10)",
+         VALUES ($1,'reasoning','opencode-go','glm-5.3-flash','chat',1,1,10)",
     )
     .bind(project_id)
     .execute(&pool)

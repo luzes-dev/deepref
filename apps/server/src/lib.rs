@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 pub mod command;
 
-pub use command::{AiUsageCommand, Command, LegacyActorCommand};
+pub use command::{AiUsageCommand, AiUsageResolutionCommand, Command, LegacyActorCommand};
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
@@ -73,6 +73,43 @@ async fn run_ai_usage(action: AiUsageCommand) -> anyhow::Result<()> {
     let telemetry = config.runtime.telemetry.clone();
     with_telemetry(telemetry, async move {
         let output = match action {
+            AiUsageCommand::Backfill { batch_size } => {
+                deepref_http_api::ai_usage_backfill(&config, batch_size).await?
+            }
+            AiUsageCommand::EnableHardCaps {
+                operator_user_id,
+                quiet_window_seconds,
+            } => {
+                deepref_http_api::ai_usage_enable_hard_caps(
+                    &config,
+                    operator_user_id,
+                    quiet_window_seconds,
+                )
+                .await?
+            }
+            AiUsageCommand::DisableHardCaps { operator_user_id } => {
+                deepref_http_api::ai_usage_disable_hard_caps(&config, operator_user_id).await?
+            }
+            AiUsageCommand::Resolve {
+                reservation_id,
+                operator_user_id,
+                resolution,
+            } => {
+                let (actual_cost_micros, reason) = match resolution {
+                    AiUsageResolutionCommand::Settle { actual_cost_micros } => {
+                        (Some(actual_cost_micros), None)
+                    }
+                    AiUsageResolutionCommand::Void { reason } => (None, Some(reason)),
+                };
+                deepref_http_api::ai_usage_resolve(
+                    &config,
+                    reservation_id,
+                    operator_user_id,
+                    actual_cost_micros,
+                    reason,
+                )
+                .await?
+            }
             AiUsageCommand::Reconcile { workspace_id } => {
                 deepref_http_api::ai_usage_reconcile(&config, workspace_id).await?
             }

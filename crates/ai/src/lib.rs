@@ -41,17 +41,15 @@ pub use endpoint::{
 };
 pub use evals::*;
 pub use gateway::{
-    ANY_MODEL, AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway,
-    build_metered_provider,
+    ANY_MODEL, AiGateway, EmbeddingGateway, PreparedCompletionRequest, RigEmbeddingGateway,
+    RigGateway, RoutedGateway, build_metered_provider,
 };
 pub use grounding::GroundingContextBuilder;
 pub use openai_compat::{
     OpenAiCompatGateway, ProviderDialect, strip_code_fence, structured_request_body,
 };
 pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, RequestedAction};
-pub use pricing::{
-    ModelPrice, PriceBook, UNKNOWN_MODEL_PRICE, estimate_cost_micros, price_for_model,
-};
+pub use pricing::{BillableComponents, ModelPrice, PriceBook, RouteCapabilities};
 pub use prompts::{PromptDefinition, PromptRegistry, PromptVersion};
 pub use review_assistance::*;
 pub use runner::{
@@ -73,11 +71,14 @@ pub use screening::{
     SuggestedDecision, criteria_for_stage,
 };
 pub use types::*;
-pub use usage::{
-    MeteredGateway, UsageLedger, UsageObservation, UsagePriceSnapshot, UsageReservation,
-    UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof, service_usage_context,
+pub(crate) use usage::{
+    AssistantRequestBounds, assistant_input_bound_tokens, assistant_reservation_request,
 };
-pub(crate) use usage::{assistant_input_bound_tokens, assistant_reservation_request};
+pub use usage::{
+    MeteredGateway, ProviderUsageLookup, UsageLedger, UsageObservation, UsagePriceSnapshot,
+    UsageReservation, UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof,
+    service_usage_context,
+};
 
 #[cfg(test)]
 mod tests;

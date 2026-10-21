@@ -41,6 +41,18 @@ async fn database() -> Option<PgPool> {
     )
     .await
     .expect("development principal is initialized for the auth-off runtime");
+    // These fixtures exercise assistant dispatch after the rollout gate. The
+    // migration default stays disabled and is covered by ai_usage_reservations.
+    sqlx::query(
+        "UPDATE ai_usage_backfill_state SET completed_at = COALESCE(completed_at, now()) WHERE singleton",
+    )
+    .execute(&pool)
+    .await
+    .expect("test fixture marks legacy usage backfilled");
+    sqlx::query("UPDATE ai_usage_rollout_state SET ai_hard_caps_enforced = true WHERE singleton")
+        .execute(&pool)
+        .await
+        .expect("test fixture enables the assistant reservation path");
     Some(pool)
 }
 
@@ -99,6 +111,36 @@ async fn seed(pool: &PgPool) -> Fixture {
     .execute(pool)
     .await
     .expect("project inserts");
+    let workspace_id: Uuid = sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id=$1")
+        .bind(fixture.project_id)
+        .fetch_one(pool)
+        .await
+        .expect("assistant fixture project has a workspace");
+    // Assistant behavior tests need room at every hierarchy level. Production
+    // project inserts deliberately do not manufacture parent allowance.
+    sqlx::query(
+        "UPDATE ai_usage_limits SET limit_micros=100000000000
+         WHERE scope_kind='platform'
+            OR (scope_kind='workspace' AND scope_id=$1)
+            OR (scope_kind='project' AND scope_id=ANY($2))",
+    )
+    .bind(workspace_id)
+    .bind([fixture.project_id, fixture.other_project_id].as_slice())
+    .execute(pool)
+    .await
+    .expect("assistant fixture caps allow bounded mocked calls");
+    sqlx::query(
+        "UPDATE ai_usage_period_buckets SET limit_micros=100000000000
+         WHERE period_start=date_trunc('month', now() AT TIME ZONE 'UTC')::date
+           AND (scope_kind='platform'
+             OR (scope_kind='workspace' AND scope_id=$1)
+             OR (scope_kind='project' AND scope_id=ANY($2)))",
+    )
+    .bind(workspace_id)
+    .bind([fixture.project_id, fixture.other_project_id].as_slice())
+    .execute(pool)
+    .await
+    .expect("assistant fixture buckets follow their test caps");
     let long_abstract = "bounded assistant abstract ".repeat(400);
     sqlx::query(
         "INSERT INTO reports (id,title,abstract_text,publication_year,journal,url)
@@ -473,10 +515,12 @@ impl AiGateway for ProposalGateway {
                 .map_err(|error| AiError::Gateway(format!("test input: {error}")))?;
             Ok(GatewayCompletion {
                 output_json: proposal_output(input, fixture).to_string(),
-                input_tokens: 1,
-                output_tokens: 1,
-                reasoning_tokens: 0,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: Some(1),
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -596,9 +640,9 @@ fn proposal_output(input: Value, fixture: Fixture) -> Value {
 fn model_route(profile: ModelProfile) -> ResolvedModel {
     ResolvedModel {
         profile,
-        provider: format!("assistant-test-{}", Uuid::new_v4()),
-        model: "assistant-test-model".to_owned(),
-        model_version: "assistant-test-v1".to_owned(),
+        provider: "opencode-go".to_owned(),
+        model: "glm-5.3-flash".to_owned(),
+        model_version: "glm-5.3-flash".to_owned(),
         parameters: ModelParameters::default(),
         route_id: Some(Uuid::new_v4()),
     }
@@ -1307,21 +1351,23 @@ async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     assert_eq!(status, StatusCode::CONFLICT, "confirm is exactly-once");
 
     // Once the month's spend reaches the budget, free-form chat is refused.
-    deepref_app::set_ai_budget(&pool, project, 1)
+    let budget_project = fixture.other_project_id;
+    deepref_app::set_ai_budget(&pool, budget_project, 1)
         .await
         .expect("budget");
     sqlx::query(
         "INSERT INTO ai_usage_ledger (project_id,profile,provider,model,purpose,input_tokens,output_tokens,cost_micros)
          VALUES ($1,'reasoning','opencode-go','glm-5.3-flash','chat',1,1,10)",
     )
-    .bind(project)
+    .bind(budget_project)
     .execute(&pool)
     .await
     .expect("ledger insert");
+    let budget_conversation = create_conversation(&state, budget_project, "budget test").await;
     let (status, body) = post_json(
         &state,
-        &format!("/projects/{project}/assistant/chat"),
-        json!({"conversation_id": conversation["id"], "message": "anything"}),
+        &format!("/projects/{budget_project}/assistant/chat"),
+        json!({"conversation_id": budget_conversation, "message": "anything"}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");

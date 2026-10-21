@@ -116,10 +116,12 @@ impl AiGateway for FakeGateway {
             *self.calls.lock().expect("calls") += 1;
             Ok(GatewayCompletion {
                 output_json: self.output.clone(),
-                input_tokens: 1,
-                output_tokens: 1,
-                reasoning_tokens: 0,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -152,10 +154,12 @@ impl AiGateway for DedupeEchoGateway {
             Ok(GatewayCompletion {
                 output_json: serde_json::to_string(&output)
                     .map_err(|_| AiError::Gateway("dedupe output failed".to_owned()))?,
-                input_tokens: 1,
-                output_tokens: 1,
-                reasoning_tokens: 0,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })

@@ -21,6 +21,21 @@ pub enum Command {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AiUsageCommand {
+    Backfill {
+        batch_size: usize,
+    },
+    EnableHardCaps {
+        operator_user_id: Uuid,
+        quiet_window_seconds: u64,
+    },
+    DisableHardCaps {
+        operator_user_id: Uuid,
+    },
+    Resolve {
+        reservation_id: Uuid,
+        operator_user_id: Uuid,
+        resolution: AiUsageResolutionCommand,
+    },
     Reconcile {
         workspace_id: Option<Uuid>,
     },
@@ -34,6 +49,12 @@ pub enum AiUsageCommand {
         limit_micros: i64,
         operator_user_id: Uuid,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiUsageResolutionCommand {
+    Settle { actual_cost_micros: i64 },
+    Void { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +121,92 @@ impl Command {
                     workspace_id: Some(parse_uuid(workspace_id, "workspace UUID")?),
                 }))
             }
+            [command, action] if command == "ai-usage" && action == "backfill" => {
+                Ok(Self::AiUsage(AiUsageCommand::Backfill { batch_size: 500 }))
+            }
+            [command, action, flag, batch_size]
+                if command == "ai-usage" && action == "backfill" && flag == "--batch-size" =>
+            {
+                let batch_size = batch_size
+                    .parse::<usize>()
+                    .map_err(|error| anyhow::anyhow!("invalid batch size: {error}"))?;
+                anyhow::ensure!(
+                    (1..=1000).contains(&batch_size),
+                    "batch size must be 1..=1000"
+                );
+                Ok(Self::AiUsage(AiUsageCommand::Backfill { batch_size }))
+            }
+            [command, action, flag, seconds, operator_user_id]
+                if command == "ai-usage"
+                    && action == "enable-hard-caps"
+                    && flag == "--quiet-window-seconds" =>
+            {
+                let quiet_window_seconds = seconds
+                    .parse::<u64>()
+                    .map_err(|error| anyhow::anyhow!("invalid quiet window: {error}"))?;
+                anyhow::ensure!(quiet_window_seconds > 0, "quiet window must be positive");
+                Ok(Self::AiUsage(AiUsageCommand::EnableHardCaps {
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                    quiet_window_seconds,
+                }))
+            }
+            [command, action, operator_user_id]
+                if command == "ai-usage" && action == "disable-hard-caps" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::DisableHardCaps {
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                }))
+            }
+            [
+                command,
+                action,
+                reservation_id,
+                flag,
+                micros,
+                operator_flag,
+                operator_user_id,
+            ] if command == "ai-usage"
+                && action == "resolve"
+                && flag == "--settle"
+                && operator_flag == "--operator" =>
+            {
+                let actual_cost_micros = micros
+                    .parse::<i64>()
+                    .map_err(|error| anyhow::anyhow!("invalid cost micros: {error}"))?;
+                anyhow::ensure!(actual_cost_micros >= 0, "cost micros must be nonnegative");
+                Ok(Self::AiUsage(AiUsageCommand::Resolve {
+                    reservation_id: parse_uuid(reservation_id, "reservation UUID")?,
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                    resolution: AiUsageResolutionCommand::Settle { actual_cost_micros },
+                }))
+            }
+            [
+                command,
+                action,
+                reservation_id,
+                flag,
+                reason_flag,
+                reason,
+                operator_flag,
+                operator_user_id,
+            ] if command == "ai-usage"
+                && action == "resolve"
+                && flag == "--void"
+                && reason_flag == "--reason"
+                && operator_flag == "--operator" =>
+            {
+                anyhow::ensure!(
+                    !reason.trim().is_empty() && reason.len() <= 500,
+                    "reason must be 1..=500 characters"
+                );
+                Ok(Self::AiUsage(AiUsageCommand::Resolve {
+                    reservation_id: parse_uuid(reservation_id, "reservation UUID")?,
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                    resolution: AiUsageResolutionCommand::Void {
+                        reason: reason.clone(),
+                    },
+                }))
+            }
             [command, action, workspace_id, operator_user_id]
                 if command == "ai-usage" && action == "waive-overage" =>
             {
@@ -158,7 +265,7 @@ impl Command {
                 }))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage reconcile [workspace-uuid]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
             ),
         }
     }
@@ -242,8 +349,85 @@ mod tests {
             Command::parse(["ai-usage".into(), "reconcile".into()]).unwrap(),
             Command::AiUsage(AiUsageCommand::Reconcile { workspace_id: None })
         );
+        assert_eq!(
+            Command::parse(["ai-usage".into(), "backfill".into()]).unwrap(),
+            Command::AiUsage(AiUsageCommand::Backfill { batch_size: 500 })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "backfill".into(),
+                "--batch-size".into(),
+                "25".into(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::Backfill { batch_size: 25 })
+        );
         let workspace_id = Uuid::from_u128(55);
         let operator_user_id = Uuid::from_u128(56);
+        let reservation_id = Uuid::from_u128(57);
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "enable-hard-caps".into(),
+                "--quiet-window-seconds".into(),
+                "3600".into(),
+                operator_user_id.to_string(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::EnableHardCaps {
+                operator_user_id,
+                quiet_window_seconds: 3600,
+            })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "disable-hard-caps".into(),
+                operator_user_id.to_string(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::DisableHardCaps { operator_user_id })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "resolve".into(),
+                reservation_id.to_string(),
+                "--settle".into(),
+                "150".into(),
+                "--operator".into(),
+                operator_user_id.to_string(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::Resolve {
+                reservation_id,
+                operator_user_id,
+                resolution: AiUsageResolutionCommand::Settle {
+                    actual_cost_micros: 150
+                },
+            })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "resolve".into(),
+                reservation_id.to_string(),
+                "--void".into(),
+                "--reason".into(),
+                "provider confirmed no charge".into(),
+                "--operator".into(),
+                operator_user_id.to_string(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::Resolve {
+                reservation_id,
+                operator_user_id,
+                resolution: AiUsageResolutionCommand::Void {
+                    reason: "provider confirmed no charge".into(),
+                },
+            })
+        );
         assert_eq!(
             Command::parse([
                 "ai-usage".into(),
@@ -282,6 +466,15 @@ mod tests {
                 workspace_id.to_string(),
                 "1".into(),
                 operator_user_id.to_string(),
+            ])
+            .is_err()
+        );
+        assert!(
+            Command::parse([
+                "ai-usage".into(),
+                "backfill".into(),
+                "--batch-size".into(),
+                "1001".into(),
             ])
             .is_err()
         );

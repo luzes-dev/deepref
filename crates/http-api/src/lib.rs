@@ -183,6 +183,78 @@ pub async fn ai_usage_set_cap(
     }))?)
 }
 
+pub async fn ai_usage_backfill(config: &ApiConfig, batch_size: usize) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let summary = deepref_app::backfill_ai_usage_legacy(&pool, batch_size).await?;
+    Ok(serde_json::to_string_pretty(&summary)?)
+}
+
+pub async fn ai_usage_enable_hard_caps(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+    quiet_window_seconds: u64,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    deepref_app::enable_ai_hard_caps(
+        &pool,
+        deepref_domain::UserId::new(operator_user_id),
+        quiet_window_seconds,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_hard_caps_enforced": true,
+        "quiet_window_seconds": quiet_window_seconds,
+    }))?)
+}
+
+pub async fn ai_usage_disable_hard_caps(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    deepref_app::disable_ai_hard_caps(&pool, deepref_domain::UserId::new(operator_user_id)).await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_hard_caps_enforced": false,
+    }))?)
+}
+
+pub async fn ai_usage_resolve(
+    config: &ApiConfig,
+    reservation_id: Uuid,
+    operator_user_id: Uuid,
+    actual_cost_micros: Option<i64>,
+    reason: Option<String>,
+) -> anyhow::Result<String> {
+    let resolution = match (actual_cost_micros, reason) {
+        (Some(actual_cost_micros), None) => {
+            deepref_app::AiUsageResolution::Settle { actual_cost_micros }
+        }
+        (None, Some(reason)) => deepref_app::AiUsageResolution::Void { reason },
+        _ => anyhow::bail!("provide exactly one of --settle or --void --reason"),
+    };
+    let pool = database_pool(config).await?;
+    deepref_app::resolve_ai_usage_reservation(
+        &pool,
+        reservation_id,
+        deepref_domain::UserId::new(operator_user_id),
+        resolution.clone(),
+    )
+    .await?;
+    let result = match resolution {
+        deepref_app::AiUsageResolution::Settle { actual_cost_micros } => serde_json::json!({
+            "reservation_id": reservation_id,
+            "resolution": "settle",
+            "actual_cost_micros": actual_cost_micros,
+        }),
+        deepref_app::AiUsageResolution::Void { reason } => serde_json::json!({
+            "reservation_id": reservation_id,
+            "resolution": "void",
+            "reason": reason,
+        }),
+    };
+    Ok(serde_json::to_string_pretty(&result)?)
+}
+
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
     serve_with_shutdown(config, shutdown_signal()).await
 }

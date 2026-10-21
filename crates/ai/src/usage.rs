@@ -11,8 +11,8 @@ use deepref_domain::ProjectId;
 use uuid::Uuid;
 
 use crate::{
-    AiError, AiFuture, AiGateway, AiUsageContext, CompletionRequest, GatewayCompletion, PriceBook,
-    UsagePrincipal,
+    AiError, AiFuture, AiGateway, AiUsageContext, CompletionRequest, GatewayCompletion,
+    PreparedCompletionRequest, PriceBook, UsagePrincipal,
 };
 
 /// A cost snapshot captured before the provider request is sent.
@@ -73,15 +73,22 @@ impl UsagePriceSnapshot {
     }
 
     pub fn actual_cost_micros(&self, usage: &UsageObservation) -> Result<i64, AiError> {
+        let input_tokens = usage.input_tokens.ok_or(AiError::InvalidUsageBound)?;
+        let output_tokens = usage.output_tokens.ok_or(AiError::InvalidUsageBound)?;
         let reasoning = self
             .reasoning_micros_per_million_tokens
-            .map(|rate| Self::token_cost(rate, usage.reasoning_tokens))
+            .map(|rate| {
+                Self::token_cost(
+                    rate,
+                    usage.reasoning_tokens.ok_or(AiError::InvalidUsageBound)?,
+                )
+            })
             .transpose()?
             .unwrap_or(0);
-        Self::token_cost(self.input_micros_per_million_tokens, usage.input_tokens)?
+        Self::token_cost(self.input_micros_per_million_tokens, input_tokens)?
             .checked_add(Self::token_cost(
                 self.output_micros_per_million_tokens,
-                usage.output_tokens,
+                output_tokens,
             )?)
             .and_then(|value| value.checked_add(reasoning))
             .ok_or(AiError::InvalidUsageBound)
@@ -91,6 +98,9 @@ impl UsagePriceSnapshot {
 /// Stable identity of one model call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageReservationRequest {
+    pub reservation_id: Uuid,
+    /// SHA-256 of the exact provider payload bytes; prompt text is not stored.
+    pub request_fingerprint: String,
     pub attribution: AiUsageContext,
     pub project_id: Option<ProjectId>,
     pub profile: String,
@@ -118,6 +128,14 @@ impl UsageReservationRequest {
         {
             return Err(AiError::InvalidUsageBound);
         }
+        if self.request_fingerprint.len() != 64
+            || !self
+                .request_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(AiError::InvalidUsageBound);
+        }
         self.price.maximum_cost_micros(
             self.input_token_bound,
             self.max_output_tokens,
@@ -141,6 +159,8 @@ pub struct UsageReservation {
 /// beyond its original reservation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageTopUpRequest {
+    /// SHA-256 of the full frozen adapter request after the top-up.
+    pub request_fingerprint: String,
     pub additional_input_token_bound: u64,
     pub additional_output_tokens: u64,
     pub additional_reasoning_tokens: u64,
@@ -150,6 +170,14 @@ pub struct UsageTopUpRequest {
 
 impl UsageTopUpRequest {
     pub fn reserved_cost_micros(&self, price: &UsagePriceSnapshot) -> Result<i64, AiError> {
+        if self.request_fingerprint.len() != 64
+            || !self
+                .request_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(AiError::InvalidUsageBound);
+        }
         price.maximum_cost_micros(
             Some(self.additional_input_token_bound),
             Some(self.additional_output_tokens),
@@ -165,17 +193,32 @@ impl UsageTopUpRequest {
 /// Provider-reported token usage for one invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UsageObservation {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
+    /// Missing provider counters remain unknown rather than becoming zero.
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
     /// Commercial meters have not been selected. This remains nullable and
     /// is never derived from provider cost.
     pub commercial_units: Option<i64>,
+    pub provider_request_id: Option<String>,
+    pub provider_response_id: Option<String>,
 }
 
 impl UsageObservation {
+    pub fn has_token_usage(&self) -> bool {
+        self.input_tokens.is_some() && self.output_tokens.is_some()
+    }
+
     pub fn validate(&self) -> Result<(), AiError> {
-        if self.commercial_units.is_some_and(|units| units < 0) {
+        let invalid_id = |id: &Option<String>| {
+            id.as_ref().is_some_and(|value| {
+                value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+            })
+        };
+        if self.commercial_units.is_some_and(|units| units < 0)
+            || invalid_id(&self.provider_request_id)
+            || invalid_id(&self.provider_response_id)
+        {
             return Err(AiError::InvalidUsageBound);
         }
         Ok(())
@@ -221,7 +264,7 @@ pub trait UsageLedger: Send + Sync {
     ) -> AiFuture<'a, ()>;
 
     /// Settles a previously observed invocation and commits its immutable
-    /// usage fact and provider-neutral outbox event atomically.
+    /// usage fact and bucket adjustments atomically.
     fn settle<'a>(
         &'a self,
         reservation: &'a UsageReservation,
@@ -244,6 +287,15 @@ pub trait UsageLedger: Send + Sync {
         reservation: &'a UsageReservation,
         proof: ZeroLiabilityProof,
     ) -> AiFuture<'a, ()>;
+}
+
+/// Optional provider-side usage lookup. No provider adapter is enabled yet.
+pub trait ProviderUsageLookup: Send + Sync {
+    fn usage_by_request_id<'a>(
+        &'a self,
+        provider: &'a str,
+        request_id: &'a str,
+    ) -> AiFuture<'a, Option<UsageObservation>>;
 }
 
 /// Wraps the provider gateway so every model call is reserved before dispatch
@@ -269,46 +321,47 @@ impl<G> MeteredGateway<G> {
         self
     }
 
-    fn input_bound_tokens(request: &CompletionRequest) -> Result<u64, AiError> {
-        let value = serde_json::json!({
-            "system_prompt": request.system_prompt,
-            "user_prompt": request.user_prompt,
-            "evidence": request.evidence,
-            "schema": request.schema,
-        });
-        let bytes = serde_json::to_vec(&value).map_err(|_| AiError::UnboundedInput)?;
-        let bytes = u64::try_from(bytes.len()).map_err(|_| AiError::UnboundedInput)?;
-        // Byte-level tokenizers cannot produce more tokens than input bytes.
-        // The fixed envelope covers message roles and provider serialization.
-        bytes.checked_add(512).ok_or(AiError::UnboundedInput)
-    }
-
     fn reservation_request(
         &self,
-        request: &CompletionRequest,
+        prepared: &PreparedCompletionRequest,
+        reservation_id: Uuid,
     ) -> Result<UsageReservationRequest, AiError> {
+        let request = &prepared.request;
         let attribution = request
             .usage_context
             .clone()
             .ok_or(AiError::MissingUsageWorkspace)?;
         let price = self
             .prices
-            .price(&request.route.provider, &request.route.model);
+            .price(&request.route.provider, &request.route.model)?;
+        let capabilities = self
+            .prices
+            .capabilities(&request.route.provider, &request.route.model)?;
         let max_output_tokens = request.route.parameters.max_tokens.map(u64::from);
+        if max_output_tokens
+            .is_none_or(|tokens| tokens == 0 || tokens > capabilities.max_output_tokens)
+        {
+            return Err(AiError::UnboundedOutput);
+        }
         let price = crate::UsagePriceSnapshot {
             version: self.prices.version(),
             input_micros_per_million_tokens: price.input_micros_per_million_tokens,
             output_micros_per_million_tokens: price.output_micros_per_million_tokens,
             reasoning_micros_per_million_tokens: price.reasoning_micros_per_million_tokens,
         };
+        let input_token_bound =
+            u64::try_from(prepared.serialized_body.len()).map_err(|_| AiError::UnboundedInput)?;
+        let request_fingerprint = crate::sha256_bytes(&prepared.serialized_body);
         Ok(UsageReservationRequest {
+            reservation_id,
+            request_fingerprint,
             attribution,
             project_id: request.project_id,
             profile: request.route.profile.as_str().to_owned(),
             provider: request.route.provider.clone(),
             model: request.route.model.clone(),
             purpose: "structured".to_owned(),
-            input_token_bound: Some(Self::input_bound_tokens(request)?),
+            input_token_bound: Some(input_token_bound),
             max_reasoning_tokens: price
                 .reasoning_micros_per_million_tokens
                 .map(|_| max_output_tokens.unwrap_or_default()),
@@ -323,11 +376,13 @@ impl<G> MeteredGateway<G> {
 impl<G: AiGateway> AiGateway for MeteredGateway<G> {
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
-            let reservation_request = self.reservation_request(&request)?;
+            let prepared = self.inner.prepare(request)?;
+            let reservation_id = Uuid::new_v4();
+            let reservation_request = self.reservation_request(&prepared, reservation_id)?;
             // Validate every bound before opening a database reservation.
             reservation_request.reserved_cost_micros()?;
             let reservation = self.ledger.reserve(reservation_request).await?;
-            let mut completion = match self.inner.complete(request).await {
+            let mut completion = match self.inner.complete_prepared(prepared).await {
                 Ok(completion) => completion,
                 Err(AiError::ProviderRejected { status }) => {
                     self.ledger
@@ -359,45 +414,41 @@ impl<G: AiGateway> AiGateway for MeteredGateway<G> {
                 output_tokens: completion.output_tokens,
                 reasoning_tokens: completion.reasoning_tokens,
                 commercial_units: None,
+                provider_request_id: completion.provider_request_id.clone(),
+                provider_response_id: completion.provider_response_id.clone(),
             };
             self.ledger
                 .observe(&reservation, observation.clone())
                 .await?;
+            if !observation.has_token_usage() {
+                completion.cost_micros = None;
+                return Ok(completion);
+            }
             self.ledger
-                .settle(&reservation, observation, &self.prices.version())
+                .settle(&reservation, observation.clone(), &self.prices.version())
                 .await?;
-            completion.cost_micros =
-                Some(reservation.price.actual_cost_micros(&UsageObservation {
-                    input_tokens: completion.input_tokens,
-                    output_tokens: completion.output_tokens,
-                    reasoning_tokens: completion.reasoning_tokens,
-                    commercial_units: None,
-                })?);
+            completion.cost_micros = Some(reservation.price.actual_cost_micros(&observation)?);
             Ok(completion)
         })
     }
 }
 
-/// Input token bound for a Rig assistant completion. The prompt, history,
-/// preamble and full host-owned tool declarations are all known before the
-/// model call; serialization failure refuses the call.
+/// Input token bound from the fully prepared Rig completion request. This
+/// includes rendered history, documents, tools, schema, parameters and JSON
+/// escaping before admission. UTF-8 byte count is a conservative token bound.
 pub(crate) fn assistant_input_bound_tokens(
-    system_prompt: &str,
-    prompt: &rig_core::completion::Message,
-    history: &[rig_core::completion::Message],
-    tools: &[crate::ToolDeclaration],
+    request: &rig_core::completion::CompletionRequest,
 ) -> Result<u64, AiError> {
-    let wire_shape = serde_json::json!({
-        "system_prompt": system_prompt,
-        "prompt": prompt,
-        "history": history,
-        "tools": tools,
-    });
-    let bytes = serde_json::to_vec(&wire_shape).map_err(|_| AiError::UnboundedInput)?;
-    u64::try_from(bytes.len())
-        .ok()
-        .and_then(|bytes| bytes.checked_add(1024))
-        .ok_or(AiError::UnboundedInput)
+    let bytes = serde_json::to_vec(request).map_err(|_| AiError::UnboundedInput)?;
+    u64::try_from(bytes.len()).map_err(|_| AiError::UnboundedInput)
+}
+
+/// Frozen values from the assistant dispatch request used by the ledger.
+pub(crate) struct AssistantRequestBounds {
+    pub turn: usize,
+    pub input_token_bound: Option<u64>,
+    pub max_output_tokens: Option<u64>,
+    pub request_fingerprint: String,
 }
 
 /// Builds one reservation request for an assistant model turn.
@@ -405,15 +456,22 @@ pub(crate) fn assistant_reservation_request(
     attribution: AiUsageContext,
     project_id: ProjectId,
     route: &crate::ResolvedModel,
-    turn: usize,
-    input_token_bound: Option<u64>,
-    max_output_tokens: Option<u64>,
+    bounds: AssistantRequestBounds,
     prices: &PriceBook,
-) -> UsageReservationRequest {
-    let model_price = prices.price(&route.provider, &route.model);
-    UsageReservationRequest {
+) -> Result<UsageReservationRequest, AiError> {
+    let model_price = prices.price(&route.provider, &route.model)?;
+    let capabilities = prices.capabilities(&route.provider, &route.model)?;
+    if bounds
+        .max_output_tokens
+        .is_none_or(|tokens| tokens == 0 || tokens > capabilities.max_output_tokens)
+    {
+        return Err(AiError::UnboundedOutput);
+    }
+    Ok(UsageReservationRequest {
+        reservation_id: Uuid::new_v4(),
+        request_fingerprint: bounds.request_fingerprint,
         attribution: AiUsageContext {
-            step_id: Some(format!("turn:{turn}")),
+            step_id: Some(format!("turn:{}", bounds.turn)),
             ..attribution
         },
         project_id: Some(project_id),
@@ -421,11 +479,11 @@ pub(crate) fn assistant_reservation_request(
         provider: route.provider.clone(),
         model: route.model.clone(),
         purpose: "assistant".to_owned(),
-        input_token_bound,
-        max_output_tokens,
+        input_token_bound: bounds.input_token_bound,
+        max_output_tokens: bounds.max_output_tokens,
         max_reasoning_tokens: model_price
             .reasoning_micros_per_million_tokens
-            .map(|_| max_output_tokens.unwrap_or_default()),
+            .map(|_| bounds.max_output_tokens.unwrap_or_default()),
         other_cost_micros: 0,
         rounding_margin_micros: 1,
         price: UsagePriceSnapshot {
@@ -434,7 +492,7 @@ pub(crate) fn assistant_reservation_request(
             output_micros_per_million_tokens: model_price.output_micros_per_million_tokens,
             reasoning_micros_per_million_tokens: model_price.reasoning_micros_per_million_tokens,
         },
-    }
+    })
 }
 
 /// Constructs host attribution for a human or service call.
@@ -443,6 +501,7 @@ pub fn service_usage_context(run_id: Uuid, service: impl Into<String>) -> AiUsag
         workspace_id: None,
         principal: Some(UsagePrincipal::Service(service.into())),
         run_id,
+        run_budget_id: run_id,
         step_id: None,
         job_id: None,
         attempt_fence: None,

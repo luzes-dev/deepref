@@ -57,7 +57,8 @@ impl AiGateway for GroundedGateway {
                     "protocol_version_id": input["protocol_version_id"], "expected_revision": input["expected_revision"],
                     "criteria": criteria, "suggested_decision": {"kind": if include {"include"} else {"exclude"}, "exclusion_reason_id": null},
                     "uncertainties": [],
-                }).to_string(), input_tokens: 1, output_tokens: 1, reasoning_tokens: 0, cost_micros: None,
+                }).to_string(), input_tokens: Some(1), output_tokens: Some(1), reasoning_tokens: Some(0), cost_micros: None,
+                provider_request_id: None, provider_response_id: None,
                 served_model: Some("fixture-served-model".into()), system_fingerprint: Some("fixture-system-v1".into()),
             })
         })

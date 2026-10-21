@@ -96,9 +96,15 @@ pub(crate) fn map_ai_error(error: AiError) -> ApiError {
         AiError::UnboundedInput
         | AiError::UnboundedOutput
         | AiError::MissingUsageWorkspace
-        | AiError::InvalidUsageBound => ApiError::Configuration(
+        | AiError::InvalidUsageBound
+        | AiError::UnsupportedUsageRoute { .. } => ApiError::Configuration(
             "AI usage reservation could not be safely constructed".to_owned(),
         ),
+        AiError::HardCapsDisabled => ApiError::Conflict {
+            code: "ai_hard_caps_disabled".to_owned(),
+            message: "Paid AI dispatch is disabled until usage hard caps are enabled".to_owned(),
+            details: Value::Null,
+        },
         AiError::Route(message) => ApiError::Configuration(message),
         AiError::Gateway(message) => {
             ApiError::Configuration(format!("AI provider is unavailable: {message}"))

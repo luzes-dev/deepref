@@ -191,10 +191,13 @@ pub(super) fn test_context() -> DeepRefAgentContext {
         actor: Actor::new(ActorKind::User, "tester").expect("actor"),
         route: ResolvedModel {
             profile: ModelProfile::Reasoning,
-            provider: "test-provider".to_owned(),
-            model: "test-model".to_owned(),
-            model_version: "v1".to_owned(),
-            parameters: ModelParameters::default(),
+            provider: "opencode-go".to_owned(),
+            model: "glm-5.3-flash".to_owned(),
+            model_version: "glm-5.3-flash".to_owned(),
+            parameters: ModelParameters {
+                max_tokens: Some(2_048),
+                ..ModelParameters::default()
+            },
             route_id: None,
         },
         job_id: None,

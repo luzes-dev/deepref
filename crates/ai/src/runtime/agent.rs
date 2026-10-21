@@ -248,6 +248,7 @@ fn build_turn(turn: RigTurn<'_>) -> Result<BuiltTurn, AiError> {
                 }),
         ),
         run_id: turn.run_id,
+        run_budget_id: turn.run_id,
         step_id: None,
         job_id: turn.context.job_id,
         attempt_fence: turn.context.attempt_fence,

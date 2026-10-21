@@ -17,7 +17,43 @@ use crate::{
 };
 
 pub trait AiGateway: Send + Sync {
+    /// Prepare the provider-ready payload before a reservation is opened.
+    /// Metered adapters override this and return the exact bytes later sent.
+    fn prepare(&self, request: CompletionRequest) -> Result<PreparedCompletionRequest, AiError> {
+        let _ = request;
+        Err(AiError::UnsupportedUsageRoute {
+            provider: "unprepared-adapter".to_owned(),
+            model: "unknown".to_owned(),
+        })
+    }
+
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion>;
+
+    /// Send an already prepared request. The default is for non-metered
+    /// adapters; a metered production adapter must consume the frozen bytes.
+    fn complete_prepared<'a>(
+        &'a self,
+        prepared: PreparedCompletionRequest,
+    ) -> AiFuture<'a, GatewayCompletion> {
+        self.complete(prepared.request)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedCompletionRequest {
+    pub request: CompletionRequest,
+    /// Exact serialized provider request body. It includes messages after
+    /// rendering/escaping and every provider parameter.
+    pub serialized_body: Vec<u8>,
+}
+
+impl PreparedCompletionRequest {
+    pub fn new(request: CompletionRequest, serialized_body: Vec<u8>) -> Self {
+        Self {
+            request,
+            serialized_body,
+        }
+    }
 }
 
 pub trait EmbeddingGateway: Send + Sync {
@@ -97,6 +133,19 @@ impl RoutedGateway {
 }
 
 impl AiGateway for RoutedGateway {
+    fn prepare(&self, request: CompletionRequest) -> Result<PreparedCompletionRequest, AiError> {
+        let adapter = lookup(
+            &self.adapters,
+            &request.route.provider,
+            &request.route.model,
+        )?
+        .ok_or_else(|| AiError::UnsupportedUsageRoute {
+            provider: request.route.provider.clone(),
+            model: request.route.model.clone(),
+        })?;
+        adapter.prepare(request)
+    }
+
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
             let adapter = lookup(
@@ -108,6 +157,24 @@ impl AiGateway for RoutedGateway {
                 AiError::Gateway("no adapter is registered for the resolved route".to_owned())
             })?;
             adapter.complete(request).await
+        })
+    }
+
+    fn complete_prepared<'a>(
+        &'a self,
+        prepared: PreparedCompletionRequest,
+    ) -> AiFuture<'a, GatewayCompletion> {
+        Box::pin(async move {
+            let adapter = lookup(
+                &self.adapters,
+                &prepared.request.route.provider,
+                &prepared.request.route.model,
+            )?
+            .ok_or_else(|| AiError::UnsupportedUsageRoute {
+                provider: prepared.request.route.provider.clone(),
+                model: prepared.request.route.model.clone(),
+            })?;
+            adapter.complete_prepared(prepared).await
         })
     }
 }
@@ -161,10 +228,12 @@ impl AiGateway for RigGateway {
             debug!(ai.provider = %request.route.provider, ai.model = %request.route.model, "structured completion finished");
             Ok(GatewayCompletion {
                 output_json: response.text(),
-                input_tokens: response.usage.input_tokens.unwrap_or(0),
-                output_tokens: response.usage.output_tokens.unwrap_or(0),
-                reasoning_tokens: response.usage.reasoning_tokens.unwrap_or(0),
+                input_tokens: response.usage.input_tokens,
+                output_tokens: response.usage.output_tokens,
+                reasoning_tokens: response.usage.reasoning_tokens,
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: response.model().map(str::to_owned),
                 system_fingerprint: None,
             })

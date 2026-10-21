@@ -268,16 +268,18 @@ async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     assert_eq!(entries.len(), 1);
     let (request, observation) = &entries[0];
     assert_eq!(request.purpose, "assistant");
-    assert_eq!(request.provider, "test-provider");
-    assert_eq!(request.model, "test-model");
-    assert_eq!(observation.input_tokens, 100);
-    assert_eq!(observation.output_tokens, 10);
+    assert_eq!(request.provider, "opencode-go");
+    assert_eq!(request.model, "glm-5.3-flash");
+    assert_eq!(observation.input_tokens, Some(100));
+    assert_eq!(observation.output_tokens, Some(10));
     assert_eq!(
         request
             .price
             .actual_cost_micros(observation)
             .expect("price"),
-        PriceBook::default().estimate_cost_micros("test-provider", "test-model", 100, 10)
+        PriceBook::default()
+            .estimate_cost_micros("opencode-go", "glm-5.3-flash", 100, 10)
+            .expect("supported test route has a price")
     );
 }
 

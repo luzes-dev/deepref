@@ -14,22 +14,22 @@ use std::{
     },
 };
 
-use rig_agent::agent::{
-    AgentHook, CompletionCallAction, CompletionCallEvent, HookContext, InvalidToolCallAction,
-    InvalidToolCallContext, ModelTurnAction, ModelTurnFinished, OutcomeAction, OutcomeEvent,
-    RetryRequest, RunSettled, RunStart, RunStartAction, SettledOutcome,
-};
-use rig_core::{effect::EffectKind, message::AssistantContent};
-
 use crate::{
-    AgentLoopConfig, AiError, AiUsageContext, PriceBook, TokenUsage, UsageLedger, UsageObservation,
-    UsageReservation, agent_tool_declarations, assistant_input_bound_tokens,
-    assistant_reservation_request, assistant_system_prompt, claims_pending_change,
+    AgentLoopConfig, AiError, AiUsageContext, AssistantRequestBounds, PriceBook, TokenUsage,
+    UsageLedger, UsageObservation, UsageReservation, assistant_input_bound_tokens,
+    assistant_reservation_request, claims_pending_change,
     runtime::{
         context::DeepRefAgentContext,
         tools::{PlanCollector, ToolHostScope},
     },
 };
+use rig_agent::agent::{
+    AgentHook, CompletionCallAction, CompletionCallEvent, DispatchAction, DispatchEvent,
+    HookContext, InvalidToolCallAction, InvalidToolCallContext, ModelTurnAction, ModelTurnFinished,
+    OutcomeAction, OutcomeEvent, RetryRequest, RunSettled, RunStart, RunStartAction,
+    SettledOutcome,
+};
+use rig_core::{ErrorKind, ErrorReport, effect::EffectKind, message::AssistantContent};
 
 pub const BUDGET_STOP_REASON: &str = "project AI budget is exhausted";
 pub const TOKEN_STOP_REASON: &str = "assistant turn token budget is exhausted";
@@ -111,13 +111,17 @@ impl DeepRefHooks {
     async fn settle_turn_usage(
         &self,
         turn: usize,
-        input_tokens: u64,
-        output_tokens: u64,
-        reasoning_tokens: u64,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
     ) -> Result<(), AiError> {
         if let Ok(mut usage) = self.usage.lock() {
-            usage.input_tokens = usage.input_tokens.saturating_add(input_tokens);
-            usage.output_tokens = usage.output_tokens.saturating_add(output_tokens);
+            if let Some(input_tokens) = input_tokens {
+                usage.input_tokens = usage.input_tokens.saturating_add(input_tokens);
+            }
+            if let Some(output_tokens) = output_tokens {
+                usage.output_tokens = usage.output_tokens.saturating_add(output_tokens);
+            }
         }
         let reservation = self.take_reservation(turn).ok_or_else(|| {
             AiError::Persistence("assistant model call had no usage reservation".to_owned())
@@ -127,12 +131,18 @@ impl DeepRefHooks {
             output_tokens,
             reasoning_tokens,
             commercial_units: None,
+            provider_request_id: None,
+            provider_response_id: None,
         };
         observation.validate()?;
-        let actual_cost_micros = reservation.price.actual_cost_micros(&observation)?;
         self.ledger
             .observe(&reservation, observation.clone())
             .await?;
+        if !observation.has_token_usage() {
+            tracing::warn!("assistant AI usage counters are missing; reservation remains held");
+            return Ok(());
+        }
+        let actual_cost_micros = reservation.price.actual_cost_micros(&observation)?;
         self.ledger
             .settle(&reservation, observation, &self.prices.version())
             .await?;
@@ -180,12 +190,9 @@ impl AgentHook for DeepRefHooks {
     fn on_completion_call(
         &self,
         _ctx: &HookContext,
-        event: CompletionCallEvent<'_>,
+        _event: CompletionCallEvent<'_>,
     ) -> impl Future<Output = CompletionCallAction> + rig_core::wasm_compat::WasmCompatSend {
         let hooks = self.clone();
-        let turn = event.turn;
-        let prompt = event.prompt.clone();
-        let history = event.history.to_vec();
         async move {
             let usage = hooks.usage();
             if usage.input_tokens.saturating_add(usage.output_tokens)
@@ -193,52 +200,92 @@ impl AgentHook for DeepRefHooks {
             {
                 return CompletionCallAction::Stop(TOKEN_STOP_REASON.to_owned());
             }
-            let input_bound = match assistant_input_bound_tokens(
-                &assistant_system_prompt(hooks.scope.context.project_id),
-                &prompt,
-                &history,
-                &agent_tool_declarations(),
-            ) {
-                Ok(bound) => bound,
-                Err(error) => {
-                    hooks.record_error(error);
-                    return CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned());
-                }
+            CompletionCallAction::Continue
+        }
+    }
+
+    fn on_dispatch(
+        &self,
+        _ctx: &HookContext,
+        event: DispatchEvent<'_>,
+    ) -> impl Future<Output = DispatchAction> + rig_core::wasm_compat::WasmCompatSend {
+        let hooks = self.clone();
+        let turn = event.turn;
+        let is_completion = event.completion_request().is_some();
+        let request = event.completion_request().cloned();
+        async move {
+            let fail = |error| {
+                hooks.record_error(error);
+                DispatchAction::Deny(ErrorReport::new(ErrorKind::Other, RESERVATION_STOP_REASON))
             };
-            let request = assistant_reservation_request(
+            // Tool calls are local, unbilled dispatches. Their prompt/result
+            // tokens are included in the next metered completion request.
+            if !is_completion {
+                return DispatchAction::Proceed;
+            }
+            let Some(mut request) = request else {
+                return fail(AiError::UnboundedInput);
+            };
+            if request
+                .model
+                .as_deref()
+                .is_some_and(|model| model != hooks.scope.context.route.model)
+                || request.additional_params.as_ref().is_some_and(|params| {
+                    params.as_object().is_none_or(|object| !object.is_empty())
+                })
+                || !request.provider_options.is_empty()
+                || request.options != Default::default()
+            {
+                return fail(AiError::UnsupportedUsageRoute {
+                    provider: hooks.scope.context.route.provider.clone(),
+                    model: hooks.scope.context.route.model.clone(),
+                });
+            }
+            // Rig binds the selected static model on its CompletionModel and
+            // leaves `request.model` unset unless a per-call override exists.
+            // Freeze that effective model in the accounted request identity.
+            request.model = Some(hooks.scope.context.route.model.clone());
+            let input_bound = match assistant_input_bound_tokens(&request) {
+                Ok(bound) => bound,
+                Err(error) => return fail(error),
+            };
+            let serialized = match serde_json::to_vec(&request) {
+                Ok(serialized) => serialized,
+                Err(_) => return fail(AiError::UnboundedInput),
+            };
+            let fingerprint = crate::sha256_bytes(&serialized);
+            let reservation_request = match assistant_reservation_request(
                 hooks.usage_context.clone(),
                 hooks.scope.context.project_id,
                 &hooks.scope.context.route,
-                turn,
-                Some(input_bound),
-                Some(u64::from(hooks.config.max_output_tokens_per_call)),
+                AssistantRequestBounds {
+                    turn,
+                    input_token_bound: Some(input_bound),
+                    max_output_tokens: request.max_tokens,
+                    request_fingerprint: fingerprint,
+                },
                 &hooks.prices,
-            );
-            let reserved_cost_micros = match request.reserved_cost_micros() {
-                Ok(cost) => cost,
-                Err(error) => {
-                    hooks.record_error(error);
-                    return CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned());
-                }
+            ) {
+                Ok(reservation_request) => reservation_request,
+                Err(error) => return fail(error),
             };
-            match hooks.ledger.reserve(request).await {
+            let reserved_cost_micros = match reservation_request.reserved_cost_micros() {
+                Ok(cost) => cost,
+                Err(error) => return fail(error),
+            };
+            match hooks.ledger.reserve(reservation_request).await {
                 Ok(reservation) => {
                     if let Ok(mut reservations) = hooks.reservations.lock() {
                         reservations.insert(turn, reservation);
+                        tracing::info!(reserved_cost_micros, "assistant AI usage reserved");
+                        DispatchAction::Proceed
                     } else {
-                        hooks.record_error(AiError::Persistence(
+                        fail(AiError::Persistence(
                             "assistant reservation state could not be stored".to_owned(),
-                        ));
-                        return CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned());
+                        ))
                     }
-                    tracing::info!(reserved_cost_micros, "assistant AI usage reserved");
-                    CompletionCallAction::Continue
                 }
-                Err(error) => {
-                    tracing::warn!(error = %error, "assistant AI usage reservation denied");
-                    hooks.record_error(error);
-                    CompletionCallAction::Stop(RESERVATION_STOP_REASON.to_owned())
-                }
+                Err(error) => fail(error),
             }
         }
     }
@@ -250,9 +297,9 @@ impl AgentHook for DeepRefHooks {
     ) -> impl Future<Output = ModelTurnAction> + rig_core::wasm_compat::WasmCompatSend {
         let hooks = self.clone();
         let turn = event.turn;
-        let input_tokens = event.usage.input_tokens.unwrap_or(0);
-        let output_tokens = event.usage.output_tokens.unwrap_or(0);
-        let reasoning_tokens = event.usage.reasoning_tokens.unwrap_or(0);
+        let input_tokens = event.usage.input_tokens;
+        let output_tokens = event.usage.output_tokens;
+        let reasoning_tokens = event.usage.reasoning_tokens;
         let text = turn_text(event.content);
         let has_calls = turn_has_tool_calls(event.content);
         async move {

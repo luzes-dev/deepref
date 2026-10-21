@@ -1311,6 +1311,7 @@ async fn ai_prompt(context: &Context<'_>) -> NodeResult {
                 },
             ),
             run_id: context.execution.run_id,
+            run_budget_id: context.execution.run_id,
             step_id: Some(context.execution.node_run_id.to_string()),
             job_id: Some(context.execution.job_id),
             attempt_fence: Some(context.execution.claim_seq),
