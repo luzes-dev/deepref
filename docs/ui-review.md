@@ -1,3 +1,5 @@
+> Historical review. This document describes the pre-SaaS architecture and is not normative documentation.
+
 # UI review
 
 This pass focuses on a quiet, readable research workspace with task controls close to the evidence. It retains the existing Svelte, shadcn-svelte, IBM Plex Sans, and teal identity.

@@ -5,6 +5,7 @@
 - [API contract and commands](api.md)
 - [Actor continuity](actor-continuity.md)
 - [Local development](local-development.md)
+- [Security](security.md)
 
 ## Operational Runbooks
 
