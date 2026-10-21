@@ -1,0 +1,364 @@
+# DeepRef CI probe manifest.
+#
+# This file is the single source of truth for diagnostic commands used by local
+# agents, GitHub Actions, and report generation.  Commands are argv arrays so
+# they do not depend on the caller's shell.  Environment bootstrap (checkout,
+# toolchain, dependency install, database startup, browser install) stays in
+# the GitHub composite actions and workflow steps.
+#
+# Probe ids are stable: they appear in reports, rerun-failed, and artifact
+# summaries.  Add a probe here first, then call it from a workflow.
+
+[report]
+# Bound the excerpt embedded in report.md.  The complete output is always kept
+# in logs/<probe>.log and is never truncated.
+excerpt_lines = 60
+excerpt_chars = 7000
+
+# ---------------------------------------------------------------------------
+# Rust
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "rust.boundaries"
+group = "rust"
+description = "Validate Cargo workspace architecture boundaries."
+command = ["cargo", "xtask", "boundaries"]
+
+[[check]]
+id = "rust.xtask-tests"
+group = "rust"
+description = "Test the xtask support crate."
+command = ["cargo", "test", "-p", "xtask", "--locked"]
+
+[[check]]
+id = "rust.fmt"
+group = "rust"
+description = "Check Rust formatting."
+command = ["cargo", "fmt", "--all", "--", "--check"]
+
+[[check]]
+id = "rust.clippy"
+group = "rust"
+description = "Run Clippy with warnings denied."
+command = [
+  "cargo",
+  "clippy",
+  "--workspace",
+  "--lib",
+  "--bins",
+  "--tests",
+  "--examples",
+  "--locked",
+  "--",
+  "-D",
+  "warnings",
+]
+env = { SQLX_OFFLINE = "true" }
+
+[[check]]
+id = "rust.test"
+group = "rust"
+description = "Run Rust unit, binary, and example tests."
+command = [
+  "cargo",
+  "nextest",
+  "run",
+  "--workspace",
+  "--lib",
+  "--bins",
+  "--examples",
+  "--locked",
+]
+env = { SQLX_OFFLINE = "true" }
+
+[[check]]
+id = "rust.doctest"
+group = "rust"
+description = "Run Rust documentation tests."
+command = ["cargo", "test", "--doc", "--workspace", "--locked"]
+env = { SQLX_OFFLINE = "true" }
+
+# ---------------------------------------------------------------------------
+# Web and TypeScript quality
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "web.lint"
+group = "web"
+description = "Run Prettier and ESLint across the workspace."
+command = ["pnpm", "run", "lint"]
+
+[[check]]
+id = "web.check"
+group = "web"
+description = "Type-check the Svelte and TypeScript workspace."
+command = ["pnpm", "run", "check"]
+
+[[check]]
+id = "web.coverage"
+group = "web"
+description = "Run web unit tests with coverage for the Fallow artifact."
+command = ["pnpm", "--filter", "@deepref/web", "test:coverage"]
+
+[[check]]
+id = "web.ui-tests"
+group = "web"
+description = "Run the UI package tests."
+command = ["pnpm", "--filter", "@deepref/ui", "test"]
+
+[[check]]
+id = "web.build"
+group = "web"
+description = "Build the web application bundle."
+command = ["pnpm", "run", "build"]
+
+[[check]]
+id = "fallow.audit"
+group = "fallow"
+description = "Gate new TypeScript quality issues using web coverage."
+command = ["pnpm", "run", "quality:ts:audit"]
+depends_on = ["web.coverage"]
+env = { FALLOW_COVERAGE = "apps/web/coverage/coverage-final.json" }
+
+[[check]]
+id = "fallow.security"
+group = "fallow"
+description = "Scan TypeScript security candidates."
+command = ["pnpm", "run", "quality:ts:security"]
+
+# ---------------------------------------------------------------------------
+# Code generation drift
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "codegen.api"
+group = "codegen"
+description = "Regenerate OpenAPI and Orval output in a temporary tree and compare."
+command = ["pnpm", "run", "generate:api:check"]
+env = { SQLX_OFFLINE = "true" }
+
+[[check]]
+id = "codegen.clean-tree"
+group = "codegen"
+description = "Prove the drift check left the checkout clean."
+command = ["git", "diff", "--exit-code"]
+depends_on = ["codegen.api"]
+
+# ---------------------------------------------------------------------------
+# Database integration
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "integration.migrations"
+group = "integration"
+description = "Apply database migrations against the integration database."
+command = [
+  "cargo",
+  "sqlx",
+  "migrate",
+  "run",
+  "--source",
+  "crates/app/migrations",
+  "--no-dotenv",
+]
+
+[[check]]
+id = "integration.sqlx"
+group = "integration"
+description = "Verify SQLx offline metadata against the migrated database."
+command = ["cargo", "xtask", "sqlx", "check"]
+depends_on = ["integration.migrations"]
+
+[[check]]
+id = "integration.tests"
+group = "integration"
+description = "Run database-backed integration tests."
+command = [
+  "cargo",
+  "nextest",
+  "run",
+  "--workspace",
+  "--tests",
+  "--locked",
+  "--profile",
+  "ci",
+]
+depends_on = ["integration.migrations"]
+
+# ---------------------------------------------------------------------------
+# Browser end-to-end
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "e2e.build"
+group = "e2e"
+description = "Build the preview bundle used by the browser suite."
+command = ["pnpm", "--filter", "@deepref/web", "exec", "vite", "build"]
+
+[[check]]
+id = "e2e.browser"
+group = "e2e"
+description = "Run the Playwright browser and visual suites."
+command = ["pnpm", "--filter", "@deepref/web", "test:e2e"]
+depends_on = ["e2e.build"]
+
+# ---------------------------------------------------------------------------
+# Security: dependency policy
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "security.cargo-deny"
+group = "security-dependencies"
+description = "Run the Cargo dependency policy."
+command = ["cargo", "deny", "--locked", "check"]
+
+[[check]]
+id = "security.cargo-shear"
+group = "security-dependencies"
+description = "Reject unused Rust workspace dependencies."
+command = ["cargo", "shear", "--deny-warnings"]
+
+[[check]]
+id = "security.osv"
+group = "security-dependencies"
+description = "Scan Cargo.lock and pnpm-lock.yaml with OSV-Scanner."
+command = [
+  "osv-scanner",
+  "scan",
+  "source",
+  "--recursive",
+  "--config",
+  "osv-scanner.toml",
+  "--format=table",
+  ".",
+]
+
+[[check]]
+id = "security.pnpm-audit"
+group = "security-dependencies"
+description = "Audit JavaScript dependencies at high severity."
+command = ["pnpm", "audit", "--audit-level", "high"]
+
+# ---------------------------------------------------------------------------
+# Security: repository policy
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "security.action-pins"
+group = "security-policy"
+description = "Require immutable action references."
+command = ["python3", "scripts/ci/check-action-pins.py"]
+
+[[check]]
+id = "security.action-pins-tests"
+group = "security-policy"
+description = "Test the immutable action reference policy."
+command = [
+  "python3",
+  "-m",
+  "unittest",
+  "discover",
+  "-s",
+  "scripts/ci",
+  "-p",
+  "test_check_action_pins.py",
+]
+
+[[check]]
+id = "security.diagnostics-tests"
+group = "security-policy"
+description = "Test the dependency-free diagnostic runner."
+command = [
+  "python3",
+  "-m",
+  "unittest",
+  "discover",
+  "-s",
+  "scripts/ci/tests",
+  "-p",
+  "test_*.py",
+]
+
+[[check]]
+id = "security.actionlint"
+group = "security-policy"
+description = "Lint GitHub Actions workflow syntax and expressions."
+command = ["bash", "scripts/ci/run-actionlint.sh"]
+
+[[check]]
+id = "security.shellcheck"
+group = "security-policy"
+description = "Run ShellCheck on every tracked shell script."
+command = ["bash", "scripts/ci/run-shellcheck.sh"]
+
+# ---------------------------------------------------------------------------
+# Security: scanners
+# ---------------------------------------------------------------------------
+
+[[check]]
+id = "security.semgrep"
+group = "security-sast"
+description = "Scan Rust, TypeScript, and JavaScript with Semgrep CE."
+command = [
+  "bash",
+  "-c",
+  """
+exec docker run --rm --volume "$PWD:/src" --workdir /src \
+  semgrep/semgrep:1.181.0@sha256:81474464c1f07483ba0682a44787fd93c91397419762a04abe2bafaae396304b \
+  semgrep scan \
+    --config p/rust \
+    --config p/typescript \
+    --config p/javascript \
+    --metrics=off \
+    --disable-version-check \
+    --error \
+    --text .
+""",
+]
+
+[[check]]
+id = "security.gitleaks"
+group = "security-secrets"
+description = "Scan Git history for committed secrets."
+command = [
+  "gitleaks",
+  "git",
+  "--config",
+  ".gitleaks.toml",
+  "--redact",
+  "--no-color",
+  "--verbose",
+  "--exit-code",
+  "1",
+  "--log-opts=--all",
+  ".",
+]
+
+[[check]]
+id = "security.trivy"
+group = "security-configuration"
+description = "Scan Dockerfiles and supported configuration with Trivy."
+command = [
+  "trivy",
+  "config",
+  "--severity",
+  "MEDIUM,HIGH,CRITICAL",
+  "--exit-code",
+  "1",
+  "--format",
+  "table",
+  "--skip-dirs",
+  ".git",
+  "--skip-dirs",
+  "node_modules",
+  "--skip-dirs",
+  "target",
+  ".",
+]
+
+[[check]]
+id = "security.compose-config"
+group = "security-configuration"
+description = "Validate the compose configuration."
+command = ["docker", "compose", "-f", "compose.yaml", "config", "--quiet"]
