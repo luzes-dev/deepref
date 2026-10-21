@@ -106,6 +106,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The migration check diffs against the pull request base commit.
+          fetch-depth: 0
       - name: Install pinned Rust toolchain
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         env:
@@ -172,6 +174,11 @@ jobs:
         run: |
           cargo xtask boundaries
           cargo test -p xtask --locked
+      - name: Check migration append-only and destructive SQL (report-only)
+        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'fmt'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: cargo xtask migrations check --base "$BASE_REF" --report-only
       - name: Run check
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         env:
