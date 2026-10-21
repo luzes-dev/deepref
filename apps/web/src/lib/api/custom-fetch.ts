@@ -1,5 +1,5 @@
 export class ApiError<T = unknown> extends Error {
-	readonly status: number;
+	readonly status: string
 	readonly info: T;
 	readonly code?: string;
 	readonly retryAfter?: string;
