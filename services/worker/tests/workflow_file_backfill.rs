@@ -53,7 +53,7 @@ async fn legacy_files(pool: &PgPool, count: u8) -> (Uuid, Uuid, Vec<Uuid>) {
 
 fn config() -> deepref_worker::config::WorkerConfig {
     deepref_worker::config::WorkerConfig::from_source(&|name| {
-        (name == "APP_ENV").then(|| "local".into())
+        (name == "APP_ENV").then(|| "development".into())
     })
     .expect("local worker configuration")
 }
