@@ -355,6 +355,9 @@ def _execute_check(check: Check, output_dir: Path) -> dict[str, object]:
 
     environment = os.environ.copy()
     environment.update(check.env or {})
+    # Commands always run at REPO_ROOT; keep shell-visible PWD in sync so
+    # probes such as Semgrep can mount the checkout deterministically.
+    environment["PWD"] = str(REPO_ROOT)
 
     try:
         with log.open("wb") as stream:
