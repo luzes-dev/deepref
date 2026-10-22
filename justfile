@@ -259,6 +259,25 @@ sqlx-check:
     cargo xtask sqlx check
 
 # ==============================================================================
+# CI Diagnostics
+# ==============================================================================
+
+# Run diagnostic probes for one or more groups (rust, web, codegen, integration, e2e, security-*)
+[group('CI Diagnostics')]
+diagnose *GROUPS:
+    python3 scripts/ci/diagnose.py run {{ GROUPS }}
+
+# Rerun failed probes and blocked probes that have become reachable
+[group('CI Diagnostics')]
+diagnose-failed REPORT="target/ci-diagnostics/report.json":
+    python3 scripts/ci/diagnose.py rerun-failed {{ quote(REPORT) }}
+
+# Final full probe pass across every group before handoff
+[group('CI Diagnostics')]
+diagnose-full:
+    python3 scripts/ci/diagnose.py run
+
+# ==============================================================================
 # Workflow & Build
 # ==============================================================================
 

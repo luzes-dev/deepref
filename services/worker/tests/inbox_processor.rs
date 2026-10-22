@@ -5,11 +5,11 @@
 mod support;
 
 use deepref_app::inbox::{
-    ReceiveOutcome, ReceiveWebhookEvent, complete_inbox_event_in_transaction,
-    fence_inbox_event_effect, receive_webhook_event,
+    ReceiveOutcome, ReceiveWebhookEvent, claim_inbox_batch, complete_inbox_event_in_transaction,
+    fence_inbox_event_effect, process_inbox_event, receive_webhook_event, renew_inbox_lease,
 };
 use deepref_application::inbox::{
-    HmacSha256Verifier, InboxHandlerError, InboxRegistry, TypedInboxHandler,
+    HmacSha256Verifier, InboxContext, InboxHandlerError, InboxRegistry, TypedInboxHandler,
 };
 use deepref_application::workflows::security::sign_payload;
 use deepref_worker::{inbox_processor, shutdown::on_signal};
@@ -56,12 +56,18 @@ fn registry(pool: &PgPool, blocked: Option<Arc<BlockedHandler>>) -> Arc<InboxReg
     Arc::new(registry)
 }
 fn config() -> inbox_processor::InboxProcessorConfig {
+    let runtime = deepref_config::RuntimeConfig::from_source("inbox-test", &|name| {
+        (name == "APP_ENV").then(|| "development".into())
+    })
+    .expect("default local runtime configuration");
     inbox_processor::InboxProcessorConfig {
         batch: 8,
         concurrency: 2,
         claim_lease: Duration::from_secs(10),
         poll_interval: Duration::from_millis(20),
-        drain_deadline: Duration::from_millis(100),
+        // Match production: a visible committed effect can still have processor
+        // bookkeeping in flight. Only the abort test needs a short drain budget.
+        drain_deadline: runtime.telemetry.shutdown_deadline,
     }
 }
 async fn insert(pool: &PgPool, project_id: Uuid) -> i64 {
@@ -85,6 +91,16 @@ async fn insert(pool: &PgPool, project_id: Uuid) -> i64 {
         ReceiveOutcome::Accepted(id) => id,
         ReceiveOutcome::Duplicate => panic!("new event"),
     }
+}
+
+async fn inbox_lease_snapshot(pool: &PgPool, event: i64) -> (i64, i64, i32, Option<String>) {
+    sqlx::query_as(
+        "SELECT (EXTRACT(EPOCH FROM lease_expires_at) * 1000000)::bigint, claim_generation, attempts, lease_owner FROM integration_inbox_events WHERE id=$1",
+    )
+    .bind(event)
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -156,12 +172,14 @@ async fn drain_deadline_aborts_and_awaits_a_blocked_inbox_transaction() {
         return;
     };
     let blocked = Arc::new(BlockedHandler::default());
+    let mut config = config();
+    config.drain_deadline = Duration::from_millis(100);
     let (stop, signal) = watch::channel(false);
     let task = tokio::spawn(inbox_processor::run(
         pool.clone(),
         registry(&pool, Some(Arc::clone(&blocked))),
         "blocked-fixture".into(),
-        config(),
+        config,
         on_signal(signal),
     ));
     let project = Uuid::new_v4();
@@ -189,35 +207,73 @@ async fn heartbeat_renews_then_cancels_a_superseded_inbox_handler() {
         return;
     };
     let blocked = Arc::new(BlockedHandler::default());
-    let mut config = config();
-    config.claim_lease = Duration::from_secs(1);
-    let (stop, signal) = watch::channel(false);
-    let task = tokio::spawn(inbox_processor::run(
-        pool.clone(),
-        registry(&pool, Some(Arc::clone(&blocked))),
-        "heartbeat-fixture".into(),
-        config,
-        on_signal(signal),
-    ));
+    let registry = registry(&pool, Some(Arc::clone(&blocked)));
+    let lease = Duration::from_secs(5);
     let project = Uuid::new_v4();
     let event = insert(&pool, project).await;
+    let mut claims = claim_inbox_batch(&pool, &registry, "heartbeat-fixture", lease, 1)
+        .await
+        .unwrap();
+    assert_eq!(claims.len(), 1);
+    let claim = claims.pop().unwrap();
+    let claim_generation = claim.claim_fence.generation();
+    let (claim_expires_at, generation, attempts, owner) = inbox_lease_snapshot(&pool, event).await;
+    assert_eq!(generation, claim_generation);
+    assert_eq!(attempts, 1);
+    assert_eq!(owner.as_deref(), Some("heartbeat-fixture"));
+
+    let dispatch_pool = pool.clone();
+    let dispatch_registry = Arc::clone(&registry);
+    let task = tokio::spawn(async move {
+        process_inbox_event(&dispatch_pool, &dispatch_registry, lease, &claim).await
+    });
     tokio::time::timeout(Duration::from_secs(30), blocked.entered.notified())
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(2200)).await;
-    let row: (i32, bool) = sqlx::query_as(
-        "SELECT attempts,lease_expires_at>clock_timestamp() FROM integration_inbox_events WHERE id=$1",
+    let (handler_expires_at, generation, attempts, owner) =
+        inbox_lease_snapshot(&pool, event).await;
+    assert_eq!(generation, claim_generation);
+    assert_eq!(attempts, 1);
+    assert_eq!(owner.as_deref(), Some("heartbeat-fixture"));
+    assert!(handler_expires_at >= claim_expires_at);
+
+    let renewed_expires_at = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let (expires_at, generation, attempts, owner) =
+                inbox_lease_snapshot(&pool, event).await;
+            assert_eq!(
+                generation, claim_generation,
+                "renewal keeps the claim generation"
+            );
+            assert_eq!(attempts, 1, "renewal does not spend another attempt");
+            assert_eq!(owner.as_deref(), Some("heartbeat-fixture"));
+            assert!(
+                !blocked.dropped.load(Ordering::SeqCst),
+                "the healthy handler stays active while its claim is renewed"
+            );
+            if expires_at > handler_expires_at {
+                break expires_at;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the heartbeat advances the lease while the handler is blocked");
+    assert!(renewed_expires_at > claim_expires_at);
+
+    sqlx::query(
+        "UPDATE integration_inbox_events SET lease_owner='replacement',claim_generation=claim_generation+1,lease_expires_at=clock_timestamp()+interval '1 minute' WHERE id=$1",
     )
     .bind(event)
-    .fetch_one(&pool)
+    .execute(&pool)
     .await
     .unwrap();
-    assert_eq!(row, (1, true), "a long handler retains the same live claim");
-    sqlx::query("UPDATE integration_inbox_events SET lease_owner='replacement',claim_generation=claim_generation+1,lease_expires_at=clock_timestamp()+interval '1 minute' WHERE id=$1").bind(event).execute(&pool).await.unwrap();
     support::wait_for_drop(&blocked).await;
-    stop.send_replace(true);
-    task.await.unwrap().unwrap();
-    blocked.resume.notify_one();
+    let result = tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("the superseded processor task finishes")
+        .unwrap();
+    assert!(result.is_err(), "the generation bump cancels the old claim");
     support::assert_no_project(&pool, project).await;
 }
 
@@ -227,27 +283,63 @@ async fn a_long_healthy_inbox_transaction_does_not_block_its_renewal() {
         return;
     };
     let blocked = Arc::new(BlockedHandler::default());
-    let mut config = config();
-    config.claim_lease = Duration::from_secs(1);
-    let (stop, signal) = watch::channel(false);
-    let task = tokio::spawn(inbox_processor::run(
-        pool.clone(),
-        registry(&pool, Some(Arc::clone(&blocked))),
-        "healthy-long-transaction".into(),
-        config,
-        on_signal(signal),
-    ));
+    let registry = registry(&pool, Some(Arc::clone(&blocked)));
+    // Use the fixture's normal lease: this tests database lock compatibility,
+    // not elapsed-time heartbeat scheduling (covered by leased_handler tests).
+    let lease = config().claim_lease;
     let project = Uuid::new_v4();
     let event = insert(&pool, project).await;
+    let mut claims = claim_inbox_batch(&pool, &registry, "healthy-long-transaction", lease, 1)
+        .await
+        .unwrap();
+    assert_eq!(claims.len(), 1);
+    let claim = claims.pop().unwrap();
+    let fence = claim.claim_fence.clone();
+    let handler = registry
+        .handler(&claim.provider, &claim.event_type)
+        .unwrap()
+        .clone();
+    let context = InboxContext {
+        inbox_id: claim.id,
+        provider: claim.provider.clone(),
+        provider_event_id: claim.provider_event_id.clone(),
+        event_type: claim.event_type.clone(),
+        claim_fence: claim.claim_fence.clone(),
+    };
+    // Invoke the real registered handler without a concurrent heartbeat:
+    // its own brief renewal UPDATE must not race the NOWAIT lock probe.
+    let task = tokio::spawn(async move { handler(context, claim.payload).await });
     tokio::time::timeout(Duration::from_secs(30), blocked.entered.notified())
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(2200)).await;
+    // The real handler has passed preflight and holds its effect transaction
+    // open. NOWAIT diagnoses a row lock directly, rather than attributing a
+    // missed wall-clock heartbeat deadline to preflight locking.
+    let mut renewal = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM integration_inbox_events WHERE id=$1 FOR UPDATE NOWAIT")
+        .bind(event)
+        .fetch_one(&mut *renewal)
+        .await
+        .expect("the open effect transaction must not lock the renewable inbox row");
+    renewal.rollback().await.unwrap();
+    assert!(
+        renew_inbox_lease(&pool, event, &fence, lease)
+            .await
+            .unwrap(),
+        "the same claim can renew while its effect transaction is open"
+    );
     assert!(
         !blocked.dropped.load(Ordering::SeqCst),
-        "the preflight check must not block lease renewal"
+        "the handler remains active while its effect transaction is open"
     );
     blocked.resume.notify_one();
+    // Await the handler's transactional completion and commit, not merely
+    // effect visibility; processor heartbeat/drain behavior is tested separately.
+    tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .expect("healthy inbox handler completes")
+        .unwrap()
+        .unwrap();
     support::wait_for_project(&pool, project).await;
     let row: (String, i32) = sqlx::query_as(
         "SELECT processing_state,attempts FROM integration_inbox_events WHERE id=$1",
@@ -257,8 +349,6 @@ async fn a_long_healthy_inbox_transaction_does_not_block_its_renewal() {
     .await
     .unwrap();
     assert_eq!(row, ("processed".into(), 1));
-    stop.send_replace(true);
-    task.await.unwrap().unwrap();
 }
 
 #[tokio::test]

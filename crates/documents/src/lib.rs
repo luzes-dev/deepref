@@ -745,6 +745,9 @@ mod tests {
     async fn store_write_failure_does_not_publish_a_partial_object() {
         use std::os::unix::fs::PermissionsExt;
 
+        // Test-only path with an unpredictable v4 UUID; create_dir fails if it
+        // already exists, so a predictable-name collision cannot be reused.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let root = std::env::temp_dir().join(format!("deepref-store-failure-{}", Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let store = DocumentStore::new(StoreConfig::local(&root).unwrap(), 1024);
@@ -789,8 +792,10 @@ mod tests {
 
     #[test]
     fn configured_local_store_uses_injected_source() {
+        // Test-only path with an unpredictable v4 UUID; the local store creates
+        // an empty fixture directory, which is removed below.
         let root =
-            std::env::temp_dir().join(format!("deepref-configured-store-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("deepref-configured-store-{}", Uuid::new_v4())); // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let config = DocumentConfig::from_source(&|name| match name {
             "APP_ENV" => Some("development".into()),
             "DOCUMENT_STORAGE_ROOT" => Some(root.to_string_lossy().into_owned()),

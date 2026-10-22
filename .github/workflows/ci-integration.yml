@@ -1,0 +1,147 @@
+name: CI / Integration
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
+      DEEPREF_REQUIRE_DATABASE: "1"
+      # Linking every integration-test binary with full debuginfo exhausts the
+      # runner disk (lld dies with SIGBUS); the lane never reads debuginfo.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      # Checkout first so the diagnostic gate can still record blocked probes if
+      # a later setup step (Postgres, toolchain, sqlx-cli) fails.
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Start Postgres for integration tests
+        run: |
+          docker run -d --name postgres \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=deepref \
+            -p 127.0.0.1:5432:5432 \
+            pgvector/pgvector:0.8.7-pg17-bookworm \
+            postgres -c max_connections=300
+          for _ in $(seq 1 45); do
+            if docker exec postgres pg_isready --username postgres --dbname deepref >/dev/null 2>&1; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres did not become ready in time" >&2
+          exit 1
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cargo-cache: restore
+          sccache: local-bundle
+      - name: Install pinned cargo-nextest
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest@0.9.143
+          checksum: true
+          fallback: none
+      - name: Install pinned cargo-binstall
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-binstall@1.22.0
+          checksum: true
+          fallback: none
+      # cargo-binstall occasionally falls back to compiling sqlx-cli from
+      # source when the release download flakes (observed 177 s). Install once
+      # per runner OS and reuse afterwards. sqlx-cli ships two binaries: the
+      # standalone `sqlx` and the `cargo-sqlx` dispatch wrapper required by
+      # `cargo sqlx migrate run`; cache BOTH and verify BOTH by file presence
+      # rather than trusting cache-hit — restoring `sqlx` alone passes the
+      # existence check while cargo cannot dispatch `cargo sqlx` without the
+      # wrapper (observed "no such command: sqlx"), so the -r3 key supersedes
+      # the wrapper-less -r2 archive and the earlier wildcard entry. Cache
+      # paths must be exact files, not globs: actions/cache stores wildcard
+      # matches relative to the pattern base, so restoring them re-roots under
+      # the repo directory instead of ~/.cargo/bin.
+      - name: Restore sqlx-cli
+        id: sqlx-cli
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: sqlx-cli-0.9.0-${{ runner.os }}-r3
+      - name: Install pinned sqlx-cli
+        id: install-sqlx
+        run: |
+          if test -x "$HOME/.cargo/bin/sqlx" && test -x "$HOME/.cargo/bin/cargo-sqlx"; then
+            echo "sqlx already present"
+          else
+            cargo binstall --no-confirm sqlx-cli@0.9.0
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save sqlx-cli
+        if: steps.install-sqlx.outputs.installed == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: sqlx-cli-0.9.0-${{ runner.os }}-r3
+      # Note: an overlap experiment (nextest build holding cargo's target-dir
+      # build lock while the check compiled) was measured on run 38975468142
+      # and returned ~zero: the lane is compile/link/database bound on one
+      # shared 4-core runner, and a single runner cannot interleave CPU-heavy
+      # link work underneath an already CPU-heavy build+test tail. Serial
+      # steps are kept because they stream nextest progress in the job UI.
+      #
+      # Keep-going applies to independent siblings after migrations succeed;
+      # it does not pretend this single runner can execute Cargo-heavy work in
+      # parallel.
+      - name: Probe database migrations
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.migrations
+      - name: Probe SQLx metadata
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.sqlx
+      - name: Probe integration tests
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.tests
+      - name: Gate integration
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate integration
+      - name: Show sccache statistics
+        if: always()
+        run: |
+          {
+            echo '```'
+            "${SCCACHE_PATH:-sccache}" --show-stats
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-integration
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
