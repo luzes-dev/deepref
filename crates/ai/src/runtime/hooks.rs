@@ -16,8 +16,12 @@ use std::{
 
 use crate::{
     AgentLoopConfig, AiError, AiUsageContext, AssistantRequestBounds, PriceBook, TokenUsage,
-    UsageLedger, UsageObservation, UsageReservation, assistant_input_bound_tokens,
-    assistant_reservation_request, claims_pending_change,
+    UsageLedger, UsageObservation, UsageReservation, ZeroLiabilityProof,
+    admission::{
+        AdmissionError, AiConcurrencyAdmission, AiConcurrencyLimits, AiConcurrencyScope, OwnedSlot,
+        SlotHeartbeat,
+    },
+    assistant_input_bound_tokens, assistant_reservation_request, claims_pending_change,
     runtime::{
         context::DeepRefAgentContext,
         tools::{PlanCollector, ToolHostScope},
@@ -34,8 +38,16 @@ use rig_core::{ErrorKind, ErrorReport, effect::EffectKind, message::AssistantCon
 
 pub const BUDGET_STOP_REASON: &str = "project AI budget is exhausted";
 pub const TOKEN_STOP_REASON: &str = "assistant turn token budget is exhausted";
+pub const ADMISSION_STOP_REASON: &str = "AI concurrency lease was lost";
 const RESERVATION_STOP_REASON: &str = "AI usage reservation failed";
 const SETTLEMENT_STOP_REASON: &str = "AI usage settlement failed";
+
+/// One turn's concurrency slot: the lease plus the background renewal that
+/// keeps it alive while Rig streams the turn.
+struct HeldSlot {
+    slot: OwnedSlot,
+    heartbeat: SlotHeartbeat,
+}
 
 #[derive(Clone)]
 pub struct DeepRefHooks {
@@ -45,18 +57,26 @@ pub struct DeepRefHooks {
     usage_context: AiUsageContext,
     usage: Arc<Mutex<TokenUsage>>,
     reservations: Arc<Mutex<BTreeMap<usize, UsageReservation>>>,
+    slots: Arc<Mutex<BTreeMap<usize, HeldSlot>>>,
     reservation_error: Arc<Mutex<Option<AiError>>>,
+    lease_lost: Arc<AtomicBool>,
+    lease_loss: Arc<tokio::sync::Notify>,
     consistency_retried: Arc<AtomicBool>,
+    admission: Option<Arc<dyn AiConcurrencyAdmission>>,
+    admission_limits: AiConcurrencyLimits,
     config: AgentLoopConfig,
 }
 
 impl DeepRefHooks {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         scope: ToolHostScope,
         ledger: Arc<dyn UsageLedger>,
         prices: PriceBook,
         usage_context: AiUsageContext,
         config: AgentLoopConfig,
+        admission: Option<Arc<dyn AiConcurrencyAdmission>>,
+        admission_limits: AiConcurrencyLimits,
     ) -> Self {
         Self {
             scope,
@@ -65,8 +85,13 @@ impl DeepRefHooks {
             usage_context,
             usage: Arc::new(Mutex::new(TokenUsage::default())),
             reservations: Arc::new(Mutex::new(BTreeMap::new())),
+            slots: Arc::new(Mutex::new(BTreeMap::new())),
             reservation_error: Arc::new(Mutex::new(None)),
+            lease_lost: Arc::new(AtomicBool::new(false)),
+            lease_loss: Arc::new(tokio::sync::Notify::new()),
             consistency_retried: Arc::new(AtomicBool::new(false)),
+            admission,
+            admission_limits,
             config,
         }
     }
@@ -159,6 +184,111 @@ impl DeepRefHooks {
         tracing::warn!("assistant AI usage remains unresolved");
         Ok(())
     }
+
+    /// Acquires the turn's concurrency slot after its reservation succeeded and
+    /// before Rig dispatches. `Ok(None)` runs without admission (tests).
+    async fn acquire_slot(
+        &self,
+        reservation: &UsageReservation,
+    ) -> Result<Option<HeldSlot>, AiError> {
+        let Some(admission) = self.admission.clone() else {
+            return Ok(None);
+        };
+        let route = &self.scope.context.route;
+        let capabilities = self.prices.capabilities(&route.provider, &route.model)?;
+        let mut limits = self.admission_limits;
+        if let Some(max_concurrent) = capabilities.max_concurrent {
+            limits.route = limits.route.min(max_concurrent);
+        }
+        let scope = AiConcurrencyScope::new(
+            reservation.workspace_id,
+            &route.provider,
+            &route.model,
+            limits,
+        );
+        let lease = admission
+            .acquire(scope)
+            .await
+            .map_err(AdmissionError::into_ai_error)?;
+        // This seam cannot poll a future alongside Rig's model stream, so the
+        // lease heartbeat runs as a background task. It only reports lost
+        // ownership: the run then stops before its next provider call.
+        let heartbeat = SlotHeartbeat::start(admission.clone(), lease.clone(), {
+            let reservation_error = self.reservation_error.clone();
+            let lease_lost = self.lease_lost.clone();
+            let lease_loss = self.lease_loss.clone();
+            move || {
+                lease_lost.store(true, Ordering::SeqCst);
+                lease_loss.notify_one();
+                if let Ok(mut stored) = reservation_error.lock()
+                    && stored.is_none()
+                {
+                    *stored = Some(AiError::AdmissionLeaseLost);
+                }
+            }
+        });
+        Ok(Some(HeldSlot {
+            slot: OwnedSlot::new(admission, lease),
+            heartbeat,
+        }))
+    }
+
+    fn take_slot(&self, turn: usize) -> Option<HeldSlot> {
+        self.slots
+            .lock()
+            .ok()
+            .and_then(|mut slots| slots.remove(&turn))
+    }
+
+    /// Frees the turn's slot on completion, failure or cancellation alike.
+    async fn release_slot(&self, turn: usize) {
+        self.release_held(self.take_slot(turn)).await;
+    }
+
+    async fn release_held(&self, held: Option<HeldSlot>) {
+        let Some(HeldSlot { slot, heartbeat }) = held else {
+            return;
+        };
+        drop(heartbeat);
+        slot.release().await;
+    }
+
+    pub(crate) async fn admission_lost(&self) {
+        while !self.lease_lost() {
+            self.lease_loss.notified().await;
+        }
+    }
+
+    pub(crate) async fn abandon_run(&self) {
+        let slots = self
+            .slots
+            .lock()
+            .map(|mut slots| std::mem::take(&mut *slots))
+            .unwrap_or_default();
+        for (_, held) in slots {
+            self.release_held(Some(held)).await;
+        }
+        let reservations = self
+            .reservations
+            .lock()
+            .map(|mut reservations| std::mem::take(&mut *reservations))
+            .unwrap_or_default();
+        for (_, reservation) in reservations {
+            if let Err(error) = self
+                .ledger
+                .unresolved(&reservation, None, "admission_lease_lost")
+                .await
+            {
+                self.record_error(error);
+            }
+        }
+    }
+
+    /// The run must not start another provider call after its lease was fenced
+    /// out: it no longer owns the capacity it would spend.
+    fn lease_lost(&self) -> bool {
+        self.lease_lost.load(Ordering::SeqCst)
+    }
 }
 
 fn turn_text(content: &[AssistantContent]) -> String {
@@ -195,6 +325,9 @@ impl AgentHook for DeepRefHooks {
     ) -> impl Future<Output = CompletionCallAction> + rig_core::wasm_compat::WasmCompatSend {
         let hooks = self.clone();
         async move {
+            if hooks.lease_lost() {
+                return CompletionCallAction::Stop(ADMISSION_STOP_REASON.to_owned());
+            }
             let usage = hooks.usage();
             if usage.input_tokens.saturating_add(usage.output_tokens)
                 >= hooks.config.max_total_tokens
@@ -223,6 +356,12 @@ impl AgentHook for DeepRefHooks {
             // tokens are included in the next metered completion request.
             if !is_completion {
                 return DispatchAction::Proceed;
+            }
+            // Nested calls take their own slot and never wait for one: a
+            // parent holding the workspace's last slot cannot deadlock against
+            // this call, it simply fails fast with saturation.
+            if hooks.lease_lost() {
+                return fail(AiError::AdmissionLeaseLost);
             }
             let Some(mut request) = request else {
                 return fail(AiError::UnboundedInput);
@@ -287,13 +426,51 @@ impl AgentHook for DeepRefHooks {
             };
             match hooks.ledger.reserve(reservation_request).await {
                 Ok(reservation) => {
-                    if let Ok(mut reservations) = hooks.reservations.lock() {
-                        reservations.insert(turn, reservation);
+                    // Admission runs after the reservation succeeds and before
+                    // Rig dispatches. A refusal never reached the provider, so
+                    // the reservation is released as proven zero liability.
+                    let held = match hooks.acquire_slot(&reservation).await {
+                        Ok(held) => held,
+                        Err(error) => {
+                            if let Err(void_error) = hooks
+                                .ledger
+                                .void_zero_liability(
+                                    &reservation,
+                                    ZeroLiabilityProof::AdmissionRefused,
+                                )
+                                .await
+                            {
+                                hooks.record_error(void_error);
+                            }
+                            return fail(error);
+                        }
+                    };
+                    let mut held = held;
+                    let stored = if let Ok(mut reservations) = hooks.reservations.lock()
+                        && let Ok(mut slots) = hooks.slots.lock()
+                    {
+                        reservations.insert(turn, reservation.clone());
+                        if let Some(held) = held.take() {
+                            slots.insert(turn, held);
+                        }
+                        true
+                    } else {
+                        false
+                    };
+                    if stored {
                         tracing::info!(reserved_cost_micros, "assistant AI usage reserved");
                         DispatchAction::Proceed
                     } else {
+                        hooks.release_held(held).await;
+                        if let Err(error) = hooks
+                            .ledger
+                            .void_zero_liability(&reservation, ZeroLiabilityProof::AdmissionRefused)
+                            .await
+                        {
+                            return fail(error);
+                        }
                         fail(AiError::Persistence(
-                            "assistant reservation state could not be stored".to_owned(),
+                            "assistant dispatch state could not be stored".to_owned(),
                         ))
                     }
                 }
@@ -317,47 +494,54 @@ impl AgentHook for DeepRefHooks {
         let text = turn_text(event.content);
         let has_calls = turn_has_tool_calls(event.content);
         async move {
-            if let Err(error) = hooks
-                .settle_turn_usage(
+            let action = async {
+                if let Err(error) = hooks
+                    .settle_turn_usage(
+                        turn,
+                        input_tokens,
+                        output_tokens,
+                        reasoning_tokens,
+                        provider_request_id,
+                        provider_response_id,
+                    )
+                    .await
+                {
+                    tracing::error!(error = %error, "assistant AI usage settlement failed");
+                    hooks.record_error(error);
+                    return ModelTurnAction::Stop(SETTLEMENT_STOP_REASON.to_owned());
+                }
+                tracing::debug!(
                     turn,
                     input_tokens,
                     output_tokens,
                     reasoning_tokens,
-                    provider_request_id,
-                    provider_response_id,
-                )
-                .await
-            {
-                tracing::error!(error = %error, "assistant AI usage settlement failed");
-                hooks.record_error(error);
-                return ModelTurnAction::Stop(SETTLEMENT_STOP_REASON.to_owned());
-            }
-            tracing::debug!(
-                turn,
-                input_tokens,
-                output_tokens,
-                reasoning_tokens,
-                has_tool_calls = has_calls,
-                "assistant model turn finished"
-            );
-            if !has_calls {
-                let spent = hooks.usage();
-                if spent.input_tokens.saturating_add(spent.output_tokens)
-                    >= hooks.config.max_total_tokens
-                {
-                    return ModelTurnAction::Stop(TOKEN_STOP_REASON.to_owned());
+                    has_tool_calls = has_calls,
+                    "assistant model turn finished"
+                );
+                if !has_calls {
+                    let spent = hooks.usage();
+                    if spent.input_tokens.saturating_add(spent.output_tokens)
+                        >= hooks.config.max_total_tokens
+                    {
+                        return ModelTurnAction::Stop(TOKEN_STOP_REASON.to_owned());
+                    }
                 }
+                if !has_calls
+                    && hooks.scope.plans.is_empty()
+                    && claims_pending_change(&text)
+                    && !hooks.consistency_retried.swap(true, Ordering::SeqCst)
+                {
+                    return ModelTurnAction::Retry(RetryRequest::Feedback(
+                        super::plan::NO_PLAN_CORRECTION.to_owned(),
+                    ));
+                }
+                ModelTurnAction::Continue
             }
-            if !has_calls
-                && hooks.scope.plans.is_empty()
-                && claims_pending_change(&text)
-                && !hooks.consistency_retried.swap(true, Ordering::SeqCst)
-            {
-                return ModelTurnAction::Retry(RetryRequest::Feedback(
-                    super::plan::NO_PLAN_CORRECTION.to_owned(),
-                ));
-            }
-            ModelTurnAction::Continue
+            .await;
+            // The turn's provider call is over: its slot goes back whatever
+            // the outcome was.
+            hooks.release_slot(turn).await;
+            action
         }
     }
 
@@ -381,8 +565,8 @@ impl AgentHook for DeepRefHooks {
     ) -> impl Future<Output = OutcomeAction> + rig_core::wasm_compat::WasmCompatSend {
         let hooks = self.clone();
         let turn = event.turn;
-        let completion_failed =
-            matches!(event.kind, EffectKind::Completion { .. }) && event.outcome.is_err();
+        let is_completion = matches!(event.kind, EffectKind::Completion { .. });
+        let completion_failed = is_completion && event.outcome.is_err();
         async move {
             if completion_failed
                 && let Err(error) = hooks
@@ -390,6 +574,9 @@ impl AgentHook for DeepRefHooks {
                     .await
             {
                 hooks.record_error(error);
+            }
+            if is_completion {
+                hooks.release_slot(turn).await;
             }
             tracing::debug!(turn, "assistant effect resolved");
             OutcomeAction::Proceed
@@ -430,6 +617,22 @@ impl AgentHook for DeepRefHooks {
                 {
                     hooks.record_error(error);
                 }
+            }
+            // Slots of turns that never reached a settle path go back here;
+            // anything still held also expires on its own.
+            let pending_slots = hooks
+                .slots
+                .lock()
+                .map(|mut slots| {
+                    let turns = slots.keys().copied().collect::<Vec<_>>();
+                    turns
+                        .into_iter()
+                        .filter_map(|turn| slots.remove(&turn))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for held in pending_slots {
+                hooks.release_held(Some(held)).await;
             }
             let usage = hooks.usage();
             tracing::info!(

@@ -4,6 +4,7 @@
 //! gateways, prompt definitions, grounding, policy, and task orchestration.
 //! SQLx and pgvector stay in `deepref-app`.
 
+mod admission;
 mod agents;
 mod assistant;
 mod classification;
@@ -24,6 +25,12 @@ mod structured;
 mod types;
 mod usage;
 
+pub use admission::{
+    AdmissionError, AdmissionFuture, AiConcurrencyAdmission, AiConcurrencyLimits,
+    AiConcurrencyMetrics, AiConcurrencyMetricsSnapshot, AiConcurrencyScope, AiConcurrencyScopeKind,
+    HistogramSnapshot, SLOT_LEASE_RENEW_INTERVAL, SLOT_LEASE_TTL, ScopeCounters, SlotGrant,
+    SlotHeartbeat, SlotLease, admission_metrics, renew_while,
+};
 pub use agents::*;
 pub use assistant::*;
 pub use classification::{

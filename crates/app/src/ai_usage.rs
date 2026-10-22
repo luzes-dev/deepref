@@ -668,6 +668,7 @@ impl UsageLedger for PostgresUsageLedger {
             );
             Ok(UsageReservation {
                 id: reservation_id,
+                workspace_id: WorkspaceId::new(workspace_id),
                 period_start,
                 reserved_cost_micros: reserved_cost,
                 price: request.price,
@@ -813,6 +814,7 @@ impl UsageLedger for PostgresUsageLedger {
             );
             Ok(UsageReservation {
                 id: reservation.id,
+                workspace_id: WorkspaceId::new(workspace_id),
                 period_start,
                 reserved_cost_micros: new_reserved,
                 price,
@@ -1188,7 +1190,7 @@ impl UsageLedger for PostgresUsageLedger {
     ) -> AiFuture<'a, ()> {
         Box::pin(async move {
             proof.validate()?;
-            let ZeroLiabilityProof::ProviderRejected { status } = proof;
+            let void_reason = proof.void_reason();
             let mut tx = self.pool.begin().await.map_err(|_| db_failure())?;
             let row = sqlx::query(
                 "SELECT workspace_id, project_id, run_id, run_budget_id, period_start, reserved_cost_micros,
@@ -1259,13 +1261,16 @@ impl UsageLedger for PostgresUsageLedger {
                  WHERE id = $1",
             )
             .bind(reservation.id)
-            .bind(format!("provider_rejected_http_{status}"))
+            .bind(&void_reason)
             .execute(&mut *tx)
             .await
             .map_err(|_| db_failure())?;
             garbage_collect_detached_project(&mut tx, project_id).await?;
             tx.commit().await.map_err(|_| db_failure())?;
-            tracing::info!(status, "zero-liability AI reservation voided");
+            tracing::info!(
+                %void_reason,
+                "zero-liability AI reservation voided"
+            );
             Ok(())
         })
     }
@@ -2331,6 +2336,7 @@ pub async fn reconcile_ai_usage_workspace(
         };
         let reservation = UsageReservation {
             id: row.get("id"),
+            workspace_id,
             period_start: row.get("period_start"),
             reserved_cost_micros: row.get("reserved_cost_micros"),
             price: ai_usage_price(&row),

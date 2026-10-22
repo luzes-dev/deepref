@@ -9,6 +9,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::admission::AiConcurrencyScopeKind;
+
 pub type AiFuture<'a, T> =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, AiError>> + Send + 'a>>;
 
@@ -54,6 +56,16 @@ pub enum AiError {
     UnsupportedUsageRoute { provider: String, model: String },
     #[error("paid AI dispatch is disabled until hard caps are enabled")]
     HardCapsDisabled,
+    /// Operational concurrency admission refused the call before dispatch. The
+    /// reservation opened for the call is released as proven-zero-liability:
+    /// the request never reached the provider.
+    #[error("AI concurrency admission refused the call: {scope_kind}")]
+    AdmissionSaturated { scope_kind: AiConcurrencyScopeKind },
+    /// The call's concurrency lease was fenced out while it ran. The holder
+    /// stops here before further provider liability, the same way a fenced
+    /// reservation top-up stops.
+    #[error("the AI concurrency lease was lost before the call finished")]
+    AdmissionLeaseLost,
     #[error("AI provider rejected the request before accepting work (HTTP {status})")]
     ProviderRejected { status: u16 },
     #[error(

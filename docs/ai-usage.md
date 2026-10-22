@@ -30,6 +30,33 @@ A project receives its configured sub-limit when it is created. Creating or dele
 
 When `ai_hard_caps_enforced` is false, the new reservation path fails closed with `HardCapsDisabled` before paid provider dispatch. It does not send an unmetered N request. The migration defaults this flag to false. N-1 continues its existing behavior, while the legacy ledger trigger counts each N-1 insert in the monthly hierarchy and records the last insert time.
 
+## Concurrency admission
+
+Slice C adds PostgreSQL leased slots behind `AiConcurrencyAdmission`, alongside the AI layer's `UsageLedger` port. The boundary checker permits the AI layer to depend on domain only; keeping this port at that existing seam avoids introducing an AI → application dependency. API and worker production construction both require the PostgreSQL adapter. Test gateways can explicitly omit it. A future Valkey adapter must preserve the same atomic two-scope grant, fencing, expiry and fail-closed semantics; Valkey never replaces financial reservations. No Valkey service or cutover is enabled here.
+
+Dispatch order is: freeze and bound the request → commit its financial reservation → acquire workspace and provider/model slots together → dispatch the provider call → account usage → release capacity. A denied admission voids the reservation with `concurrency_admission_refused`, proving the request never reached the provider. Admission never changes prices, ledger costs, commercial units or settlement arithmetic. The default-disabled hard-cap gate still refuses work before slots or provider calls; adding slots does not enable paid AI.
+
+`ai_concurrency_slots` has primary key `(scope_kind, scope_key, slot_index)`, a process-owner UUID (`holder_id`), a generation, acquisition time and expiry. Workspace keys are internal UUIDs; route keys identify the configured provider/model. Claims enumerate only indexes below the configured limit and use one `INSERT … ON CONFLICT DO UPDATE … WHERE lease_expires_at < clock_timestamp()`. PostgreSQL serializes conflicting row writes and checks the latest locked row's expiry, so a slot cannot have two live owners. Workspace then route are claimed in one transaction; a route refusal rolls back the workspace claim. A 10 ms transaction-local lock timeout and three bounded claim attempts refuse contention conservatively instead of waiting for another call. Both claims must remain unexpired before commit. These are leased capacity rows, with no advisory-lock admission mechanism.
+
+Generations come from a noncycling bigint sequence on every claim, including after deletion, so release/reacquire and sweep/recreate cannot reuse a fence. Renewal checks process identity, generation and unexpired ownership of both slots atomically. A stale renewal or release rolls back both writes and reports lost ownership. Lease TTL is 60 seconds, with renewal every 20 seconds. Any renewal error, or a renewal taking 20 seconds, stops active work; the system never assumes unlimited capacity during a database outage. The assistant driver cancels an active stalled stream on heartbeat loss, not merely its next turn. Interrupted provider work retains possible financial liability for reconciliation. Closing a local request cannot prove a remote provider stopped billing.
+
+Each provider invocation takes its own pair of slots, including nested model calls and structured repair attempts. Local deterministic tools do not consume a provider slot. A parent holding the workspace's last slot cannot wait on its child: nested admission returns typed `AdmissionSaturated` immediately and voids the child's undispatched reservation. Admission itself never queues or retries saturation; a later durable job attempt requests admission afresh. HTTP callers receive conflict codes `ai_concurrency_saturated` or `ai_concurrency_lease_lost`.
+
+Normal completion and provider failure await release. Cancellation drops an owned-slot guard that schedules release with a five-second bound; shutdown or database failure falls back to lease expiry. Crashed holders require no cleanup to become reclaimable. The worker reconciler also deletes at most 500 rows expired for over one hour per sweep, using `FOR UPDATE SKIP LOCKED` so a concurrent renewal survives. This sweep never releases financial reservations.
+
+### Configuration and rollout
+
+- `DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE=4` limits simultaneous calls for one workspace across all API/worker replicas.
+- `DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE=16` limits simultaneous calls for one provider/model across workspaces and replicas.
+- Both settings accept integers from 1 through 2,147,483,647. Start with the conservative defaults (or smaller limits during incidents). These values are operational ceilings, not budget allowances.
+- Reviewed route capabilities may set `max_concurrent` to narrow the route ceiling, never widen it. This operational field is excluded from the price version hash.
+
+Apply migrations 0135–0137 before rolling out the new binary. They only add the table, constraints, sequence and index; N-1 can continue against the expanded schema. Complete the existing reservation backfill/drain/enable procedure below before enabling paid AI. Slot enforcement is deployment-wide only once **every** paid dispatcher uses this version; drain older uninstrumented dispatchers before claiming that guarantee.
+
+Use identical limits in API and worker replicas. To lower a limit, stop new paid admissions, drain dispatchers using the old configuration, roll every dispatcher to the new value, then resume. New claims ignore indexes at or above the new limit; existing leases on those indexes may finish and renew while draining. A mixed configuration fleet still admits under its older, higher limit. For rollback, disable paid dispatch and drain the slot-aware replicas before introducing older dispatchers; keep the expanded schema and never run down-migrations. Do not manually delete live slots to clear saturation. Check active calls, database connectivity and renewal errors first; abandoned slots recover after expiry.
+
+Admission telemetry has grants and saturation counters by `scope_kind`, lost-lease and expiry-reclaim counts, and acquire-latency buckets/count/sum (microseconds). Acquire timing includes denials and errors; grants are counted only after both slots commit. Process-wide snapshots are available through `admission_metrics()` and the worker reconciler emits them as structured `AI concurrency admission metrics` logs. Buckets contain per-bucket observations, not cumulative counts. Workspace IDs, provider/model keys and costs are never labels. Alert on sustained saturation, renewal loss, or rising acquire latency; inspect logs from every dispatcher, since counters are process-local and reset on restart. A future metrics exporter can consume the same snapshots.
+
 ## N-1 rollout and rollback
 
 1. Apply the expand schema migrations and deploy the N binary with paid AI disabled on the N path. Keep N-1 AI dispatchers running only while the legacy trigger is accounting their ledger writes.
@@ -139,6 +166,10 @@ Export counts facts emitted, delivered, duplicates, ambiguous outcomes, retryabl
 8. **Rollback** (including rolling the binary back to N-1): run `deepref-server ai-usage disable-export <operator-user-uuid>` **first**. It clears the gate and parks every queued replay job in a state no claim accepts, so N-1 can never claim and dead-letter the kind. If it reports that a rollout transition is in progress, it changed nothing and released its locks; run it again until it reports its parked-job count. Then drain paid dispatchers and roll back, retaining the recovery path described above. `deepref-server ai-usage disable-hard-caps <operator-user-uuid>` suspends admissions while recovery continues.
 
 ## Migrations
+
+- `0135_ai_concurrency_slots.sql` adds leased concurrency slots and their generation sequence, with `NOT VALID` checks.
+- `0136_ai_concurrency_slots_validate.sql` validates the new scope/index checks.
+- `0137_ai_concurrency_slots_expiry_index.sql` builds the sweep index concurrently in its own no-transaction migration.
 
 - `0120_ai_usage_reservations.sql` expands the ledger, creates limits, monthly and lifetime buckets, reservations, block/admission and rollout state, backfill markers, and legacy-write accounting. It seeds parent caps once from existing child limits, creates project buckets only for workspace-assigned projects, and does not scan the full ledger.
 - `0121_ai_usage_audit_expand.sql` and `0122_ai_usage_audit_validate.sql` add and validate audit shapes for limit changes, hard-cap rollout, and reservation resolution.

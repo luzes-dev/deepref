@@ -1211,6 +1211,11 @@ async fn drive_assistant_job(pool: &PgPool, model: MockCompletionModel) {
     let services = deepref_worker::assistant::AssistantWorkerServices {
         model_factory: Arc::new(StaticModelFactory::new(model.erase())),
         prices: deepref_ai::PriceBook::default(),
+        // The assistant path is admitted exactly like production dispatch.
+        admission: Some(Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(
+            pool,
+        ))),
+        admission_limits: deepref_ai::AiConcurrencyLimits::default(),
     };
     let action = deepref_worker::assistant::handle_assistant_agent_run_with(pool, &job, &services)
         .await

@@ -3,6 +3,7 @@ mod activity;
 mod agent_tools;
 mod ai;
 mod ai_autonomy_apply;
+mod ai_concurrency;
 mod ai_exposure;
 mod ai_first;
 mod ai_reviewer;
@@ -89,6 +90,7 @@ pub use ai::{
 pub use ai_autonomy_apply::{
     AutonomyOutcome, apply_autonomy_for_proposal, sweep_ai_autonomy_outbox,
 };
+pub use ai_concurrency::{PostgresAiConcurrencyAdmission, sweep_ai_concurrency_slots};
 pub use ai_exposure::{
     ExposureSource, NewExposure, ReviewRunProposal, ReviewerPair, ReviewerPairs,
     independent_reviewer_pairs, record_exposure, record_exposure_in_transaction, record_exposures,

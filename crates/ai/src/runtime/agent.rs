@@ -33,8 +33,9 @@ use uuid::Uuid;
 pub use super::builder::DEEPREF_ASSISTANT_OWNER;
 use super::builder::{assistant_runner, configure_assistant_builder, history_to_messages};
 use crate::{
-    AgentLoopConfig, AiError, AiUsageContext, AssistantStreamEvent, ChatMessage, ChatToolCall,
-    PlanAction, PriceBook, ToolTraceEntry, UsageLedger, UsagePrincipal, claims_pending_change,
+    AgentLoopConfig, AiConcurrencyAdmission, AiConcurrencyLimits, AiError, AiUsageContext,
+    AssistantStreamEvent, ChatMessage, ChatToolCall, PlanAction, PriceBook, ToolTraceEntry,
+    UsageLedger, UsagePrincipal, claims_pending_change,
     runtime::{
         cassette::AssistantCassette,
         context::{AssistantToolHost, DeepRefAgentContext},
@@ -68,6 +69,12 @@ pub struct RigTurn<'a> {
     pub host: Arc<dyn AssistantToolHost>,
     pub ledger: Arc<dyn UsageLedger>,
     pub prices: PriceBook,
+    /// Operational concurrency admission for this turn's model calls. `None`
+    /// runs the turn without slot admission (tests); the durable worker wires
+    /// the PostgreSQL leased-slot adapter.
+    pub admission: Option<Arc<dyn AiConcurrencyAdmission>>,
+    /// The simultaneous-call ceilings the turn's scopes are admitted under.
+    pub admission_limits: AiConcurrencyLimits,
     pub config: AgentLoopConfig,
     /// Identity of the durable assistant run this turn executes for.
     pub run_id: Uuid,
@@ -260,6 +267,8 @@ fn build_turn(turn: RigTurn<'_>) -> Result<BuiltTurn, AiError> {
         turn.prices,
         usage_context,
         turn.config,
+        turn.admission,
+        turn.admission_limits,
     );
     let history = history_to_messages(&turn.history);
     let agent = build_live_agent(
@@ -359,7 +368,7 @@ pub(crate) async fn run_assistant_runner(
     progress_tx: UnboundedSender<AssistantStreamEvent>,
 ) -> Result<RigTurnOutcome, AiError> {
     let (run_future, mut run_events) = runner.run_channel();
-    tokio::pin!(run_future);
+    let mut run_future = Box::pin(run_future);
     let mut driver = Driver {
         scope: scope.clone(),
         hooks: hooks.clone(),
@@ -373,6 +382,12 @@ pub(crate) async fn run_assistant_runner(
     let mut run_error = None;
     loop {
         tokio::select! {
+            biased;
+            _ = hooks.admission_lost() => {
+                drop(run_future);
+                hooks.abandon_run().await;
+                return Err(AiError::AdmissionLeaseLost);
+            }
             settled = &mut run_future => {
                 match settled {
                     Ok(finished) => response = Some(finished),

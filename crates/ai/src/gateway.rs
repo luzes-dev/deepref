@@ -275,8 +275,10 @@ impl EmbeddingGateway for RigEmbeddingGateway {
 /// Builds the production gateway stack for an OpenAI-compatible provider
 /// (`opencode-go`, or the legacy `zai`): the provider adapter registered for
 /// every model of `provider`, wrapped so the project budget is enforced, every
-/// call is priced with `prices`, and usage is recorded. Routes must carry the
-/// same `provider` label, because the router looks adapters up by it.
+/// call is priced with `prices`, usage is recorded, and the concurrency slot
+/// for the call is held for exactly as long as the call runs. Routes must
+/// carry the same `provider` label, because the router looks adapters up by
+/// it.
 ///
 /// This is also the one place where the provider id and its base URL meet, so
 /// the normalized endpoint of the adapter is registered here for review
@@ -287,6 +289,8 @@ pub fn build_metered_provider(
     api_key: &str,
     ledger: Arc<dyn crate::UsageLedger>,
     prices: crate::PriceBook,
+    admission: Arc<dyn crate::AiConcurrencyAdmission>,
+    limits: crate::AiConcurrencyLimits,
 ) -> Result<Arc<crate::MeteredGateway<RoutedGateway>>, AiError> {
     let dialect = crate::ProviderDialect::from_id(provider)
         .ok_or_else(|| AiError::Gateway("AI provider is not supported".to_owned()))?;
@@ -302,6 +306,8 @@ pub fn build_metered_provider(
     // calls it exists.
     register_provider_endpoint(provider, endpoint)?;
     Ok(Arc::new(
-        crate::MeteredGateway::new(routed, ledger).with_prices(prices),
+        crate::MeteredGateway::new(routed, ledger)
+            .with_prices(prices)
+            .with_admission(admission, limits),
     ))
 }

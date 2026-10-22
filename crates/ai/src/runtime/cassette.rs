@@ -168,6 +168,9 @@ pub async fn replay_rig_turn(
         replay.prices,
         usage_context,
         replay.config,
+        // Replay never reaches a provider, so it takes no concurrency slots.
+        None,
+        Default::default(),
     );
     // The replay agent must be configured exactly like the recording agent:
     // both go through the shared builder, and check_replayable below fails

@@ -610,6 +610,8 @@ pub fn safe_error_metadata(error: &AiError) -> SafeErrorMetadata {
         AiError::ProviderRejectedSubscriptionLimit { .. } | AiError::SubscriptionLimit => {
             "subscription_limit"
         }
+        AiError::AdmissionSaturated { .. } => "admission_saturated",
+        AiError::AdmissionLeaseLost => "admission_lease_lost",
         AiError::Cassette(_) => "cassette_replay_refused",
     };
     let message = match code {
@@ -625,6 +627,8 @@ pub fn safe_error_metadata(error: &AiError) -> SafeErrorMetadata {
         "invalid_usage_bound" => "AI request cost bound is invalid",
         "provider_rejected" => "provider rejected the AI request",
         "subscription_limit" => "AI subscription limit reached; try again later",
+        "admission_saturated" => "AI concurrency is saturated; try again later",
+        "admission_lease_lost" => "the AI concurrency lease was lost; the call must stop",
         "malformed_output" => "provider returned malformed structured output",
         "schema_validation" => "structured output failed schema validation",
         "semantic_validation" => "structured output failed semantic validation",

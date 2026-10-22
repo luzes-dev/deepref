@@ -7,12 +7,16 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::NaiveDate;
-use deepref_domain::ProjectId;
+use deepref_domain::{ProjectId, WorkspaceId};
 use uuid::Uuid;
 
 use crate::{
     AiError, AiFuture, AiGateway, AiUsageContext, CompletionRequest, GatewayCompletion,
     PreparedCompletionRequest, PriceBook, RouteCapabilities, UsagePrincipal,
+    admission::{
+        AdmissionError, AiConcurrencyAdmission, AiConcurrencyLimits, AiConcurrencyScope, OwnedSlot,
+        SlotLease, renew_while,
+    },
 };
 
 const INPUT_BOUND_SAFETY_NUMERATOR: u64 = 5;
@@ -300,6 +304,9 @@ impl UsageReservationRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageReservation {
     pub id: Uuid,
+    /// The tenant the reservation was opened for. Resolved by the ledger from
+    /// the project when attribution leaves it unset; admission scopes use it.
+    pub workspace_id: WorkspaceId,
     pub period_start: NaiveDate,
     pub reserved_cost_micros: i64,
     pub price: UsagePriceSnapshot,
@@ -378,7 +385,11 @@ impl UsageObservation {
 /// Evidence strong enough to release a reservation without a usage fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZeroLiabilityProof {
+    /// The provider refused the request before accepting work.
     ProviderRejected { status: u16 },
+    /// Operational concurrency admission refused the call before dispatch, so
+    /// the request never reached the provider.
+    AdmissionRefused,
 }
 
 impl ZeroLiabilityProof {
@@ -388,6 +399,15 @@ impl ZeroLiabilityProof {
                 Ok(())
             }
             Self::ProviderRejected { .. } => Err(AiError::InvalidUsageBound),
+            Self::AdmissionRefused => Ok(()),
+        }
+    }
+
+    /// Operator-facing reason stored on the voided reservation.
+    pub fn void_reason(self) -> String {
+        match self {
+            Self::ProviderRejected { status } => format!("provider_rejected_http_{status}"),
+            Self::AdmissionRefused => "concurrency_admission_refused".to_owned(),
         }
     }
 }
@@ -450,10 +470,17 @@ pub trait ProviderUsageLookup: Send + Sync {
 
 /// Wraps the provider gateway so every model call is reserved before dispatch
 /// and every result is either settled, voided with proof, or held unresolved.
+///
+/// When an admission port is attached, the concurrency slot is acquired after
+/// the financial reservation succeeds and before the provider sees the
+/// request. Admission is operational: it never changes reservation,
+/// settlement or ledger numbers, only whether dispatch happens at all.
 pub struct MeteredGateway<G> {
     inner: G,
     ledger: Arc<dyn UsageLedger>,
     prices: Arc<PriceBook>,
+    admission: Option<Arc<dyn AiConcurrencyAdmission>>,
+    admission_limits: AiConcurrencyLimits,
 }
 
 impl<G> MeteredGateway<G> {
@@ -462,12 +489,28 @@ impl<G> MeteredGateway<G> {
             inner,
             ledger,
             prices: Arc::new(PriceBook::default()),
+            admission: None,
+            admission_limits: AiConcurrencyLimits::default(),
         }
     }
 
     #[must_use]
     pub fn with_prices(mut self, prices: PriceBook) -> Self {
         self.prices = Arc::new(prices);
+        self
+    }
+
+    /// Attaches operational concurrency admission. Production wiring always
+    /// sets it (see [`crate::build_metered_provider`]); tests may leave it off
+    /// to exercise reservation semantics without a slot table.
+    #[must_use]
+    pub fn with_admission(
+        mut self,
+        admission: Arc<dyn AiConcurrencyAdmission>,
+        limits: AiConcurrencyLimits,
+    ) -> Self {
+        self.admission = Some(admission);
+        self.admission_limits = limits;
         self
     }
 
@@ -523,6 +566,46 @@ impl<G> MeteredGateway<G> {
     }
 }
 
+impl<G: AiGateway> MeteredGateway<G> {
+    /// Acquires both concurrency slots of the call, after its financial
+    /// reservation succeeded and before dispatch. `Ok(None)` means this
+    /// gateway runs without admission (tests only; production wires it in
+    /// [`crate::build_metered_provider`]).
+    async fn acquire_slot(
+        &self,
+        prepared: &PreparedCompletionRequest,
+        reservation: &UsageReservation,
+    ) -> Result<Option<OwnedSlot>, AiError> {
+        let Some(admission) = self.admission.as_ref() else {
+            return Ok(None);
+        };
+        let route = &prepared.request.route;
+        let capabilities = self.prices.capabilities(&route.provider, &route.model)?;
+        // The reviewed capability table may narrow one route below the
+        // configured route ceiling; it can never widen it.
+        let mut limits = self.admission_limits;
+        if let Some(max_concurrent) = capabilities.max_concurrent {
+            limits.route = limits.route.min(max_concurrent);
+        }
+        let scope = AiConcurrencyScope::new(
+            reservation.workspace_id,
+            &route.provider,
+            &route.model,
+            limits,
+        );
+        let started = std::time::Instant::now();
+        let lease = admission
+            .acquire(scope)
+            .await
+            .map_err(AdmissionError::into_ai_error)?;
+        tracing::debug!(
+            latency_micros = started.elapsed().as_micros() as u64,
+            "AI concurrency slot acquired"
+        );
+        Ok(Some(OwnedSlot::new(admission.clone(), lease)))
+    }
+}
+
 impl<G: AiGateway> AiGateway for MeteredGateway<G> {
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
@@ -532,52 +615,114 @@ impl<G: AiGateway> AiGateway for MeteredGateway<G> {
             // Validate every bound before opening a database reservation.
             reservation_request.reserved_cost_micros()?;
             let reservation = self.ledger.reserve(reservation_request).await?;
-            let mut completion = match self.inner.complete_prepared(prepared).await {
-                Ok(completion) => completion,
-                Err(AiError::ProviderRejected { status }) => {
-                    self.ledger
-                        .void_zero_liability(
-                            &reservation,
-                            ZeroLiabilityProof::ProviderRejected { status },
-                        )
-                        .await?;
-                    return Err(AiError::ProviderRejected { status });
-                }
-                Err(AiError::ProviderRejectedSubscriptionLimit { status }) => {
-                    self.ledger
-                        .void_zero_liability(
-                            &reservation,
-                            ZeroLiabilityProof::ProviderRejected { status },
-                        )
-                        .await?;
-                    return Err(AiError::SubscriptionLimit);
-                }
+            // Admission runs after the reservation succeeds and before the
+            // provider sees the request. A refusal is proven zero liability:
+            // the call never dispatched.
+            let lease = match self.acquire_slot(&prepared, &reservation).await {
+                Ok(lease) => lease,
                 Err(error) => {
                     self.ledger
-                        .unresolved(&reservation, None, "provider_outcome_ambiguous")
+                        .void_zero_liability(&reservation, ZeroLiabilityProof::AdmissionRefused)
                         .await?;
                     return Err(error);
                 }
             };
-            let observation = UsageObservation {
-                input_tokens: completion.input_tokens,
-                output_tokens: completion.output_tokens,
-                reasoning_tokens: completion.reasoning_tokens,
-                commercial_units: None,
-                provider_request_id: completion.provider_request_id.clone(),
-                provider_response_id: completion.provider_response_id.clone(),
-            };
-            observe_or_hold(self.ledger.as_ref(), &reservation, observation.clone()).await?;
-            if !observation.has_token_usage() {
-                completion.cost_micros = None;
-                return Ok(completion);
+            let outcome = self
+                .dispatch_reserved(
+                    &reservation,
+                    prepared,
+                    lease.as_ref().and_then(OwnedSlot::lease),
+                )
+                .await;
+            if let Some(lease) = lease {
+                lease.release().await;
             }
-            self.ledger
-                .settle(&reservation, observation.clone(), &self.prices.version())
-                .await?;
-            completion.cost_micros = Some(reservation.price.actual_cost_micros(&observation)?);
-            Ok(completion)
+            outcome
         })
+    }
+}
+
+impl<G: AiGateway> MeteredGateway<G> {
+    /// Dispatches one reserved call, keeping the concurrency lease alive for
+    /// long calls, and accounts the result exactly as usual. Admission never
+    /// changes reservation, settlement or ledger numbers: it only decides
+    /// whether dispatch happens and when a fenced holder must stop.
+    async fn dispatch_reserved(
+        &self,
+        reservation: &UsageReservation,
+        prepared: PreparedCompletionRequest,
+        lease: Option<&SlotLease>,
+    ) -> Result<GatewayCompletion, AiError> {
+        let dispatched = if let (Some(admission), Some(lease)) = (&self.admission, lease) {
+            match renew_while(
+                admission.as_ref(),
+                lease,
+                self.inner.complete_prepared(prepared),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    // The lease was fenced out mid-call and the dispatch
+                    // future is dropped: the call stops before further
+                    // provider liability. What reached the provider is
+                    // unknown, so the reservation is held for reconciliation
+                    // and never released as zero liability.
+                    tracing::warn!(%error, "AI concurrency lease lost during dispatch");
+                    self.ledger
+                        .unresolved(reservation, None, "admission_lease_lost")
+                        .await?;
+                    return Err(AiError::AdmissionLeaseLost);
+                }
+            }
+        } else {
+            self.inner.complete_prepared(prepared).await
+        };
+        let mut completion = match dispatched {
+            Ok(completion) => completion,
+            Err(AiError::ProviderRejected { status }) => {
+                self.ledger
+                    .void_zero_liability(
+                        reservation,
+                        ZeroLiabilityProof::ProviderRejected { status },
+                    )
+                    .await?;
+                return Err(AiError::ProviderRejected { status });
+            }
+            Err(AiError::ProviderRejectedSubscriptionLimit { status }) => {
+                self.ledger
+                    .void_zero_liability(
+                        reservation,
+                        ZeroLiabilityProof::ProviderRejected { status },
+                    )
+                    .await?;
+                return Err(AiError::SubscriptionLimit);
+            }
+            Err(error) => {
+                self.ledger
+                    .unresolved(reservation, None, "provider_outcome_ambiguous")
+                    .await?;
+                return Err(error);
+            }
+        };
+        let observation = UsageObservation {
+            input_tokens: completion.input_tokens,
+            output_tokens: completion.output_tokens,
+            reasoning_tokens: completion.reasoning_tokens,
+            commercial_units: None,
+            provider_request_id: completion.provider_request_id.clone(),
+            provider_response_id: completion.provider_response_id.clone(),
+        };
+        observe_or_hold(self.ledger.as_ref(), reservation, observation.clone()).await?;
+        if !observation.has_token_usage() {
+            completion.cost_micros = None;
+            return Ok(completion);
+        }
+        self.ledger
+            .settle(reservation, observation.clone(), &self.prices.version())
+            .await?;
+        completion.cost_micros = Some(reservation.price.actual_cost_micros(&observation)?);
+        Ok(completion)
     }
 }
 
@@ -816,6 +961,7 @@ mod tests {
     fn sample_reservation() -> UsageReservation {
         UsageReservation {
             id: Uuid::from_u128(42),
+            workspace_id: WorkspaceId::new(Uuid::from_u128(7)),
             period_start: NaiveDate::from_ymd_opt(2026, 10, 1).expect("valid date"),
             reserved_cost_micros: 100,
             price: UsagePriceSnapshot {
