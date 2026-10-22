@@ -7,7 +7,7 @@ mod origin_guard;
 pub mod routes;
 pub mod state;
 
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::future::Future;
 use uuid::Uuid;
 
@@ -87,6 +87,172 @@ pub async fn legacy_actor_list(config: &ApiConfig) -> anyhow::Result<String> {
     let pool = database_pool(config).await?;
     let decisions = deepref_app::list_legacy_actor_decisions(&pool).await?;
     Ok(serde_json::to_string_pretty(&decisions)?)
+}
+
+/// Read-only reconciliation report for AI reservations. The durable
+/// workspace-scoped worker owns settlement; this operator command reports
+/// mismatches and never modifies or releases a reservation.
+pub async fn ai_usage_reconcile(
+    config: &ApiConfig,
+    workspace_id: Option<Uuid>,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let rows = sqlx::query(
+        "SELECT w.id AS workspace_id,
+                COUNT(r.id) FILTER (WHERE r.state = 'open') AS open,
+                COUNT(r.id) FILTER (WHERE r.state = 'observed') AS observed,
+                COUNT(r.id) FILTER (WHERE r.state = 'unresolved') AS unresolved,
+                COUNT(r.id) FILTER (WHERE r.state IN ('open','observed','unresolved')
+                  AND r.job_id IS NOT NULL
+                  AND (j.id IS NULL
+                    OR (j.claim_seq <> r.attempt_fence
+                        AND (j.state <> 'running' OR j.lease_owner IS NOT NULL))
+                    OR (j.state <> 'running' AND j.lease_owner IS NULL AND j.leased_until IS NULL))) AS stale_fenced
+         FROM workspaces w
+         LEFT JOIN ai_usage_reservations r ON r.workspace_id = w.id
+         LEFT JOIN jobs j ON j.id = r.job_id
+         WHERE ($1::uuid IS NULL OR w.id = $1)
+         GROUP BY w.id ORDER BY w.id",
+    )
+    .bind(workspace_id)
+    .fetch_all(&pool)
+    .await?;
+    let reports = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "workspace_id": row.get::<Uuid, _>("workspace_id"),
+                "open": row.get::<i64, _>("open"),
+                "observed": row.get::<i64, _>("observed"),
+                "unresolved": row.get::<i64, _>("unresolved"),
+                "stale_fenced": row.get::<i64, _>("stale_fenced"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string_pretty(&reports)?)
+}
+
+pub async fn ai_usage_waive_overage(
+    config: &ApiConfig,
+    workspace_id: Uuid,
+    operator_user_id: Uuid,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    deepref_app::waive_ai_usage_overage(
+        &pool,
+        deepref_domain::WorkspaceId::new(workspace_id),
+        deepref_domain::UserId::new(operator_user_id),
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "workspace_id": workspace_id,
+        "waived": true,
+    }))?)
+}
+
+pub async fn ai_usage_set_cap(
+    config: &ApiConfig,
+    scope_kind: &str,
+    scope_id: Option<Uuid>,
+    limit_micros: i64,
+    operator_user_id: Uuid,
+) -> anyhow::Result<String> {
+    let scope = match (scope_kind, scope_id) {
+        ("platform", None) => deepref_app::AiUsageLimitScope::Platform,
+        ("workspace", Some(id)) => {
+            deepref_app::AiUsageLimitScope::Workspace(deepref_domain::WorkspaceId::new(id))
+        }
+        ("project", Some(id)) => {
+            deepref_app::AiUsageLimitScope::Project(deepref_domain::ProjectId::new(id))
+        }
+        _ => anyhow::bail!("scope and scope id do not match"),
+    };
+    let pool = database_pool(config).await?;
+    deepref_app::set_ai_usage_cap(
+        &pool,
+        scope,
+        limit_micros,
+        deepref_domain::UserId::new(operator_user_id),
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "scope_kind": scope_kind,
+        "scope_id": scope_id,
+        "limit_micros": limit_micros,
+        "changed": true,
+    }))?)
+}
+
+pub async fn ai_usage_backfill(config: &ApiConfig, batch_size: usize) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let summary = deepref_app::backfill_ai_usage_legacy(&pool, batch_size).await?;
+    Ok(serde_json::to_string_pretty(&summary)?)
+}
+
+pub async fn ai_usage_enable_hard_caps(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+    quiet_window_seconds: u64,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    deepref_app::enable_ai_hard_caps(
+        &pool,
+        deepref_domain::UserId::new(operator_user_id),
+        quiet_window_seconds,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_hard_caps_enforced": true,
+        "quiet_window_seconds": quiet_window_seconds,
+    }))?)
+}
+
+pub async fn ai_usage_disable_hard_caps(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    deepref_app::disable_ai_hard_caps(&pool, deepref_domain::UserId::new(operator_user_id)).await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_hard_caps_enforced": false,
+    }))?)
+}
+
+pub async fn ai_usage_resolve(
+    config: &ApiConfig,
+    reservation_id: Uuid,
+    operator_user_id: Uuid,
+    actual_cost_micros: Option<i64>,
+    reason: Option<String>,
+) -> anyhow::Result<String> {
+    let resolution = match (actual_cost_micros, reason) {
+        (Some(actual_cost_micros), None) => {
+            deepref_app::AiUsageResolution::Settle { actual_cost_micros }
+        }
+        (None, Some(reason)) => deepref_app::AiUsageResolution::Void { reason },
+        _ => anyhow::bail!("provide exactly one of --settle or --void --reason"),
+    };
+    let pool = database_pool(config).await?;
+    deepref_app::resolve_ai_usage_reservation(
+        &pool,
+        reservation_id,
+        deepref_domain::UserId::new(operator_user_id),
+        resolution.clone(),
+    )
+    .await?;
+    let result = match resolution {
+        deepref_app::AiUsageResolution::Settle { actual_cost_micros } => serde_json::json!({
+            "reservation_id": reservation_id,
+            "resolution": "settle",
+            "actual_cost_micros": actual_cost_micros,
+        }),
+        deepref_app::AiUsageResolution::Void { reason } => serde_json::json!({
+            "reservation_id": reservation_id,
+            "resolution": "void",
+            "reason": reason,
+        }),
+    };
+    Ok(serde_json::to_string_pretty(&result)?)
 }
 
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
@@ -185,13 +351,14 @@ pub async fn serve_with_shutdown(
 
 /// The built-in price table plus the `DEEPREF_AI_MODEL_PRICES` overrides.
 fn price_book(config: &deepref_config::AiProviderConfig) -> deepref_ai::PriceBook {
-    deepref_ai::PriceBook::new(config.price_overrides.iter().map(|price| {
+    deepref_ai::PriceBook::new(config.model_price_table().into_iter().map(|price| {
         (
-            price.provider.clone(),
-            price.model.clone(),
+            price.provider,
+            price.model,
             deepref_ai::ModelPrice {
                 input_micros_per_million_tokens: price.input_micros_per_million_tokens,
                 output_micros_per_million_tokens: price.output_micros_per_million_tokens,
+                reasoning_micros_per_million_tokens: price.reasoning_micros_per_million_tokens,
             },
         )
     }))

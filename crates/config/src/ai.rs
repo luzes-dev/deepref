@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use secrecy::{ExposeSecret, SecretString};
 
@@ -12,6 +12,13 @@ pub const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 pub const DEFAULT_AI_MODEL: &str = "glm-5.3-flash";
 
 const PRICES_VARIABLE: &str = "DEEPREF_AI_MODEL_PRICES";
+const CONFIGURED_MODEL_PRICES: [(&str, i64, i64); 4] = [
+    // Provider rates live in configuration, not in the AI gateway abstraction.
+    ("glm-5.3-flash", 150_000, 500_000),
+    ("glm-5.3", 1_400_000, 4_400_000),
+    ("kimi-k2.6", 950_000, 4_000_000),
+    ("deepseek-v4-flash", 140_000, 280_000),
+];
 const ZAI_SELECTED_NOTICE: &str = "DEEPREF_AI_PROVIDER=zai selects Z.AI, which is retired. Use OpenCode Go (the default) instead; ZAI_API_KEY and ZAI_BASE_URL are deprecated.";
 const ZAI_IGNORED_NOTICE: &str = "ZAI_API_KEY and ZAI_BASE_URL are deprecated and ignored. Set OPENCODE_API_KEY for OpenCode Go, or DEEPREF_AI_PROVIDER=zai to keep the legacy Z.AI provider.";
 
@@ -52,13 +59,14 @@ impl AiProviderKind {
 
 /// A price for one provider and model, in US dollars per million tokens as
 /// written in `DEEPREF_AI_MODEL_PRICES` (for example
-/// `opencode-go/glm-5.3=1.40:4.40`), stored as micro-dollars.
+/// `opencode-go/glm-5.3=1.40:4.40[:reasoning]`), stored as micro-dollars.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelPriceOverride {
     pub provider: String,
     pub model: String,
     pub input_micros_per_million_tokens: i64,
     pub output_micros_per_million_tokens: i64,
+    pub reasoning_micros_per_million_tokens: Option<i64>,
 }
 
 /// AI provider settings. API keys are never printed: `Debug` redacts them and
@@ -157,6 +165,29 @@ impl AiProviderConfig {
     pub fn deprecations(&self) -> &[&'static str] {
         &self.deprecations
     }
+
+    /// The configured provider/model prices plus explicit environment
+    /// overrides. Returned entries can be converted into the generic AI
+    /// `PriceBook` without putting provider rate values in that crate.
+    pub fn model_price_table(&self) -> Vec<ModelPriceOverride> {
+        let mut prices = BTreeMap::new();
+        for provider in ["opencode-go", "zai"] {
+            for (model, input, output) in CONFIGURED_MODEL_PRICES {
+                let entry = ModelPriceOverride {
+                    provider: provider.to_owned(),
+                    model: model.to_owned(),
+                    input_micros_per_million_tokens: input,
+                    output_micros_per_million_tokens: output,
+                    reasoning_micros_per_million_tokens: None,
+                };
+                prices.insert((entry.provider.clone(), entry.model.clone()), entry);
+            }
+        }
+        for entry in &self.price_overrides {
+            prices.insert((entry.provider.clone(), entry.model.clone()), entry.clone());
+        }
+        prices.into_values().collect()
+    }
 }
 
 fn invalid_price(reason: &str) -> ConfigError {
@@ -166,8 +197,8 @@ fn invalid_price(reason: &str) -> ConfigError {
     }
 }
 
-/// Parses `provider/model=input:output` entries separated by commas. Prices are
-/// US dollars per million tokens.
+/// Parses `provider/model=input:output[:reasoning]` entries separated by
+/// commas. Prices are US dollars per million tokens.
 fn parse_price_overrides(raw: Option<&str>) -> Result<Vec<ModelPriceOverride>, ConfigError> {
     let Some(raw) = raw else {
         return Ok(Vec::new());
@@ -180,19 +211,26 @@ fn parse_price_overrides(raw: Option<&str>) -> Result<Vec<ModelPriceOverride>, C
 }
 
 fn parse_price_override(entry: &str) -> Result<ModelPriceOverride, ConfigError> {
-    const SHAPE: &str = "entries look like provider/model=input:output";
+    const SHAPE: &str = "entries look like provider/model=input:output[:reasoning]";
     let (route, prices) = entry.split_once('=').ok_or_else(|| invalid_price(SHAPE))?;
     let (provider, model) = route
         .split_once('/')
         .map(|(provider, model)| (provider.trim(), model.trim()))
         .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
         .ok_or_else(|| invalid_price(SHAPE))?;
-    let (input, output) = prices.split_once(':').ok_or_else(|| invalid_price(SHAPE))?;
+    let mut rates = prices.split(':');
+    let input = rates.next().ok_or_else(|| invalid_price(SHAPE))?;
+    let output = rates.next().ok_or_else(|| invalid_price(SHAPE))?;
+    let reasoning = rates.next();
+    if rates.next().is_some() {
+        return Err(invalid_price(SHAPE));
+    }
     Ok(ModelPriceOverride {
         provider: provider.to_owned(),
         model: model.to_owned(),
         input_micros_per_million_tokens: usd_to_micros(input)?,
         output_micros_per_million_tokens: usd_to_micros(output)?,
+        reasoning_micros_per_million_tokens: reasoning.map(usd_to_micros).transpose()?,
     })
 }
 
@@ -322,14 +360,43 @@ mod tests {
                     model: "glm-5.3".to_owned(),
                     input_micros_per_million_tokens: 1_400_000,
                     output_micros_per_million_tokens: 4_400_000,
+                    reasoning_micros_per_million_tokens: None,
                 },
                 ModelPriceOverride {
                     provider: "zai".to_owned(),
                     model: "glm-5.3-flash".to_owned(),
                     input_micros_per_million_tokens: 150_000,
                     output_micros_per_million_tokens: 500_000,
+                    reasoning_micros_per_million_tokens: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn configured_price_table_contains_provider_rates_and_applies_overrides() {
+        let config = load(&[(
+            "DEEPREF_AI_MODEL_PRICES",
+            "opencode-go/glm-5.3-flash=0.2:0.6:0.8",
+        )]);
+        let prices = config.model_price_table();
+        let find = |provider: &str, model: &str| {
+            prices
+                .iter()
+                .find(|entry| entry.provider == provider && entry.model == model)
+                .expect("configured route price")
+        };
+        assert_eq!(
+            find("opencode-go", "glm-5.3-flash").input_micros_per_million_tokens,
+            200_000
+        );
+        assert_eq!(
+            find("opencode-go", "glm-5.3-flash").reasoning_micros_per_million_tokens,
+            Some(800_000)
+        );
+        assert_eq!(
+            find("zai", "glm-5.3-flash").input_micros_per_million_tokens,
+            150_000
         );
     }
 

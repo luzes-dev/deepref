@@ -17,7 +17,8 @@ async fn database() -> Option<PgPool> {
 
 /// Every table named by REV-08, plus the migration 0026-0039 tables and the
 /// core project tables. Each one must hold rows before the delete, so the test
-/// shows the cascade actually ran over real data.
+/// shows the cascade actually ran over real data. AI usage facts are retained
+/// separately for the five-year billing and audit period.
 const SEEDED_TABLES: &[&str] = &[
     "projects",
     "project_reports",
@@ -46,6 +47,7 @@ const SEEDED_TABLES: &[&str] = &[
     "ai_activity",
     "ai_reviewer_decisions",
     "ai_usage_ledger",
+    "ai_usage_period_buckets",
     "project_ai_autonomy",
     "appraisal_assessments",
     "appraisal_assessment_evidence",
@@ -292,6 +294,9 @@ async fn deleting_a_populated_project_removes_every_row_that_belongs_to_it() {
     .await
     .expect("project tables list");
     for table in SEEDED_TABLES {
+        if *table == "ai_usage_ledger" {
+            continue;
+        }
         assert_eq!(
             count_rows(&pool, table, project_id).await,
             0,
@@ -299,12 +304,36 @@ async fn deleting_a_populated_project_removes_every_row_that_belongs_to_it() {
         );
     }
     for table in &project_tables {
+        if table == "ai_usage_ledger" {
+            continue;
+        }
         assert_eq!(
             count_rows(&pool, table, project_id).await,
             0,
             "{table} still holds rows for the deleted project"
         );
     }
+    assert_eq!(
+        count_rows(&pool, "ai_usage_ledger", project_id).await,
+        1,
+        "the five-year usage fact is retained after project deletion"
+    );
+    let retained_usage_cost: i64 =
+        sqlx::query_scalar("SELECT cost_micros FROM ai_usage_ledger WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .expect("retained usage fact is readable");
+    assert_eq!(retained_usage_cost, 100);
+    let project_limit_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM ai_usage_limits
+         WHERE scope_kind = 'project' AND scope_id = $1)",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("project limit existence query runs");
+    assert!(!project_limit_exists, "deleted project limit is removed");
 
     let mut tx = pool
         .begin()

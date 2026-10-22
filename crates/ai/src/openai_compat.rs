@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::{
     AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, GroundedBlock,
-    GroundingContextBuilder, ProviderEndpoint, canonical_json,
+    GroundingContextBuilder, PreparedCompletionRequest, ProviderEndpoint, canonical_json,
 };
 
 const MAX_ATTEMPTS: usize = 3;
@@ -109,19 +109,24 @@ impl OpenAiCompatGateway {
         format!("{}/chat/completions", self.base_url)
     }
 
-    fn request(&self, body: &Value, session: Option<&str>) -> reqwest::RequestBuilder {
+    fn request(&self, body: &[u8], session: Option<&str>) -> reqwest::RequestBuilder {
         let mut request = self
             .client
             .post(self.endpoint())
             .bearer_auth(&self.api_key)
-            .json(body);
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_vec());
         if let (Some(header), Some(session)) = (self.dialect.session_header(), session) {
             request = request.header(header, session);
         }
         request
     }
 
-    async fn post(&self, body: &Value, session: Option<&str>) -> Result<Value, AiError> {
+    async fn post(
+        &self,
+        body: &[u8],
+        session: Option<&str>,
+    ) -> Result<(Value, Option<String>), AiError> {
         let mut last_error = AiError::Gateway("provider request failed".to_owned());
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
@@ -142,14 +147,23 @@ impl OpenAiCompatGateway {
                     } else {
                         "provider is unreachable".to_owned()
                     });
-                    continue;
+                    // A timeout can happen after the provider accepted the
+                    // request; retrying could create duplicate billable work.
+                    return Err(last_error);
                 }
             };
             let status = response.status();
             if status.is_success() {
-                return response.json::<Value>().await.map_err(|_| {
+                let request_id = response
+                    .headers()
+                    .get("x-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(provider_identifier);
+                let body = response.json::<Value>().await.map_err(|_| {
                     AiError::Gateway("provider returned an unreadable body".to_owned())
-                });
+                })?;
+                let request_id = request_id.or_else(|| revision_label(body.get("request_id")));
+                return Ok((body, request_id));
             }
             let code = status.as_u16();
             // Provider error bodies describe the request, never the key.
@@ -208,21 +222,28 @@ fn subscription_limit_reached(code: u16, detail: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
-/// The request can succeed later on its own. Rate limits and server errors
-/// can. An empty balance or a spent plan cap cannot, so retrying only wastes
-/// time and money.
+/// Only an explicit rate-limit rejection is safe to retry: it proves the
+/// provider accepted no work. Server errors can follow accepted work.
 fn is_retryable(dialect: ProviderDialect, code: u16, detail: &str) -> bool {
     let spent = (dialect == ProviderDialect::Zai && zai_balance_exhausted(code, detail))
         || subscription_limit_reached(code, detail);
-    !spent && (code == 429 || (500..600).contains(&code))
+    !spent && code == 429
 }
 
 fn gateway_status_error(dialect: ProviderDialect, code: u16, detail: &str) -> AiError {
+    // A 408 may be emitted after the request reached a provider-side worker;
+    // without usage evidence, retain the reservation as ambiguous liability.
+    if code == 408 {
+        return AiError::Gateway("provider request timed out with an unknown outcome".to_owned());
+    }
     if dialect == ProviderDialect::Zai && zai_balance_exhausted(code, detail) {
-        return AiError::Gateway("provider account has insufficient balance".to_owned());
+        return AiError::ProviderRejected { status: code };
     }
     if subscription_limit_reached(code, detail) {
-        return AiError::SubscriptionLimit;
+        return AiError::ProviderRejectedSubscriptionLimit { status: code };
+    }
+    if (400..500).contains(&code) {
+        return AiError::ProviderRejected { status: code };
     }
     AiError::Gateway(match code {
         401 | 403 => "provider rejected the credentials".to_owned(),
@@ -231,14 +252,21 @@ fn gateway_status_error(dialect: ProviderDialect, code: u16, detail: &str) -> Ai
     })
 }
 
-fn usage(response: &Value) -> (u64, u64) {
+fn usage(response: &Value) -> (Option<u64>, Option<u64>, Option<u64>) {
     let read = |key: &str| {
         response
             .pointer(&format!("/usage/{key}"))
             .and_then(Value::as_u64)
-            .unwrap_or(0)
     };
-    (read("prompt_tokens"), read("completion_tokens"))
+    let reasoning = response
+        .pointer("/usage/completion_tokens_details/reasoning_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            response
+                .pointer("/usage/reasoning_tokens")
+                .and_then(Value::as_u64)
+        });
+    (read("prompt_tokens"), read("completion_tokens"), reasoning)
 }
 
 /// The longest provider revision label kept. Model names and fingerprints are far shorter.
@@ -264,6 +292,12 @@ fn revision_label(value: Option<&Value>) -> Option<String> {
         && text.len() <= MAX_REVISION_LABEL_BYTES
         && !text.chars().any(char::is_control);
     usable.then(|| text.to_owned())
+}
+
+fn provider_identifier(value: &str) -> Option<String> {
+    let text = value.trim();
+    (!text.is_empty() && text.len() <= 256 && !text.chars().any(char::is_control))
+        .then(|| text.to_owned())
 }
 
 /// Models sometimes wrap JSON in a Markdown fence even in JSON mode.
@@ -299,10 +333,19 @@ fn base_body(
     if let Some(max_tokens) = max_tokens.or(route.parameters.max_tokens) {
         body["max_tokens"] = json!(max_tokens);
     }
-    for (key, value) in &route.parameters.additional {
-        body[key] = value.clone();
-    }
     body
+}
+
+fn validate_metered_parameters(route: &crate::ResolvedModel) -> Result<(), AiError> {
+    if route.parameters.additional.is_empty() {
+        return Ok(());
+    }
+    // This capability set declares no provider-specific extensions. Reject
+    // every extension so a newly added billable field cannot bypass pricing.
+    Err(AiError::UnsupportedUsageRoute {
+        provider: route.provider.clone(),
+        model: route.model.clone(),
+    })
 }
 
 fn session_id(project_id: Option<ProjectId>) -> Option<String> {
@@ -345,19 +388,52 @@ pub fn structured_request_body(
 }
 
 impl AiGateway for OpenAiCompatGateway {
+    fn prepare(&self, request: CompletionRequest) -> Result<PreparedCompletionRequest, AiError> {
+        request.route.validate()?;
+        if request.route.provider != self.dialect.id() {
+            return Err(AiError::UnsupportedUsageRoute {
+                provider: request.route.provider.clone(),
+                model: request.route.model.clone(),
+            });
+        }
+        validate_metered_parameters(&request.route)?;
+        if request
+            .route
+            .parameters
+            .max_tokens
+            .is_none_or(|tokens| tokens == 0)
+        {
+            return Err(AiError::UnboundedOutput);
+        }
+        let body = structured_request_body(
+            self.dialect,
+            &request.route,
+            &request.system_prompt,
+            &request.user_prompt,
+            &request.evidence,
+            &request.schema,
+        );
+        let serialized_body = serde_json::to_vec(&body).map_err(|_| AiError::UnboundedInput)?;
+        Ok(PreparedCompletionRequest::new(request, serialized_body))
+    }
+
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
-            request.route.validate()?;
-            let body = structured_request_body(
-                self.dialect,
-                &request.route,
-                &request.system_prompt,
-                &request.user_prompt,
-                &request.evidence,
-                &request.schema,
-            );
+            let prepared = self.prepare(request)?;
+            self.complete_prepared(prepared).await
+        })
+    }
+
+    fn complete_prepared<'a>(
+        &'a self,
+        prepared: PreparedCompletionRequest,
+    ) -> AiFuture<'a, GatewayCompletion> {
+        Box::pin(async move {
+            let request = prepared.request;
             let session = session_id(request.project_id);
-            let response = self.post(&body, session.as_deref()).await?;
+            let (response, provider_request_id) = self
+                .post(&prepared.serialized_body, session.as_deref())
+                .await?;
             let content = response
                 .pointer("/choices/0/message/content")
                 .and_then(Value::as_str)
@@ -366,14 +442,17 @@ impl AiGateway for OpenAiCompatGateway {
                     tracing::warn!(finish_reason = ?response.pointer("/choices/0/finish_reason"), "AI provider returned no structured text");
                     AiError::Gateway("provider returned no structured text".to_owned())
                 })?;
-            let (input_tokens, output_tokens) = usage(&response);
+            let (input_tokens, output_tokens, reasoning_tokens) = usage(&response);
             let (served_model, system_fingerprint) = provider_revision(&response);
             tracing::debug!(ai.provider = %request.route.provider, ai.model = %request.route.model, "structured completion finished");
             Ok(GatewayCompletion {
                 output_json: strip_code_fence(content).to_owned(),
                 input_tokens,
                 output_tokens,
+                reasoning_tokens,
                 cost_micros: None,
+                provider_request_id,
+                provider_response_id: revision_label(response.get("id")),
                 served_model,
                 system_fingerprint,
             })
@@ -390,6 +469,7 @@ mod tests {
 
     use super::*;
     use crate::{ModelParameters, ModelProfile, ResolvedModel};
+    use deepref_domain::DocumentBlockId;
 
     #[test]
     fn a_zai_empty_balance_is_reported_as_such_and_not_retried() {
@@ -397,7 +477,7 @@ mod tests {
             r#"{"error":{"code":"1113","message":"Insufficient balance or no resource package."}}"#;
         assert_eq!(
             gateway_status_error(ProviderDialect::Zai, 429, body),
-            AiError::Gateway("provider account has insufficient balance".to_owned())
+            AiError::ProviderRejected { status: 429 }
         );
         assert!(!is_retryable(ProviderDialect::Zai, 429, body));
         assert!(is_retryable(
@@ -405,11 +485,11 @@ mod tests {
             429,
             r#"{"error":{"code":"1302","message":"Rate limit"}}"#
         ));
-        assert!(is_retryable(ProviderDialect::Zai, 503, ""));
+        assert!(!is_retryable(ProviderDialect::Zai, 503, ""));
         assert!(!is_retryable(ProviderDialect::Zai, 400, ""));
         assert_eq!(
             gateway_status_error(ProviderDialect::Zai, 429, "not json"),
-            AiError::Gateway("provider rate limit reached".to_owned())
+            AiError::ProviderRejected { status: 429 }
         );
     }
 
@@ -427,7 +507,7 @@ mod tests {
         ] {
             assert_eq!(
                 gateway_status_error(ProviderDialect::OpenCodeGo, code, body),
-                AiError::SubscriptionLimit,
+                AiError::ProviderRejectedSubscriptionLimit { status: code },
                 "{code} {body}"
             );
             assert!(
@@ -442,7 +522,7 @@ mod tests {
         let rate = r#"{"error":{"message":"Rate limit reached for requests, retry in 2s"}}"#;
         assert_eq!(
             gateway_status_error(ProviderDialect::OpenCodeGo, 429, rate),
-            AiError::Gateway("provider rate limit reached".to_owned())
+            AiError::ProviderRejected { status: 429 }
         );
         assert!(is_retryable(ProviderDialect::OpenCodeGo, 429, rate));
         assert_eq!(
@@ -451,7 +531,7 @@ mod tests {
                 403,
                 r#"{"error":"invalid api key"}"#
             ),
-            AiError::Gateway("provider rejected the credentials".to_owned())
+            AiError::ProviderRejected { status: 403 }
         );
         assert!(!is_retryable(
             ProviderDialect::OpenCodeGo,
@@ -461,7 +541,20 @@ mod tests {
         // A 402 on OpenCode is a spent plan, not Z.AI's balance wording.
         assert_eq!(
             gateway_status_error(ProviderDialect::OpenCodeGo, 402, ""),
-            AiError::SubscriptionLimit
+            AiError::ProviderRejectedSubscriptionLimit { status: 402 }
+        );
+    }
+
+    #[test]
+    fn request_timeout_is_ambiguous_and_cannot_prove_zero_liability() {
+        assert!(matches!(
+            gateway_status_error(ProviderDialect::OpenCodeGo, 408, ""),
+            AiError::Gateway(message) if message.contains("unknown outcome")
+        ));
+        assert!(
+            crate::ZeroLiabilityProof::ProviderRejected { status: 408 }
+                .validate()
+                .is_err()
         );
     }
 
@@ -525,6 +618,94 @@ mod tests {
     }
 
     #[test]
+    fn metered_prepare_refuses_every_provider_override() {
+        for (key, value) in [
+            ("model", json!("other-model")),
+            ("messages", json!([])),
+            ("max_tokens", json!(1_000_000)),
+            ("max_output_tokens", json!(1_000_000)),
+            ("reasoning_budget", json!(1_000_000)),
+            ("reasoning_effort", json!("high")),
+            ("n", json!(10)),
+            ("tools", json!([])),
+        ] {
+            let mut route = route("glm-5.3-flash");
+            route.parameters.max_tokens = Some(64);
+            route.parameters.additional.insert(key.to_owned(), value);
+            let gateway = OpenAiCompatGateway::new(
+                ProviderDialect::OpenCodeGo,
+                "https://example.test",
+                "test-key",
+            )
+            .unwrap_or_else(|_| unreachable!());
+            let request = CompletionRequest {
+                project_id: None,
+                usage_context: None,
+                route,
+                system_prompt: "system".to_owned(),
+                user_prompt: "user".to_owned(),
+                evidence: Vec::new(),
+                schema: json!({"type": "object"}),
+            };
+            assert!(
+                matches!(
+                    gateway.prepare(request),
+                    Err(AiError::UnsupportedUsageRoute { .. })
+                ),
+                "provider override {key} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn serialized_body_bound_includes_escaping_applied_to_the_prompt() {
+        let mut route = route("glm-5.3-flash");
+        route.parameters.max_tokens = Some(64);
+        let gateway = OpenAiCompatGateway::new(
+            ProviderDialect::OpenCodeGo,
+            "https://example.test",
+            "test-key",
+        )
+        .unwrap_or_else(|_| unreachable!());
+        let request = CompletionRequest {
+            project_id: None,
+            usage_context: None,
+            route,
+            system_prompt: "system".to_owned(),
+            user_prompt: "quotes: \" \\ newline:\n control:\u{1}".to_owned(),
+            evidence: vec![GroundedBlock {
+                evidence: crate::EvidenceRef::new(
+                    DocumentBlockId::new(uuid::Uuid::from_u128(7)),
+                    1,
+                    "a".repeat(64),
+                )
+                .unwrap_or_else(|_| unreachable!())
+                .with_retrieval(1, 1.0)
+                .unwrap_or_else(|_| unreachable!()),
+                text: "quoted: \" \\ </evidence>\n".to_owned(),
+                retrieval_rank: 1,
+                retrieval_score: 1.0,
+            }],
+            schema: json!({"type": "object"}),
+        };
+        let prepared = gateway.prepare(request).unwrap_or_else(|_| unreachable!());
+        let body = serde_json::from_slice::<Value>(&prepared.serialized_body)
+            .unwrap_or_else(|_| unreachable!());
+        let escaped_user = serde_json::to_vec(body.pointer("/messages/1/content").unwrap())
+            .unwrap_or_else(|_| unreachable!());
+        assert!(prepared.serialized_body.len() as u64 >= escaped_user.len() as u64);
+        assert!(
+            body.pointer("/messages/1/content")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("\\u003c/evidence\\u003e"))
+        );
+        assert_eq!(
+            prepared.serialized_body,
+            serde_json::to_vec(&body).unwrap_or_else(|_| unreachable!())
+        );
+    }
+
+    #[test]
     fn only_opencode_takes_the_session_header() {
         assert_eq!(
             ProviderDialect::OpenCodeGo.session_header(),
@@ -534,12 +715,16 @@ mod tests {
     }
 
     fn streaming_route() -> crate::ResolvedModel {
+        let parameters = crate::ModelParameters {
+            max_tokens: Some(64),
+            ..crate::ModelParameters::default()
+        };
         crate::ResolvedModel {
             profile: crate::ModelProfile::Reasoning,
             provider: "opencode-go".to_owned(),
             model: "glm-5.3-flash".to_owned(),
             model_version: "glm-5.3-flash".to_owned(),
-            parameters: crate::ModelParameters::default(),
+            parameters,
             route_id: None,
         }
     }
@@ -611,7 +796,14 @@ mod tests {
             .unwrap_or_else(|_| unreachable!());
         let request = CompletionRequest {
             project_id: Some(ProjectId::new(uuid::Uuid::from_u128(9))),
-            route: streaming_route(),
+            usage_context: None,
+            route: {
+                let mut route = streaming_route();
+                route.provider = "zai".to_owned();
+                route.model = "glm-5.3".to_owned();
+                route.model_version = "glm-5.3".to_owned();
+                route
+            },
             system_prompt: "system".to_owned(),
             user_prompt: "user".to_owned(),
             evidence: Vec::new(),
@@ -622,7 +814,10 @@ mod tests {
             .await
             .unwrap_or_else(|_| unreachable!());
         assert_eq!(completion.output_json, "{\"ok\":true}");
-        assert_eq!((completion.input_tokens, completion.output_tokens), (3, 4));
+        assert_eq!(
+            (completion.input_tokens, completion.output_tokens),
+            (Some(3), Some(4))
+        );
         assert_eq!(completion.cost_micros, None);
     }
 
@@ -661,6 +856,7 @@ mod tests {
             .unwrap_or_else(|_| unreachable!());
         let request = CompletionRequest {
             project_id: None,
+            usage_context: None,
             route: streaming_route(),
             system_prompt: "system".to_owned(),
             user_prompt: "user".to_owned(),

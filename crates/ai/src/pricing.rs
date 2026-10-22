@@ -1,122 +1,307 @@
-//! Per-model price table used to estimate the cost of every model call.
+//! Explicit per-route prices and the provider facts needed to bound them.
 //!
-//! Prices are micro-dollars (1e-6 USD) per one million tokens. Providers
-//! return token counts but not cost, so cost is always an estimate.
-//!
-//! The OpenCode Go subscription is a flat monthly fee with dollar caps per
-//! model, not a per-token bill. The per-project budget is therefore a soft
-//! guard in USD-equivalent: each call is priced at the published per-token
-//! rate for its model, so the budget tracks how much subscription a project
-//! has used. Configuration can override any provider and model.
+//! Missing routes are unsupported. Adding a price alone never makes a route
+//! billable: it also needs a reviewed capability entry below.
 
 use std::collections::BTreeMap;
+
+use crate::AiError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelPrice {
     pub input_micros_per_million_tokens: i64,
     pub output_micros_per_million_tokens: i64,
+    /// No currently supported route bills reasoning separately. A non-`None`
+    /// value therefore makes that route unsupported until its billing contract
+    /// is reviewed and added to [`RouteCapabilities`].
+    pub reasoning_micros_per_million_tokens: Option<i64>,
 }
 
-/// glm-5.3-flash: US$0.15 / 1M input tokens, US$0.50 / 1M output tokens. This
-/// is OpenCode's published price (https://opencode.ai/docs/zen) and matches
-/// Z.AI's. Cached-input discounts (US$0.03 / 1M) are ignored, so cost is a
-/// slight over-estimate, which is the safe direction for a spending cap.
-pub const GLM_5_3_FLASH_PRICE: ModelPrice = ModelPrice {
-    input_micros_per_million_tokens: 150_000,
-    output_micros_per_million_tokens: 500_000,
-};
+/// Facts that make a provider route safe to meter. The table intentionally
+/// repeats entries per provider/model so adding a model requires an explicit
+/// review of every billable component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RouteCapabilities {
+    /// DeepRef sends this value as `max_tokens` on every call. This is a
+    /// stricter local ceiling than the provider's documented maximum.
+    pub max_output_tokens: u64,
+    /// Reasoning tokens are part of the provider's output-token meter and are
+    /// bounded by the same enforced `max_tokens` value.
+    pub reasoning_included_in_output: bool,
+    /// Prompt, declared function tools and returned tool-call arguments are
+    /// charged through input/output token counts. Hosted search, retrieval,
+    /// image, audio, and other separately billed tools are not enabled.
+    pub billable_components: BillableComponents,
+    /// Maximum fixed bytes added by the published provider template, including
+    /// its system/tool preamble and generation markers. Derived from the
+    /// linked route source and rounded up with the route's other template
+    /// overhead to keep the admission calculation stable.
+    pub template_overhead_bytes: u64,
+    /// Maximum per-message role, separator and end marker bytes added by the
+    /// provider's published template.
+    pub per_message_overhead_bytes: u64,
+    /// Maximum fixed wrapper bytes for each declared tool or prior tool call.
+    pub per_tool_wrapper_bytes: u64,
+    /// Maximum fixed wrapper bytes for each serialized tool-call argument.
+    pub per_tool_argument_wrapper_bytes: u64,
+}
 
-/// glm-5.3: US$1.40 / 1M input, US$4.40 / 1M output (OpenCode's published price).
-pub const GLM_5_3_PRICE: ModelPrice = ModelPrice {
-    input_micros_per_million_tokens: 1_400_000,
-    output_micros_per_million_tokens: 4_400_000,
-};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillableComponents {
+    TextTokensAndFunctionTools,
+}
 
-/// kimi-k2.6: US$0.95 / 1M input, US$4.00 / 1M output (OpenCode's published price).
-pub const KIMI_K2_6_PRICE: ModelPrice = ModelPrice {
-    input_micros_per_million_tokens: 950_000,
-    output_micros_per_million_tokens: 4_000_000,
-};
+const OUTPUT_CAP: u64 = 2_048;
+const fn text_function_route(
+    template_overhead_bytes: u64,
+    per_message_overhead_bytes: u64,
+    per_tool_wrapper_bytes: u64,
+    per_tool_argument_wrapper_bytes: u64,
+) -> RouteCapabilities {
+    RouteCapabilities {
+        max_output_tokens: OUTPUT_CAP,
+        reasoning_included_in_output: true,
+        billable_components: BillableComponents::TextTokensAndFunctionTools,
+        template_overhead_bytes,
+        per_message_overhead_bytes,
+        per_tool_wrapper_bytes,
+        per_tool_argument_wrapper_bytes,
+    }
+}
 
-/// deepseek-v4-flash: US$0.14 / 1M input, US$0.28 / 1M output (OpenCode's published price).
-pub const DEEPSEEK_V4_FLASH_PRICE: ModelPrice = ModelPrice {
-    input_micros_per_million_tokens: 140_000,
-    output_micros_per_million_tokens: 280_000,
-};
+// The rounded source-derived byte ceilings are documented per route in
+// docs/ai-usage.md. Each source family has a separate capability value so a
+// route cannot inherit a template bound without an explicit review entry.
+const GLM_53: RouteCapabilities = text_function_route(1_024, 128, 128, 64);
+const GLM_53_FLASH: RouteCapabilities = text_function_route(1_024, 128, 128, 64);
+const KIMI_K2_6: RouteCapabilities = text_function_route(512, 128, 128, 64);
+const DEEPSEEK_V4_FLASH: RouteCapabilities = text_function_route(2_048, 128, 128, 128);
 
-/// Used for any model that is not in the table. Deliberately pessimistic so an
-/// unknown model can only exhaust the budget sooner, never later.
-pub const UNKNOWN_MODEL_PRICE: ModelPrice = ModelPrice {
-    input_micros_per_million_tokens: 3_000_000,
-    output_micros_per_million_tokens: 15_000_000,
-};
-
-/// Built-in prices by model id. The ids are the same on OpenCode Go and Z.AI.
-const PRICES_BY_MODEL: [(&str, ModelPrice); 4] = [
-    ("glm-5.3-flash", GLM_5_3_FLASH_PRICE),
-    ("glm-5.3", GLM_5_3_PRICE),
-    ("kimi-k2.6", KIMI_K2_6_PRICE),
-    ("deepseek-v4-flash", DEEPSEEK_V4_FLASH_PRICE),
+/// Explicit capability allowlist for the current chat-completions adapters.
+/// Inputs are bounded from the exact serialized request bytes; tokenizers are
+/// not assumed. Provider usage caches read tokens at a lower advertised rate,
+/// so charging all prompt tokens at the configured uncached input rate is a
+/// conservative upper bound. No hosted or separately billed tools are sent.
+const ROUTE_CAPABILITIES: &[((&str, &str), RouteCapabilities)] = &[
+    (("opencode-go", "glm-5.3-flash"), GLM_53_FLASH),
+    (("opencode-go", "glm-5.3"), GLM_53),
+    (("opencode-go", "kimi-k2.6"), KIMI_K2_6),
+    (("opencode-go", "deepseek-v4-flash"), DEEPSEEK_V4_FLASH),
+    (("zai", "glm-5.3"), GLM_53),
 ];
 
-pub fn price_for_model(model: &str) -> ModelPrice {
-    let model = model.trim().to_ascii_lowercase();
-    if model.starts_with("glm-5.3-flash-") {
-        return GLM_5_3_FLASH_PRICE;
-    }
-    PRICES_BY_MODEL
-        .iter()
-        .find(|(name, _)| *name == model)
-        .map_or(UNKNOWN_MODEL_PRICE, |(_, price)| *price)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RoutePrice {
+    price: ModelPrice,
+    capabilities: RouteCapabilities,
 }
 
-/// Estimated cost in micro-dollars, rounded up to the next micro-dollar.
-pub fn estimate_cost_micros(model: &str, input_tokens: u64, output_tokens: u64) -> i64 {
-    cost_micros(price_for_model(model), input_tokens, output_tokens)
-}
-
-fn cost_micros(price: ModelPrice, input_tokens: u64, output_tokens: u64) -> i64 {
-    let total = u128::from(input_tokens)
-        * u128::from(price.input_micros_per_million_tokens.unsigned_abs())
-        + u128::from(output_tokens)
-            * u128::from(price.output_micros_per_million_tokens.unsigned_abs());
-    i64::try_from(total.div_ceil(1_000_000)).unwrap_or(i64::MAX)
-}
-
-/// Prices by provider and model. Configured overrides win; otherwise the
-/// built-in table prices the model under any provider.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Prices and reviewed billing semantics keyed by provider and model.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PriceBook {
-    overrides: BTreeMap<(String, String), ModelPrice>,
+    routes: BTreeMap<(String, String), RoutePrice>,
+    version: String,
+}
+
+impl Default for PriceBook {
+    fn default() -> Self {
+        Self::new(
+            [
+                ("opencode-go", "glm-5.3-flash", 150_000, 500_000),
+                ("opencode-go", "glm-5.3", 1_400_000, 4_400_000),
+                ("opencode-go", "kimi-k2.6", 950_000, 4_000_000),
+                ("opencode-go", "deepseek-v4-flash", 140_000, 280_000),
+                ("zai", "glm-5.3", 1_400_000, 4_400_000),
+            ]
+            .into_iter()
+            .map(|(provider, model, input, output)| {
+                (
+                    provider.to_owned(),
+                    model.to_owned(),
+                    ModelPrice {
+                        input_micros_per_million_tokens: input,
+                        output_micros_per_million_tokens: output,
+                        reasoning_micros_per_million_tokens: None,
+                    },
+                )
+            }),
+        )
+    }
 }
 
 impl PriceBook {
     pub fn new(overrides: impl IntoIterator<Item = (String, String, ModelPrice)>) -> Self {
-        Self {
-            overrides: overrides
-                .into_iter()
-                .map(|(provider, model, price)| ((provider, model), price))
-                .collect(),
+        let mut routes = BTreeMap::new();
+        for ((provider, model), capabilities) in ROUTE_CAPABILITIES {
+            let defaults = default_price(provider, model);
+            routes.insert(
+                ((*provider).to_owned(), (*model).to_owned()),
+                RoutePrice {
+                    price: defaults,
+                    capabilities: *capabilities,
+                },
+            );
         }
+        for (provider, model, price) in overrides {
+            if let Some(route) = routes.get_mut(&(provider, model)) {
+                route.price = price;
+            }
+        }
+        let version = version_for(&routes);
+        Self { routes, version }
     }
 
-    pub fn price(&self, provider: &str, model: &str) -> ModelPrice {
-        self.overrides
+    pub fn price(&self, provider: &str, model: &str) -> Result<ModelPrice, AiError> {
+        let route = self.route(provider, model)?;
+        if route.price.reasoning_micros_per_million_tokens.is_some() {
+            return Err(unsupported(provider, model));
+        }
+        if route.price.input_micros_per_million_tokens < 0
+            || route.price.output_micros_per_million_tokens < 0
+        {
+            return Err(AiError::InvalidUsageBound);
+        }
+        Ok(route.price)
+    }
+
+    pub fn capabilities(&self, provider: &str, model: &str) -> Result<RouteCapabilities, AiError> {
+        Ok(self.route(provider, model)?.capabilities)
+    }
+
+    fn route(&self, provider: &str, model: &str) -> Result<RoutePrice, AiError> {
+        self.routes
             .get(&(provider.to_owned(), model.to_owned()))
             .copied()
-            .unwrap_or_else(|| price_for_model(model))
+            .ok_or_else(|| unsupported(provider, model))
     }
 
-    /// Estimated cost in micro-dollars of one call on `provider`/`model`.
+    /// Stable value identity for configured prices and route capabilities.
+    pub fn version(&self) -> String {
+        self.version.clone()
+    }
+
+    /// Estimated cost in micro-dollars of one call on a supported route.
     pub fn estimate_cost_micros(
         &self,
         provider: &str,
         model: &str,
         input_tokens: u64,
         output_tokens: u64,
-    ) -> i64 {
-        cost_micros(self.price(provider, model), input_tokens, output_tokens)
+    ) -> Result<i64, AiError> {
+        let price = self.price(provider, model)?;
+        cost_micros(price, input_tokens, output_tokens)
     }
+}
+
+fn default_price(provider: &str, model: &str) -> ModelPrice {
+    let (input, output) = match (provider, model) {
+        ("opencode-go", "glm-5.3-flash") => (150_000, 500_000),
+        ("opencode-go", "glm-5.3") | ("zai", "glm-5.3") => (1_400_000, 4_400_000),
+        ("opencode-go", "kimi-k2.6") => (950_000, 4_000_000),
+        ("opencode-go", "deepseek-v4-flash") => (140_000, 280_000),
+        _ => (0, 0),
+    };
+    ModelPrice {
+        input_micros_per_million_tokens: input,
+        output_micros_per_million_tokens: output,
+        reasoning_micros_per_million_tokens: None,
+    }
+}
+
+fn unsupported(provider: &str, model: &str) -> AiError {
+    AiError::UnsupportedUsageRoute {
+        provider: provider.to_owned(),
+        model: model.to_owned(),
+    }
+}
+
+fn cost_micros(price: ModelPrice, input_tokens: u64, output_tokens: u64) -> Result<i64, AiError> {
+    let total = u128::from(input_tokens)
+        .checked_mul(price.input_micros_per_million_tokens as u128)
+        .and_then(|input| {
+            u128::from(output_tokens)
+                .checked_mul(price.output_micros_per_million_tokens as u128)
+                .and_then(|output| input.checked_add(output))
+        })
+        .ok_or(AiError::InvalidUsageBound)?;
+    i64::try_from(total.div_ceil(1_000_000)).map_err(|_| AiError::InvalidUsageBound)
+}
+
+fn version_for(routes: &BTreeMap<(String, String), RoutePrice>) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for ((provider, model), route) in routes {
+        feed(provider.as_bytes());
+        feed(&[0]);
+        feed(model.as_bytes());
+        feed(&[0]);
+        feed(
+            route
+                .price
+                .input_micros_per_million_tokens
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .price
+                .output_micros_per_million_tokens
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .price
+                .reasoning_micros_per_million_tokens
+                .unwrap_or(-1)
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(route.capabilities.max_output_tokens.to_string().as_bytes());
+        feed(&[u8::from(route.capabilities.reasoning_included_in_output)]);
+        feed(&[route.capabilities.billable_components as u8]);
+        feed(
+            route
+                .capabilities
+                .template_overhead_bytes
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .capabilities
+                .per_message_overhead_bytes
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .capabilities
+                .per_tool_wrapper_bytes
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0]);
+        feed(
+            route
+                .capabilities
+                .per_tool_argument_wrapper_bytes
+                .to_string()
+                .as_bytes(),
+        );
+        feed(&[0xff]);
+    }
+    format!("price-v3-{hash:016x}")
 }
 
 #[cfg(test)]
@@ -124,62 +309,93 @@ mod tests {
     use super::*;
 
     #[test]
-    fn glm_flash_cost_matches_published_prices() {
-        // 1M in + 100K out = $0.15 + $0.05 = $0.20 (per the pricing page).
+    fn only_explicit_provider_model_routes_have_prices_and_capabilities() {
+        let book = PriceBook::default();
         assert_eq!(
-            estimate_cost_micros("glm-5.3-flash", 1_000_000, 100_000),
-            200_000
-        );
-        assert_eq!(estimate_cost_micros("glm-5.3-flash", 1, 0), 1);
-        assert_eq!(estimate_cost_micros("glm-5.3-flash", 0, 0), 0);
-        assert_eq!(
-            estimate_cost_micros("glm-5.3-flash-preview", 1_000_000, 0),
+            book.price("opencode-go", "glm-5.3-flash")
+                .expect("listed route has a price")
+                .input_micros_per_million_tokens,
             150_000
         );
-    }
-
-    #[test]
-    fn opencode_models_are_priced_at_their_published_rates() {
-        assert_eq!(price_for_model("glm-5.3"), GLM_5_3_PRICE);
-        assert_eq!(price_for_model("GLM-5.3-Flash"), GLM_5_3_FLASH_PRICE);
-        assert_eq!(price_for_model("kimi-k2.6"), KIMI_K2_6_PRICE);
+        let capability = book
+            .capabilities("opencode-go", "glm-5.3-flash")
+            .expect("listed route has capabilities");
+        assert_eq!(capability.max_output_tokens, OUTPUT_CAP);
+        assert!(capability.reasoning_included_in_output);
         assert_eq!(
-            price_for_model("deepseek-v4-flash"),
-            DEEPSEEK_V4_FLASH_PRICE
+            capability.billable_components,
+            BillableComponents::TextTokensAndFunctionTools
         );
+        assert!(matches!(
+            book.price("unknown-provider", "unknown-model"),
+            Err(AiError::UnsupportedUsageRoute { .. })
+        ));
+        assert!(matches!(
+            book.capabilities("zai", "glm-5.3-flash"),
+            Err(AiError::UnsupportedUsageRoute { .. })
+        ));
     }
 
     #[test]
-    fn unknown_models_are_priced_pessimistically() {
-        assert!(
-            estimate_cost_micros("mystery", 1_000, 1_000)
-                > estimate_cost_micros("glm-5.3-flash", 1_000, 1_000)
+    fn route_overrides_change_prices_without_expanding_the_capability_allowlist() {
+        let book = PriceBook::new([
+            (
+                "opencode-go".to_owned(),
+                "glm-5.3-flash".to_owned(),
+                ModelPrice {
+                    input_micros_per_million_tokens: 2_000_000,
+                    output_micros_per_million_tokens: 3_000_000,
+                    reasoning_micros_per_million_tokens: None,
+                },
+            ),
+            (
+                "unknown".to_owned(),
+                "model".to_owned(),
+                ModelPrice {
+                    input_micros_per_million_tokens: 1,
+                    output_micros_per_million_tokens: 1,
+                    reasoning_micros_per_million_tokens: None,
+                },
+            ),
+        ]);
+        assert_eq!(
+            book.estimate_cost_micros("opencode-go", "glm-5.3-flash", 1_000_000, 1)
+                .expect("listed route estimate"),
+            2_000_003
         );
+        assert!(matches!(
+            book.price("unknown", "model"),
+            Err(AiError::UnsupportedUsageRoute { .. })
+        ));
     }
 
     #[test]
-    fn configured_prices_apply_per_provider_and_model() {
+    fn separate_reasoning_rate_is_refused_until_a_route_declares_its_billing() {
         let book = PriceBook::new([(
             "opencode-go".to_owned(),
-            "glm-5.3-flash".to_owned(),
+            "glm-5.3".to_owned(),
             ModelPrice {
-                input_micros_per_million_tokens: 2_000_000,
-                output_micros_per_million_tokens: 0,
+                input_micros_per_million_tokens: 1,
+                output_micros_per_million_tokens: 1,
+                reasoning_micros_per_million_tokens: Some(1),
             },
         )]);
-        // The override applies to its provider only.
-        assert_eq!(
-            book.estimate_cost_micros("opencode-go", "glm-5.3-flash", 1_000_000, 0),
-            2_000_000
-        );
-        assert_eq!(
-            book.estimate_cost_micros("zai", "glm-5.3-flash", 1_000_000, 0),
-            150_000
-        );
-        assert_eq!(
+        assert!(matches!(
             book.price("opencode-go", "glm-5.3"),
-            GLM_5_3_PRICE,
-            "models without an override keep the built-in price"
-        );
+            Err(AiError::UnsupportedUsageRoute { .. })
+        ));
+    }
+
+    #[test]
+    fn optional_provider_usage_is_required_before_actual_cost_is_calculated() {
+        let observation = crate::UsageObservation {
+            input_tokens: None,
+            output_tokens: Some(1),
+            reasoning_tokens: None,
+            commercial_units: None,
+            provider_request_id: None,
+            provider_response_id: None,
+        };
+        assert!(!observation.has_token_usage());
     }
 }

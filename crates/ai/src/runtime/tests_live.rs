@@ -248,8 +248,13 @@ async fn budget_exhaustion_mid_turn_aborts_the_turn() {
 async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     let ledger = FakeLedger::default();
     let turn = vec![
+        MockStreamEvent::RequestId("req-assistant-1".to_owned()),
         MockStreamEvent::text("Done.".to_owned()),
-        MockStreamEvent::final_response(Usage::new().input_tokens(100).output_tokens(10)),
+        MockStreamEvent::FinalResponse(rig_core::operation::Finish {
+            usage: Usage::new().input_tokens(100).output_tokens(10),
+            response_id: Some("resp-assistant-1".to_owned()),
+            ..Default::default()
+        }),
     ];
     let (outcome, _) = run_script(
         vec![turn],
@@ -266,15 +271,28 @@ async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     assert_eq!(outcome.output_tokens, 10);
     let entries = ledger.entries.lock().expect("entries lock").clone();
     assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    assert_eq!(entry.purpose, "chat");
-    assert_eq!(entry.provider, "test-provider");
-    assert_eq!(entry.model, "test-model");
-    assert_eq!(entry.input_tokens, 100);
-    assert_eq!(entry.output_tokens, 10);
+    let (request, observation) = &entries[0];
+    assert_eq!(request.purpose, "assistant");
+    assert_eq!(request.provider, "opencode-go");
+    assert_eq!(request.model, "glm-5.3-flash");
+    assert_eq!(observation.input_tokens, Some(100));
+    assert_eq!(observation.output_tokens, Some(10));
     assert_eq!(
-        entry.cost_micros,
-        PriceBook::default().estimate_cost_micros("test-provider", "test-model", 100, 10)
+        observation.provider_request_id.as_deref(),
+        Some("req-assistant-1")
+    );
+    assert_eq!(
+        observation.provider_response_id.as_deref(),
+        Some("resp-assistant-1")
+    );
+    assert_eq!(
+        request
+            .price
+            .actual_cost_micros(observation)
+            .expect("price"),
+        PriceBook::default()
+            .estimate_cost_micros("opencode-go", "glm-5.3-flash", 100, 10)
+            .expect("supported test route has a price")
     );
 }
 

@@ -153,11 +153,12 @@ pub fn provider_endpoint(provider: &str) -> Result<Option<ProviderEndpoint>, AiE
 mod tests {
     use std::sync::Arc;
 
-    use deepref_domain::ProjectId;
+    use chrono::Datelike;
 
     use super::*;
     use crate::{
-        AiFuture, BudgetSnapshot, PriceBook, UsageEntry, UsageLedger, build_metered_provider,
+        AiFuture, PriceBook, UsageLedger, UsageObservation, UsageReservation,
+        UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof, build_metered_provider,
     };
 
     fn normalized(raw: &str) -> String {
@@ -324,16 +325,73 @@ mod tests {
     struct OpenLedger;
 
     impl UsageLedger for OpenLedger {
-        fn budget<'a>(&'a self, _project_id: ProjectId) -> AiFuture<'a, BudgetSnapshot> {
-            Box::pin(async {
-                Ok(BudgetSnapshot {
-                    budget_micros: i64::MAX,
-                    spent_micros: 0,
+        fn reserve<'a>(
+            &'a self,
+            request: UsageReservationRequest,
+        ) -> AiFuture<'a, UsageReservation> {
+            Box::pin(async move {
+                Ok(UsageReservation {
+                    id: uuid::Uuid::new_v4(),
+                    period_start: chrono::Utc::now()
+                        .date_naive()
+                        .with_day(1)
+                        .unwrap_or(chrono::NaiveDate::MIN),
+                    reserved_cost_micros: request.reserved_cost_micros()?,
+                    price: request.price,
                 })
             })
         }
 
-        fn record<'a>(&'a self, _entry: UsageEntry) -> AiFuture<'a, ()> {
+        fn top_up<'a>(
+            &'a self,
+            reservation: &'a UsageReservation,
+            request: UsageTopUpRequest,
+        ) -> AiFuture<'a, UsageReservation> {
+            Box::pin(async move {
+                let additional = request.reserved_cost_micros(&reservation.price)?;
+                Ok(UsageReservation {
+                    id: reservation.id,
+                    period_start: reservation.period_start,
+                    reserved_cost_micros: reservation
+                        .reserved_cost_micros
+                        .checked_add(additional)
+                        .ok_or(crate::AiError::InvalidUsageBound)?,
+                    price: reservation.price.clone(),
+                })
+            })
+        }
+
+        fn observe<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _observation: UsageObservation,
+        ) -> AiFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn settle<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _observation: UsageObservation,
+            _current_price_version: &'a str,
+        ) -> AiFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn unresolved<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _observation: Option<UsageObservation>,
+            _reason: &'a str,
+        ) -> AiFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn void_zero_liability<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _proof: ZeroLiabilityProof,
+        ) -> AiFuture<'a, ()> {
             Box::pin(async { Ok(()) })
         }
     }

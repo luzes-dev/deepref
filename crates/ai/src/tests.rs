@@ -116,9 +116,12 @@ impl AiGateway for FakeGateway {
             *self.calls.lock().expect("calls") += 1;
             Ok(GatewayCompletion {
                 output_json: self.output.clone(),
-                input_tokens: 1,
-                output_tokens: 1,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -151,9 +154,12 @@ impl AiGateway for DedupeEchoGateway {
             Ok(GatewayCompletion {
                 output_json: serde_json::to_string(&output)
                     .map_err(|_| AiError::Gateway("dedupe output failed".to_owned()))?,
-                input_tokens: 1,
-                output_tokens: 1,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -525,6 +531,7 @@ async fn automation_context_scopes_reuse_and_suppresses_intermediate_proposals()
         parent_automation_run_id: Some(Uuid::from_u128(26)),
         node_fingerprint: Some("a".repeat(64)),
         proposal_persistence: ProposalPersistence::Skip,
+        usage_context: None,
     };
     let first_task = Task {
         project_id: ProjectId::new(Uuid::from_u128(27)),
@@ -835,6 +842,7 @@ fn routed_gateway_dispatches_without_reconstructing_the_runner() {
         .expect("register b");
     let request = |provider: &str| CompletionRequest {
         project_id: None,
+        usage_context: None,
         route: ResolvedModel {
             provider: provider.to_owned(),
             ..route(provider)

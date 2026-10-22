@@ -33,8 +33,8 @@ use uuid::Uuid;
 pub use super::builder::DEEPREF_ASSISTANT_OWNER;
 use super::builder::{assistant_runner, configure_assistant_builder, history_to_messages};
 use crate::{
-    AgentLoopConfig, AiError, AssistantStreamEvent, ChatMessage, ChatToolCall, PlanAction,
-    PriceBook, ToolTraceEntry, UsageLedger, claims_pending_change,
+    AgentLoopConfig, AiError, AiUsageContext, AssistantStreamEvent, ChatMessage, ChatToolCall,
+    PlanAction, PriceBook, ToolTraceEntry, UsageLedger, UsagePrincipal, claims_pending_change,
     runtime::{
         cassette::AssistantCassette,
         context::{AssistantToolHost, DeepRefAgentContext},
@@ -233,7 +233,34 @@ fn build_turn(turn: RigTurn<'_>) -> Result<BuiltTurn, AiError> {
     let model = turn.factory.model(&turn.context.route)?;
     let plans = PlanCollector::new();
     let scope = ToolHostScope::new(turn.context.clone(), turn.host.clone(), plans);
-    let hooks = DeepRefHooks::new(scope.clone(), turn.ledger.clone(), turn.prices, turn.config);
+    let usage_context = AiUsageContext {
+        workspace_id: None,
+        principal: Some(
+            turn.context
+                .actor
+                .user_id()
+                .map(UsagePrincipal::User)
+                .unwrap_or_else(|| {
+                    UsagePrincipal::Service(format!(
+                        "assistant:{}",
+                        turn.context.actor.kind().as_str()
+                    ))
+                }),
+        ),
+        run_id: turn.run_id,
+        run_budget_id: turn.run_id,
+        step_id: None,
+        job_id: turn.context.job_id,
+        attempt_fence: turn.context.attempt_fence,
+        run_limit_micros: None,
+    };
+    let hooks = DeepRefHooks::new(
+        scope.clone(),
+        turn.ledger.clone(),
+        turn.prices,
+        usage_context,
+        turn.config,
+    );
     let history = history_to_messages(&turn.history);
     let agent = build_live_agent(
         model,
@@ -440,6 +467,9 @@ fn finish_turn(
     response: Option<PromptResponse>,
     run_error: Option<PromptError>,
 ) -> Result<RigTurnOutcome, AiError> {
+    if let Some(error) = driver.hooks.take_reservation_error() {
+        return Err(error);
+    }
     if driver
         .scope
         .budget_exceeded

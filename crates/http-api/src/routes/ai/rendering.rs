@@ -70,7 +70,7 @@ pub(crate) fn map_ai_error(error: AiError) -> ApiError {
         | AiError::SchemaValidation(message)
         | AiError::MalformedOutput(message)
         | AiError::InputSerialization(message) => ApiError::BadRequest(message),
-        AiError::BudgetExceeded => ApiError::Conflict {
+        AiError::BudgetExceeded | AiError::UsageLimitExceeded => ApiError::Conflict {
             code: "ai_budget_exceeded".to_owned(),
             message: "AI budget for this month reached".to_owned(),
             details: Value::Null,
@@ -78,6 +78,31 @@ pub(crate) fn map_ai_error(error: AiError) -> ApiError {
         AiError::SubscriptionLimit => ApiError::Conflict {
             code: "ai_subscription_limit".to_owned(),
             message: "AI subscription limit reached; try again later".to_owned(),
+            details: Value::Null,
+        },
+        AiError::WorkspaceAiBlocked => ApiError::Conflict {
+            code: "ai_workspace_blocked".to_owned(),
+            message: "AI work is blocked pending usage reconciliation".to_owned(),
+            details: Value::Null,
+        },
+        AiError::ProviderRejectedSubscriptionLimit { .. } => ApiError::Conflict {
+            code: "ai_subscription_limit".to_owned(),
+            message: "AI subscription limit reached; try again later".to_owned(),
+            details: Value::Null,
+        },
+        AiError::ProviderRejected { .. } => {
+            ApiError::Configuration("AI provider rejected the request".to_owned())
+        }
+        AiError::UnboundedInput
+        | AiError::UnboundedOutput
+        | AiError::MissingUsageWorkspace
+        | AiError::InvalidUsageBound
+        | AiError::UnsupportedUsageRoute { .. } => ApiError::Configuration(
+            "AI usage reservation could not be safely constructed".to_owned(),
+        ),
+        AiError::HardCapsDisabled => ApiError::Conflict {
+            code: "ai_hard_caps_disabled".to_owned(),
+            message: "Paid AI dispatch is disabled until usage hard caps are enabled".to_owned(),
             details: Value::Null,
         },
         AiError::Route(message) => ApiError::Configuration(message),

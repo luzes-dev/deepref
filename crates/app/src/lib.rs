@@ -99,8 +99,11 @@ pub use ai_reviewer::{
     record_workflow_reviewer_decision, resolve_reviewer_conflict, reviewer_agreement,
 };
 pub use ai_usage::{
-    AiUsageError, DEFAULT_AI_MONTHLY_BUDGET_MICROS, DefaultRoutes, PostgresUsageLedger,
-    ensure_default_model_routes, get_ai_budget, set_ai_budget,
+    AiUsageBackfillSummary, AiUsageError, AiUsageLimitScope, AiUsageReconcileSummary,
+    AiUsageResolution, DEFAULT_AI_MONTHLY_BUDGET_MICROS, DefaultRoutes, PostgresUsageLedger,
+    backfill_ai_usage_legacy, disable_ai_hard_caps, enable_ai_hard_caps,
+    ensure_default_model_routes, get_ai_budget, reconcile_ai_usage_workspace,
+    resolve_ai_usage_reservation, set_ai_budget, set_ai_usage_cap, waive_ai_usage_overage,
 };
 pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,

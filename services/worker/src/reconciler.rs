@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use deepref_application::inbox::ProviderReconcilerRegistry;
+use deepref_application::{inbox::ProviderReconcilerRegistry, jobs::JobScope};
+use deepref_domain::{JobKind, WorkspaceId};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -50,8 +51,41 @@ pub async fn run_with_provider_reconcilers(
             Ok(report) => tracing::debug!(?report, "worker lease reconciliation completed"),
             Err(error) => tracing::error!(%error, "worker lease reconciliation failed"),
         }
+        if let Err(error) = enqueue_ai_usage_reconciliation_jobs(&pool).await {
+            tracing::error!(%error, "AI usage reconciliation jobs could not be enqueued");
+        }
         crate::second_review::sweep(&pool).await;
     }
+}
+
+async fn enqueue_ai_usage_reconciliation_jobs(pool: &PgPool) -> anyhow::Result<u64> {
+    let workspace_ids =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM workspaces ORDER BY id")
+            .fetch_all(pool)
+            .await?;
+    let minute = chrono::Utc::now().format("%Y%m%d%H%M").to_string();
+    let mut queued = 0;
+    for workspace_id in workspace_ids {
+        let workspace_id = WorkspaceId::new(workspace_id);
+        let dedupe_key = format!("ai_usage_reconcile:{}:{minute}", workspace_id.as_uuid());
+        deepref_app::enqueue_job_pool(
+            pool,
+            &deepref_app::scoped_job(
+                uuid::Uuid::new_v4(),
+                JobScope::Workspace(workspace_id),
+                JobKind::AiUsageReconcile,
+                serde_json::json!({}),
+                dedupe_key,
+            ),
+        )
+        .await?;
+        queued += 1;
+    }
+    tracing::debug!(
+        workspaces = queued,
+        "workspace AI usage reconciliation scheduled"
+    );
+    Ok(queued)
 }
 
 pub async fn reconcile_once(pool: &PgPool) -> anyhow::Result<ReconcileReport> {
