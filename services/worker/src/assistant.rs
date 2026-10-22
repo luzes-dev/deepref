@@ -8,8 +8,8 @@
 //! Retry safety: terminal runs are never re-executed, the final message and
 //! plan are written idempotently under fixed ids, and a recovered lease
 //! re-drives a `running` run by continuing its append-only event log.
-//! Provider failures requeue; budget exhaustion and malformed runs fail
-//! closed.
+//! Transient provider failures and pre-dispatch admission saturation requeue;
+//! budget exhaustion, lost leases and malformed runs fail closed.
 
 use std::{sync::Arc, time::Duration};
 
@@ -379,8 +379,20 @@ async fn drive_assistant_run(
     }
 }
 
+/// A turn may be re-driven from scratch by a later durable attempt within the
+/// existing attempt and run budgets.
+///
+/// Saturation is ordinary capacity pressure, not a failed run: admission is
+/// refused before provider dispatch and the turn's reservation is voided as
+/// proven zero liability, so asking for admission afresh on the retry cannot
+/// replay a provider effect. A lost lease stays fatal: the interrupted call may
+/// already have reached the provider, so its liability and effects are
+/// ambiguous and a blind re-drive is not safe.
 fn retryable(error: &AiError) -> bool {
-    matches!(error, AiError::Gateway(_) | AiError::Persistence(_))
+    matches!(
+        error,
+        AiError::Gateway(_) | AiError::Persistence(_) | AiError::AdmissionSaturated { .. }
+    )
 }
 
 async fn fail_run(pool: &PgPool, run_id: Uuid, code: &str, message: &str) -> anyhow::Result<()> {
@@ -635,4 +647,20 @@ pub(crate) async fn reconcile_orphan_runs(pool: &PgPool) -> anyhow::Result<()> {
     }
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retryable;
+    use deepref_ai::{AiConcurrencyScopeKind, AiError};
+
+    #[test]
+    fn admission_saturation_is_retryable_but_a_lost_lease_is_not() {
+        assert!(retryable(&AiError::AdmissionSaturated {
+            scope_kind: AiConcurrencyScopeKind::Workspace
+        }));
+        // A fenced in-flight call may already have provider liability, so it is
+        // never blindly re-driven.
+        assert!(!retryable(&AiError::AdmissionLeaseLost));
+    }
 }
