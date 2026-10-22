@@ -1,4 +1,9 @@
 target/
+# CI diagnostic working directories (local reports live under target/).
+/ci-diagnostics/
+/ci-diagnostics-security/
+__pycache__/
+*.pyc
 node_modules/
 .svelte-kit/
 build/

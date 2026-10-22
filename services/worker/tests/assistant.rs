@@ -7,14 +7,24 @@
 //! Durable assistant agent runs: the worker owns execution, the browser only
 //! observes. Skipped unless `DATABASE_URL` points at a reachable PostgreSQL.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
-use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel, runtime::StaticModelFactory};
+use deepref_ai::{
+    AdmissionError, AdmissionFuture, AiConcurrencyAdmission, AiConcurrencyScope,
+    AiConcurrencyScopeKind, ModelParameters, ModelProfile, ResolvedModel, SlotGrant, SlotLease,
+    runtime::StaticModelFactory,
+};
 use deepref_app::{
     append_assistant_run_event, begin_assistant_agent_run, claim_job, get_assistant_plan,
     list_assistant_run_events, submit_assistant_agent_run,
 };
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobRetry};
 use deepref_worker::{
     assistant::{AssistantWorkerServices, handle_assistant_agent_run_with},
     delivery::DeliveryAction,
@@ -25,7 +35,18 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    let pool = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
+    sqlx::query(
+        "UPDATE ai_usage_backfill_state SET completed_at = COALESCE(completed_at, now()) WHERE singleton",
+    )
+    .execute(&pool)
+    .await
+    .expect("test fixture marks legacy usage backfilled");
+    sqlx::query("UPDATE ai_usage_rollout_state SET ai_hard_caps_enforced = true WHERE singleton")
+        .execute(&pool)
+        .await
+        .expect("test fixture enables assistant usage reservations");
+    Some(pool)
 }
 
 async fn project(pool: &PgPool) -> (Uuid, Uuid) {
@@ -35,6 +56,36 @@ async fn project(pool: &PgPool) -> (Uuid, Uuid) {
         .execute(pool)
         .await
         .expect("project inserts");
+    let workspace_id: Uuid = sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .expect("project has a workspace");
+    // Mocked assistant runs need room at every level. Project creation does
+    // not create parent allowance in production.
+    sqlx::query(
+        "UPDATE ai_usage_limits SET limit_micros = 100000000000
+         WHERE scope_kind = 'platform'
+            OR (scope_kind = 'workspace' AND scope_id = $1)
+            OR (scope_kind = 'project' AND scope_id = $2)",
+    )
+    .bind(workspace_id)
+    .bind(project_id)
+    .execute(pool)
+    .await
+    .expect("assistant fixture caps allow bounded mocked calls");
+    sqlx::query(
+        "UPDATE ai_usage_period_buckets SET limit_micros = 100000000000
+         WHERE period_start = date_trunc('month', now() AT TIME ZONE 'UTC')::date
+           AND (scope_kind = 'platform'
+             OR (scope_kind = 'workspace' AND scope_id = $1)
+             OR (scope_kind = 'project' AND scope_id = $2))",
+    )
+    .bind(workspace_id)
+    .bind(project_id)
+    .execute(pool)
+    .await
+    .expect("assistant fixture buckets follow their test caps");
     let conversation_id: Uuid = sqlx::query_scalar(
         "INSERT INTO assistant_conversations (id,project_id,title) VALUES ($1,$2,'t') RETURNING id",
     )
@@ -66,8 +117,8 @@ async fn project_report(pool: &PgPool, project_id: Uuid) -> Uuid {
 fn route() -> ResolvedModel {
     ResolvedModel {
         profile: ModelProfile::Reasoning,
-        provider: "test-provider".to_owned(),
-        model: "test-model".to_owned(),
+        provider: "opencode-go".to_owned(),
+        model: "glm-5.3-flash".to_owned(),
         model_version: "v1".to_owned(),
         parameters: ModelParameters::default(),
         route_id: None,
@@ -78,6 +129,71 @@ fn services(model: MockCompletionModel) -> AssistantWorkerServices {
     AssistantWorkerServices {
         model_factory: Arc::new(StaticModelFactory::new(model.erase())),
         prices: deepref_ai::PriceBook::default(),
+        admission: None,
+        admission_limits: Default::default(),
+    }
+}
+
+fn services_with_admission(
+    model: MockCompletionModel,
+    admission: Arc<dyn AiConcurrencyAdmission>,
+) -> AssistantWorkerServices {
+    AssistantWorkerServices {
+        model_factory: Arc::new(StaticModelFactory::new(model.erase())),
+        prices: deepref_ai::PriceBook::default(),
+        admission: Some(admission),
+        admission_limits: deepref_ai::AiConcurrencyLimits::default(),
+    }
+}
+
+/// Refuses the first acquisition with workspace saturation, then grants every
+/// later acquisition. It records what the dispatch seam actually did, so the
+/// test can distinguish a refused call that never reached the provider from a
+/// retry that acquired a fresh lease.
+#[derive(Default)]
+struct SaturateOnceAdmission {
+    acquisitions: AtomicUsize,
+    grants: AtomicUsize,
+    releases: AtomicUsize,
+}
+
+impl AiConcurrencyAdmission for SaturateOnceAdmission {
+    fn acquire<'a>(&'a self, scope: AiConcurrencyScope) -> AdmissionFuture<'a, SlotLease> {
+        Box::pin(async move {
+            let attempt = self.acquisitions.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt == 1 {
+                return Err(AdmissionError::Saturated {
+                    scope_kind: AiConcurrencyScopeKind::Workspace,
+                });
+            }
+            self.grants.fetch_add(1, Ordering::SeqCst);
+            let lease_expires_at = chrono::Utc::now() + chrono::Duration::seconds(60);
+            let grant = |scope_kind, scope_key| SlotGrant {
+                scope_kind,
+                scope_key,
+                slot_index: 0,
+                holder_id: Uuid::nil(),
+                generation: attempt as i64,
+                lease_expires_at,
+            };
+            Ok(SlotLease {
+                workspace: grant(
+                    AiConcurrencyScopeKind::Workspace,
+                    scope.workspace_id.as_uuid().to_string(),
+                ),
+                route: grant(AiConcurrencyScopeKind::Route, scope.route_key()),
+                scope,
+            })
+        })
+    }
+
+    fn renew<'a>(&'a self, _lease: &'a SlotLease) -> AdmissionFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn release<'a>(&'a self, _lease: SlotLease) -> AdmissionFuture<'a, ()> {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -305,6 +421,152 @@ fn failing_model() -> MockCompletionModel {
 }
 
 #[tokio::test]
+async fn saturation_requeues_and_a_later_durable_attempt_completes() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let model =
+        MockCompletionModel::from_stream_turns(vec![stream_text("Answered after the retry.")]);
+    let admission = Arc::new(SaturateOnceAdmission::default());
+    let run_id = submit(&pool, project_id, conversation_id).await;
+    let job = claim(&pool).await;
+    assert_eq!(job.attempts, 1);
+
+    // Saturation is ordinary capacity pressure: no provider request, no
+    // terminal run, and the reservation is released as proven zero liability.
+    let first = handle_assistant_agent_run_with(
+        &pool,
+        &job,
+        &services_with_admission(model.clone(), admission.clone()),
+    )
+    .await;
+    assert!(
+        matches!(first, Ok(DeliveryAction::Nak(_))),
+        "saturation must requeue rather than fail the run, got {first:?}"
+    );
+    assert_eq!(
+        model.request_count(),
+        0,
+        "the refused call never reached the provider"
+    );
+    assert_eq!(admission.acquisitions.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.grants.load(Ordering::SeqCst), 0);
+    assert_eq!(admission.releases.load(Ordering::SeqCst), 0);
+    let run = run_record(&pool, run_id).await;
+    assert_eq!(run.status, deepref_ai::AssistantAgentRunStatus::Running);
+    assert!(run.error.is_none(), "saturation is not a run failure");
+
+    let reservations: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT state, void_reason FROM ai_usage_reservations WHERE run_id=$1 ORDER BY opened_at",
+    )
+    .bind(run_id)
+    .fetch_all(&pool)
+    .await
+    .expect("reservations load");
+    assert_eq!(reservations.len(), 1);
+    assert_eq!(reservations[0].0, "voided");
+    assert_eq!(
+        reservations[0].1.as_deref(),
+        Some("concurrency_admission_refused")
+    );
+    let reserved: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(reserved_micros),0)::bigint FROM ai_usage_period_buckets",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("buckets load");
+    assert_eq!(reserved, 0, "the refused call holds no liability");
+
+    // The delivery layer persists the NAK as a durable retry, not a dead job.
+    let lease = job.lease("assistant-test-worker");
+    assert!(
+        deepref_app::fail_job(
+            &pool,
+            &lease,
+            "AI concurrency saturated",
+            JobRetry::After(Duration::from_secs(30)),
+        )
+        .await
+        .expect("job failure records")
+    );
+    let state: String = sqlx::query_scalar("SELECT state FROM jobs WHERE id=$1")
+        .bind(job.id)
+        .fetch_one(&pool)
+        .await
+        .expect("job state");
+    assert_eq!(state, "queued");
+    let attempts: i32 = sqlx::query_scalar("SELECT attempts FROM jobs WHERE id=$1")
+        .bind(job.id)
+        .fetch_one(&pool)
+        .await
+        .expect("job attempts");
+    assert_eq!(attempts, 1);
+    let delayed: bool = sqlx::query_scalar("SELECT available_at > now() FROM jobs WHERE id=$1")
+        .bind(job.id)
+        .fetch_one(&pool)
+        .await
+        .expect("retry due time");
+    assert!(delayed, "the retry backs off instead of spinning");
+    sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+        .bind(job.id)
+        .execute(&pool)
+        .await
+        .expect("skip the retry delay");
+
+    // A later durable attempt acquires admission afresh and completes.
+    let retry = claim_job(&pool, "assistant-test-worker", Duration::from_secs(30))
+        .await
+        .expect("retry claim works")
+        .expect("the retried job is claimable");
+    assert_eq!(retry.id, job.id);
+    assert_eq!(retry.attempts, 2);
+    let second = handle_assistant_agent_run_with(
+        &pool,
+        &retry,
+        &services_with_admission(model.clone(), admission.clone()),
+    )
+    .await;
+    assert!(matches!(second, Ok(DeliveryAction::Ack)), "{second:?}");
+    assert_eq!(
+        model.request_count(),
+        1,
+        "the retry reached the provider exactly once"
+    );
+    assert_eq!(admission.acquisitions.load(Ordering::SeqCst), 2);
+    assert_eq!(admission.grants.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        admission.releases.load(Ordering::SeqCst),
+        1,
+        "the retry released its fresh slots"
+    );
+    let run = run_record(&pool, run_id).await;
+    assert_eq!(run.status, deepref_ai::AssistantAgentRunStatus::Completed);
+    let reservations: Vec<String> = sqlx::query_scalar(
+        "SELECT state FROM ai_usage_reservations WHERE run_id=$1 ORDER BY opened_at",
+    )
+    .bind(run_id)
+    .fetch_all(&pool)
+    .await
+    .expect("reservations load");
+    assert_eq!(reservations.len(), 2, "each attempt reserved separately");
+    assert_eq!(reservations[0], "voided");
+    assert_ne!(reservations[1], "voided", "the dispatched call kept usage");
+    let answers: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
+    )
+    .bind(conversation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("message count");
+    assert_eq!(answers, 1, "the retry yields one answer");
+
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
 async fn exhausted_budget_fails_the_run_without_an_answer() {
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
@@ -313,7 +575,7 @@ async fn exhausted_budget_fails_the_run_without_an_answer() {
         .expect("budget");
     sqlx::query(
         "INSERT INTO ai_usage_ledger (project_id,profile,provider,model,purpose,input_tokens,output_tokens,cost_micros)
-         VALUES ($1,'reasoning','test-provider','test-model','chat',1,1,10)",
+         VALUES ($1,'reasoning','opencode-go','glm-5.3-flash','chat',1,1,10)",
     )
     .bind(project_id)
     .execute(&pool)
@@ -327,12 +589,14 @@ async fn exhausted_budget_fails_the_run_without_an_answer() {
     assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
     let run = run_record(&pool, run_id).await;
     assert_eq!(run.status, deepref_ai::AssistantAgentRunStatus::Failed);
-    assert!(
+    assert_eq!(
         run.error
             .as_ref()
             .and_then(|error| error.get("code"))
-            .and_then(Value::as_str)
-            == Some("ai_budget_exceeded")
+            .and_then(Value::as_str),
+        Some("ai_budget_exceeded"),
+        "unexpected assistant failure: {:?}",
+        run.error
     );
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",

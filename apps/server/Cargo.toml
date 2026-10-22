@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+chrono.workspace = true
 deepref-http-api.workspace = true
 deepref-config.workspace = true
 deepref-domain.workspace = true

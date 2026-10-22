@@ -65,9 +65,12 @@ impl AiGateway for ExcludingGateway {
                     "uncertainties": [],
                 })
                 .to_string(),
-                input_tokens: 1,
-                output_tokens: 1,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: Some("fixture-served-model".into()),
                 system_fingerprint: Some("fixture-system-v1".into()),
             })

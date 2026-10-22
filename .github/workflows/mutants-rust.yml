@@ -26,10 +26,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install pinned Rust toolchain
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup override set 1.95.0
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cargo-cache: none
+          sccache: none
 
       - name: Install pinned cargo-nextest
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28

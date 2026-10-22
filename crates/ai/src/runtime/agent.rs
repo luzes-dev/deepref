@@ -33,8 +33,9 @@ use uuid::Uuid;
 pub use super::builder::DEEPREF_ASSISTANT_OWNER;
 use super::builder::{assistant_runner, configure_assistant_builder, history_to_messages};
 use crate::{
-    AgentLoopConfig, AiError, AssistantStreamEvent, ChatMessage, ChatToolCall, PlanAction,
-    PriceBook, ToolTraceEntry, UsageLedger, claims_pending_change,
+    AgentLoopConfig, AiConcurrencyAdmission, AiConcurrencyLimits, AiError, AiUsageContext,
+    AssistantStreamEvent, ChatMessage, ChatToolCall, PlanAction, PriceBook, ToolTraceEntry,
+    UsageLedger, UsagePrincipal, claims_pending_change,
     runtime::{
         cassette::AssistantCassette,
         context::{AssistantToolHost, DeepRefAgentContext},
@@ -68,6 +69,12 @@ pub struct RigTurn<'a> {
     pub host: Arc<dyn AssistantToolHost>,
     pub ledger: Arc<dyn UsageLedger>,
     pub prices: PriceBook,
+    /// Operational concurrency admission for this turn's model calls. `None`
+    /// runs the turn without slot admission (tests); the durable worker wires
+    /// the PostgreSQL leased-slot adapter.
+    pub admission: Option<Arc<dyn AiConcurrencyAdmission>>,
+    /// The simultaneous-call ceilings the turn's scopes are admitted under.
+    pub admission_limits: AiConcurrencyLimits,
     pub config: AgentLoopConfig,
     /// Identity of the durable assistant run this turn executes for.
     pub run_id: Uuid,
@@ -233,7 +240,36 @@ fn build_turn(turn: RigTurn<'_>) -> Result<BuiltTurn, AiError> {
     let model = turn.factory.model(&turn.context.route)?;
     let plans = PlanCollector::new();
     let scope = ToolHostScope::new(turn.context.clone(), turn.host.clone(), plans);
-    let hooks = DeepRefHooks::new(scope.clone(), turn.ledger.clone(), turn.prices, turn.config);
+    let usage_context = AiUsageContext {
+        workspace_id: None,
+        principal: Some(
+            turn.context
+                .actor
+                .user_id()
+                .map(UsagePrincipal::User)
+                .unwrap_or_else(|| {
+                    UsagePrincipal::Service(format!(
+                        "assistant:{}",
+                        turn.context.actor.kind().as_str()
+                    ))
+                }),
+        ),
+        run_id: turn.run_id,
+        run_budget_id: turn.run_id,
+        step_id: None,
+        job_id: turn.context.job_id,
+        attempt_fence: turn.context.attempt_fence,
+        run_limit_micros: None,
+    };
+    let hooks = DeepRefHooks::new(
+        scope.clone(),
+        turn.ledger.clone(),
+        turn.prices,
+        usage_context,
+        turn.config,
+        turn.admission,
+        turn.admission_limits,
+    );
     let history = history_to_messages(&turn.history);
     let agent = build_live_agent(
         model,
@@ -332,7 +368,7 @@ pub(crate) async fn run_assistant_runner(
     progress_tx: UnboundedSender<AssistantStreamEvent>,
 ) -> Result<RigTurnOutcome, AiError> {
     let (run_future, mut run_events) = runner.run_channel();
-    tokio::pin!(run_future);
+    let mut run_future = Box::pin(run_future);
     let mut driver = Driver {
         scope: scope.clone(),
         hooks: hooks.clone(),
@@ -346,6 +382,12 @@ pub(crate) async fn run_assistant_runner(
     let mut run_error = None;
     loop {
         tokio::select! {
+            biased;
+            _ = hooks.admission_lost() => {
+                drop(run_future);
+                hooks.abandon_run().await;
+                return Err(AiError::AdmissionLeaseLost);
+            }
             settled = &mut run_future => {
                 match settled {
                     Ok(finished) => response = Some(finished),
@@ -440,6 +482,9 @@ fn finish_turn(
     response: Option<PromptResponse>,
     run_error: Option<PromptError>,
 ) -> Result<RigTurnOutcome, AiError> {
+    if let Some(error) = driver.hooks.take_reservation_error() {
+        return Err(error);
+    }
     if driver
         .scope
         .budget_exceeded

@@ -1,13 +1,15 @@
 use std::{collections::BTreeMap, fmt};
 
 use chrono::{DateTime, Utc};
-use deepref_domain::{DocumentBlockId, DocumentId, ProjectId};
+use deepref_domain::{DocumentBlockId, DocumentId, ProjectId, UserId, WorkspaceId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::admission::AiConcurrencyScopeKind;
 
 pub type AiFuture<'a, T> =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, AiError>> + Send + 'a>>;
@@ -38,6 +40,38 @@ pub enum AiError {
     InvalidEmbedding(String),
     #[error("the project's monthly AI budget is exhausted")]
     BudgetExceeded,
+    #[error("the configured AI usage limit is exhausted")]
+    UsageLimitExceeded,
+    #[error("AI work is blocked for this workspace pending usage reconciliation")]
+    WorkspaceAiBlocked,
+    #[error("AI usage reservation was refused because the input bound is unknown")]
+    UnboundedInput,
+    #[error("AI usage reservation was refused because the output cap is missing")]
+    UnboundedOutput,
+    #[error("AI usage reservation was refused because workspace attribution is missing")]
+    MissingUsageWorkspace,
+    #[error("AI usage reservation was refused because the cost bound is invalid")]
+    InvalidUsageBound,
+    #[error("AI usage metering does not support provider route {provider}/{model}")]
+    UnsupportedUsageRoute { provider: String, model: String },
+    #[error("paid AI dispatch is disabled until hard caps are enabled")]
+    HardCapsDisabled,
+    /// Operational concurrency admission refused the call before dispatch. The
+    /// reservation opened for the call is released as proven-zero-liability:
+    /// the request never reached the provider.
+    #[error("AI concurrency admission refused the call: {scope_kind}")]
+    AdmissionSaturated { scope_kind: AiConcurrencyScopeKind },
+    /// The call's concurrency lease was fenced out while it ran. The holder
+    /// stops here before further provider liability, the same way a fenced
+    /// reservation top-up stops.
+    #[error("the AI concurrency lease was lost before the call finished")]
+    AdmissionLeaseLost,
+    #[error("AI provider rejected the request before accepting work (HTTP {status})")]
+    ProviderRejected { status: u16 },
+    #[error(
+        "AI provider rejected the request because its subscription limit was reached (HTTP {status})"
+    )]
+    ProviderRejectedSubscriptionLimit { status: u16 },
     /// The provider's plan cap (5-hour, weekly or monthly) is spent. Retrying
     /// does not help until the window resets.
     #[error("AI subscription limit reached; try again later")]
@@ -148,7 +182,7 @@ impl Default for ModelParameters {
     fn default() -> Self {
         Self {
             temperature: Some(0.0),
-            max_tokens: None,
+            max_tokens: Some(2_048),
             top_p: None,
             additional: BTreeMap::new(),
         }
@@ -358,6 +392,9 @@ impl AiContext {
 pub struct CompletionRequest {
     /// Project the call is billed to; `None` for workspace-level calls.
     pub project_id: Option<ProjectId>,
+    /// Host-created identity needed by the metering boundary. Production
+    /// gateways refuse a call when it is absent.
+    pub usage_context: Option<AiUsageContext>,
     pub route: ResolvedModel,
     pub system_prompt: String,
     pub user_prompt: String,
@@ -368,14 +405,95 @@ pub struct CompletionRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayCompletion {
     pub output_json: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
     pub cost_micros: Option<i64>,
+    pub provider_request_id: Option<String>,
+    pub provider_response_id: Option<String>,
     /// The model the provider reports it served (the response `model`). Audit only, see
     /// [`AiRunRecord::provider_served_model`].
     pub served_model: Option<String>,
     /// The provider's `system_fingerprint` for the call. Audit only.
     pub system_fingerprint: Option<String>,
+}
+
+/// Backward compatible view of the current project monthly cap and spend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetSnapshot {
+    pub budget_micros: i64,
+    pub spent_micros: i64,
+}
+
+impl BudgetSnapshot {
+    pub const fn remaining_micros(self) -> i64 {
+        let remaining = self.budget_micros.saturating_sub(self.spent_micros);
+        if remaining > 0 { remaining } else { 0 }
+    }
+
+    pub const fn exhausted(self) -> bool {
+        self.spent_micros >= self.budget_micros
+    }
+}
+
+/// Principal attributed to a paid model invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UsagePrincipal {
+    User(UserId),
+    Service(String),
+}
+
+impl UsagePrincipal {
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::User(_) => "user",
+            Self::Service(_) => "service",
+        }
+    }
+
+    pub fn id(&self) -> String {
+        match self {
+            Self::User(id) => id.as_uuid().to_string(),
+            Self::Service(id) => id.clone(),
+        }
+    }
+}
+
+/// Stable invocation attribution supplied by the trusted host, never by a
+/// model or provider response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiUsageContext {
+    pub workspace_id: Option<WorkspaceId>,
+    pub principal: Option<UsagePrincipal>,
+    pub run_id: Uuid,
+    /// Stable lifetime budget shared by every model invocation in one durable
+    /// run or review. `run_id` remains the invocation attribution.
+    pub run_budget_id: Uuid,
+    pub step_id: Option<String>,
+    /// Durable job identity and claim fence, when this invocation belongs to
+    /// a 05a job. Both values must be present together.
+    pub job_id: Option<Uuid>,
+    pub attempt_fence: Option<i64>,
+    pub run_limit_micros: Option<i64>,
+}
+
+impl AiUsageContext {
+    pub fn validate(&self) -> Result<(), AiError> {
+        if self.job_id.is_some() != self.attempt_fence.is_some()
+            || self.attempt_fence.is_some_and(|fence| fence <= 0)
+            || self.run_limit_micros.is_some_and(|limit| limit < 0)
+            || self
+                .step_id
+                .as_ref()
+                .is_some_and(|step| step.trim().is_empty() || step.len() > 200)
+            || matches!(&self.principal, Some(UsagePrincipal::Service(id)) if id.trim().is_empty() || id.len() > 200)
+        {
+            return Err(AiError::InvalidContext(
+                "AI usage attribution is invalid".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

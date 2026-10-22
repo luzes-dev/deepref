@@ -21,6 +21,7 @@ pub mod prisma;
 pub mod protocol;
 pub mod router;
 pub mod study;
+pub mod usage_export;
 pub mod workflows;
 pub mod workspaces;
 

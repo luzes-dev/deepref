@@ -45,6 +45,8 @@ async fn record_script_with_config(
             host: Arc::new(host),
             ledger: Arc::new(FakeLedger::default()),
             prices: PriceBook::default(),
+            admission: None,
+            admission_limits: Default::default(),
             config,
             recorder: Some(recorder),
             progress: None,
@@ -340,6 +342,8 @@ async fn cassette_replays_turn_exhaustion() {
             host: Arc::new(host),
             ledger: Arc::new(FakeLedger::default()),
             prices: PriceBook::default(),
+            admission: None,
+            admission_limits: Default::default(),
             config: AgentLoopConfig {
                 max_steps: 1,
                 ..test_config()
@@ -396,6 +400,8 @@ async fn provider_failure_records_no_cassette() {
             host: Arc::new(FakeHost::default()),
             ledger: Arc::new(FakeLedger::default()),
             prices: PriceBook::default(),
+            admission: None,
+            admission_limits: Default::default(),
             config: test_config(),
             recorder: Some(recorder),
             progress: None,

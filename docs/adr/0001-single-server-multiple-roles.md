@@ -6,11 +6,11 @@ Accepted.
 
 ## Decision
 
-The `deepref-server` binary exposes four typed commands: `serve`, `worker`,
-`all`, and `migrate`. The commands delegate to the HTTP and worker libraries.
-`serve`
-starts the API only and never runs migrations; migrations are an explicit
-operation.
+The `deepref-server` binary keeps four runtime roles: `serve`, `worker`, `all`,
+and `migrate`. Explicit maintenance commands such as workspace backfill,
+legacy-actor decisions, and AI usage reconciliation operate through the same
+binary and delegate to the owning library. `serve` starts the API only and
+never runs migrations; migrations are an explicit operation.
 
 `all` starts the API and worker together and gives both entrypoints the same
 shutdown notification. A signal, or an early exit from either role, asks the

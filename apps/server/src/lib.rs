@@ -4,7 +4,10 @@ use tokio::sync::watch;
 
 pub mod command;
 
-pub use command::{AccountsCommand, AuditCommand, Command, LegacyActorCommand};
+pub use command::{
+    AccountsCommand, AiUsageCommand, AiUsageResolutionCommand, AuditCommand, Command,
+    LegacyActorCommand,
+};
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
@@ -58,6 +61,7 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
         Command::Audit(action) => run_audit(action).await,
 
         Command::Accounts(action) => run_accounts(action).await,
+        Command::AiUsage(action) => run_ai_usage(action).await,
 
         Command::PrintOpenApi => {
             println!(
@@ -67,6 +71,98 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+async fn run_ai_usage(action: AiUsageCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    with_telemetry(telemetry, async move {
+        let output = match action {
+            AiUsageCommand::Backfill { batch_size } => {
+                deepref_http_api::ai_usage_backfill(&config, batch_size).await?
+            }
+            AiUsageCommand::EnableHardCaps {
+                operator_user_id,
+                quiet_window_seconds,
+            } => {
+                deepref_http_api::ai_usage_enable_hard_caps(
+                    &config,
+                    operator_user_id,
+                    quiet_window_seconds,
+                )
+                .await?
+            }
+            AiUsageCommand::DisableHardCaps { operator_user_id } => {
+                deepref_http_api::ai_usage_disable_hard_caps(&config, operator_user_id).await?
+            }
+            AiUsageCommand::EnableExport {
+                operator_user_id,
+                quiet_window_seconds,
+            } => {
+                deepref_http_api::ai_usage_enable_export(
+                    &config,
+                    operator_user_id,
+                    quiet_window_seconds,
+                )
+                .await?
+            }
+            AiUsageCommand::DisableExport { operator_user_id } => {
+                deepref_http_api::ai_usage_disable_export(&config, operator_user_id).await?
+            }
+            AiUsageCommand::Resolve {
+                reservation_id,
+                operator_user_id,
+                resolution,
+            } => {
+                let (actual_cost_micros, reason) = match resolution {
+                    AiUsageResolutionCommand::Settle { actual_cost_micros } => {
+                        (Some(actual_cost_micros), None)
+                    }
+                    AiUsageResolutionCommand::Void { reason } => (None, Some(reason)),
+                };
+                deepref_http_api::ai_usage_resolve(
+                    &config,
+                    reservation_id,
+                    operator_user_id,
+                    actual_cost_micros,
+                    reason,
+                )
+                .await?
+            }
+            AiUsageCommand::Reconcile { workspace_id } => {
+                deepref_http_api::ai_usage_reconcile(&config, workspace_id).await?
+            }
+            AiUsageCommand::ExportReplay { since, limit } => {
+                deepref_http_api::ai_usage_export_replay(&config, since, limit).await?
+            }
+            AiUsageCommand::WaiveOverage {
+                workspace_id,
+                operator_user_id,
+            } => {
+                deepref_http_api::ai_usage_waive_overage(&config, workspace_id, operator_user_id)
+                    .await?
+            }
+            AiUsageCommand::SetCap {
+                scope_kind,
+                scope_id,
+                limit_micros,
+                operator_user_id,
+            } => {
+                deepref_http_api::ai_usage_set_cap(
+                    &config,
+                    &scope_kind,
+                    scope_id,
+                    limit_micros,
+                    operator_user_id,
+                )
+                .await?
+            }
+        };
+        println!("{output}");
+        Ok(())
+    })
+    .await
 }
 
 async fn run_legacy_actor(action: LegacyActorCommand) -> anyhow::Result<()> {

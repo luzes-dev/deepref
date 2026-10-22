@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use secrecy::{ExposeSecret, SecretString};
 
@@ -10,8 +10,22 @@ pub const DEFAULT_OPENCODE_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 /// Legacy Z.AI endpoint, used only with `DEEPREF_AI_PROVIDER=zai`.
 pub const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 pub const DEFAULT_AI_MODEL: &str = "glm-5.3-flash";
+/// Conservative operational concurrency ceilings: simultaneous AI calls one
+/// workspace or one provider/model route may run. They bound provider spend
+/// and blast radius during incidents, not cost accounting (that is the
+/// reservation's job). Lowering one stops granting slots at or above the new
+/// value; leases already granted there drain normally.
+pub const DEFAULT_MAX_CONCURRENT_PER_WORKSPACE: u32 = 4;
+pub const DEFAULT_MAX_CONCURRENT_PER_ROUTE: u32 = 16;
 
 const PRICES_VARIABLE: &str = "DEEPREF_AI_MODEL_PRICES";
+const CONFIGURED_MODEL_PRICES: [(&str, i64, i64); 4] = [
+    // Provider rates live in configuration, not in the AI gateway abstraction.
+    ("glm-5.3-flash", 150_000, 500_000),
+    ("glm-5.3", 1_400_000, 4_400_000),
+    ("kimi-k2.6", 950_000, 4_000_000),
+    ("deepseek-v4-flash", 140_000, 280_000),
+];
 const ZAI_SELECTED_NOTICE: &str = "DEEPREF_AI_PROVIDER=zai selects Z.AI, which is retired. Use OpenCode Go (the default) instead; ZAI_API_KEY and ZAI_BASE_URL are deprecated.";
 const ZAI_IGNORED_NOTICE: &str = "ZAI_API_KEY and ZAI_BASE_URL are deprecated and ignored. Set OPENCODE_API_KEY for OpenCode Go, or DEEPREF_AI_PROVIDER=zai to keep the legacy Z.AI provider.";
 
@@ -52,13 +66,14 @@ impl AiProviderKind {
 
 /// A price for one provider and model, in US dollars per million tokens as
 /// written in `DEEPREF_AI_MODEL_PRICES` (for example
-/// `opencode-go/glm-5.3=1.40:4.40`), stored as micro-dollars.
+/// `opencode-go/glm-5.3=1.40:4.40[:reasoning]`), stored as micro-dollars.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelPriceOverride {
     pub provider: String,
     pub model: String,
     pub input_micros_per_million_tokens: i64,
     pub output_micros_per_million_tokens: i64,
+    pub reasoning_micros_per_million_tokens: Option<i64>,
 }
 
 /// AI provider settings. API keys are never printed: `Debug` redacts them and
@@ -70,6 +85,11 @@ pub struct AiProviderConfig {
     pub base_url: String,
     pub default_model: String,
     pub price_overrides: Vec<ModelPriceOverride>,
+    /// Operational concurrency ceiling: simultaneous AI calls per workspace.
+    pub max_concurrent_per_workspace: u32,
+    /// Operational concurrency ceiling: simultaneous AI calls per
+    /// provider/model route, before any reviewed per-route narrowing.
+    pub max_concurrent_per_route: u32,
     deprecations: Vec<&'static str>,
 }
 
@@ -82,6 +102,11 @@ impl fmt::Debug for AiProviderConfig {
             .field("base_url", &self.base_url)
             .field("default_model", &self.default_model)
             .field("price_overrides", &self.price_overrides)
+            .field(
+                "max_concurrent_per_workspace",
+                &self.max_concurrent_per_workspace,
+            )
+            .field("max_concurrent_per_route", &self.max_concurrent_per_route)
             .finish()
     }
 }
@@ -138,6 +163,16 @@ impl AiProviderConfig {
             price_overrides: parse_price_overrides(
                 crate::optional(get, PRICES_VARIABLE).as_deref(),
             )?,
+            max_concurrent_per_workspace: concurrency_limit(
+                get,
+                "DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE",
+                DEFAULT_MAX_CONCURRENT_PER_WORKSPACE,
+            )?,
+            max_concurrent_per_route: concurrency_limit(
+                get,
+                "DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE",
+                DEFAULT_MAX_CONCURRENT_PER_ROUTE,
+            )?,
             deprecations,
         })
     }
@@ -157,6 +192,29 @@ impl AiProviderConfig {
     pub fn deprecations(&self) -> &[&'static str] {
         &self.deprecations
     }
+
+    /// The configured provider/model prices plus explicit environment
+    /// overrides. Returned entries can be converted into the generic AI
+    /// `PriceBook` without putting provider rate values in that crate.
+    pub fn model_price_table(&self) -> Vec<ModelPriceOverride> {
+        let mut prices = BTreeMap::new();
+        for provider in ["opencode-go", "zai"] {
+            for (model, input, output) in CONFIGURED_MODEL_PRICES {
+                let entry = ModelPriceOverride {
+                    provider: provider.to_owned(),
+                    model: model.to_owned(),
+                    input_micros_per_million_tokens: input,
+                    output_micros_per_million_tokens: output,
+                    reasoning_micros_per_million_tokens: None,
+                };
+                prices.insert((entry.provider.clone(), entry.model.clone()), entry);
+            }
+        }
+        for entry in &self.price_overrides {
+            prices.insert((entry.provider.clone(), entry.model.clone()), entry.clone());
+        }
+        prices.into_values().collect()
+    }
 }
 
 fn invalid_price(reason: &str) -> ConfigError {
@@ -166,8 +224,8 @@ fn invalid_price(reason: &str) -> ConfigError {
     }
 }
 
-/// Parses `provider/model=input:output` entries separated by commas. Prices are
-/// US dollars per million tokens.
+/// Parses `provider/model=input:output[:reasoning]` entries separated by
+/// commas. Prices are US dollars per million tokens.
 fn parse_price_overrides(raw: Option<&str>) -> Result<Vec<ModelPriceOverride>, ConfigError> {
     let Some(raw) = raw else {
         return Ok(Vec::new());
@@ -180,19 +238,26 @@ fn parse_price_overrides(raw: Option<&str>) -> Result<Vec<ModelPriceOverride>, C
 }
 
 fn parse_price_override(entry: &str) -> Result<ModelPriceOverride, ConfigError> {
-    const SHAPE: &str = "entries look like provider/model=input:output";
+    const SHAPE: &str = "entries look like provider/model=input:output[:reasoning]";
     let (route, prices) = entry.split_once('=').ok_or_else(|| invalid_price(SHAPE))?;
     let (provider, model) = route
         .split_once('/')
         .map(|(provider, model)| (provider.trim(), model.trim()))
         .filter(|(provider, model)| !provider.is_empty() && !model.is_empty())
         .ok_or_else(|| invalid_price(SHAPE))?;
-    let (input, output) = prices.split_once(':').ok_or_else(|| invalid_price(SHAPE))?;
+    let mut rates = prices.split(':');
+    let input = rates.next().ok_or_else(|| invalid_price(SHAPE))?;
+    let output = rates.next().ok_or_else(|| invalid_price(SHAPE))?;
+    let reasoning = rates.next();
+    if rates.next().is_some() {
+        return Err(invalid_price(SHAPE));
+    }
     Ok(ModelPriceOverride {
         provider: provider.to_owned(),
         model: model.to_owned(),
         input_micros_per_million_tokens: usd_to_micros(input)?,
         output_micros_per_million_tokens: usd_to_micros(output)?,
+        reasoning_micros_per_million_tokens: reasoning.map(usd_to_micros).transpose()?,
     })
 }
 
@@ -207,6 +272,23 @@ fn usd_to_micros(text: &str) -> Result<i64, ConfigError> {
         ));
     }
     Ok((value * 1_000_000.0).round() as i64)
+}
+
+/// A concurrency ceiling must be a positive integer: zero would refuse every
+/// call and a missing value keeps the conservative default.
+fn concurrency_limit(
+    get: &dyn Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: u32,
+) -> Result<u32, ConfigError> {
+    let value = crate::parse::<u32>(get, name, default)?;
+    if value == 0 || value > i32::MAX as u32 {
+        return Err(ConfigError::Invalid {
+            name,
+            reason: "must be between 1 and 2147483647".to_owned(),
+        });
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -272,6 +354,38 @@ mod tests {
     }
 
     #[test]
+    fn concurrency_ceilings_default_conservatively_and_can_be_lowered() {
+        let config = load(&[("OPENCODE_API_KEY", "k")]);
+        assert_eq!(
+            config.max_concurrent_per_workspace,
+            DEFAULT_MAX_CONCURRENT_PER_WORKSPACE
+        );
+        assert_eq!(
+            config.max_concurrent_per_route,
+            DEFAULT_MAX_CONCURRENT_PER_ROUTE
+        );
+        let lowered = load(&[
+            ("OPENCODE_API_KEY", "k"),
+            ("DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE", "1"),
+            ("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE", "3"),
+        ]);
+        assert_eq!(lowered.max_concurrent_per_workspace, 1);
+        assert_eq!(lowered.max_concurrent_per_route, 3);
+        assert!(
+            load_error(&[("DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE", "0")])
+                .contains("DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE")
+        );
+        assert!(
+            load_error(&[("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE", "2147483648")])
+                .contains("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE")
+        );
+        assert!(
+            load_error(&[("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE", "-2")])
+                .contains("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE")
+        );
+    }
+
+    #[test]
     fn zai_variables_alone_are_ignored_with_a_notice() {
         let config = load(&[("ZAI_API_KEY", "legacy-secret")]);
         assert_eq!(config.provider, AiProviderKind::OpenCodeGo);
@@ -322,14 +436,43 @@ mod tests {
                     model: "glm-5.3".to_owned(),
                     input_micros_per_million_tokens: 1_400_000,
                     output_micros_per_million_tokens: 4_400_000,
+                    reasoning_micros_per_million_tokens: None,
                 },
                 ModelPriceOverride {
                     provider: "zai".to_owned(),
                     model: "glm-5.3-flash".to_owned(),
                     input_micros_per_million_tokens: 150_000,
                     output_micros_per_million_tokens: 500_000,
+                    reasoning_micros_per_million_tokens: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn configured_price_table_contains_provider_rates_and_applies_overrides() {
+        let config = load(&[(
+            "DEEPREF_AI_MODEL_PRICES",
+            "opencode-go/glm-5.3-flash=0.2:0.6:0.8",
+        )]);
+        let prices = config.model_price_table();
+        let find = |provider: &str, model: &str| {
+            prices
+                .iter()
+                .find(|entry| entry.provider == provider && entry.model == model)
+                .expect("configured route price")
+        };
+        assert_eq!(
+            find("opencode-go", "glm-5.3-flash").input_micros_per_million_tokens,
+            200_000
+        );
+        assert_eq!(
+            find("opencode-go", "glm-5.3-flash").reasoning_micros_per_million_tokens,
+            Some(800_000)
+        );
+        assert_eq!(
+            find("zai", "glm-5.3-flash").input_micros_per_million_tokens,
+            150_000
         );
     }
 

@@ -4,6 +4,7 @@
 //! gateways, prompt definitions, grounding, policy, and task orchestration.
 //! SQLx and pgvector stay in `deepref-app`.
 
+mod admission;
 mod agents;
 mod assistant;
 mod classification;
@@ -24,6 +25,12 @@ mod structured;
 mod types;
 mod usage;
 
+pub use admission::{
+    AdmissionError, AdmissionFuture, AiConcurrencyAdmission, AiConcurrencyLimits,
+    AiConcurrencyMetrics, AiConcurrencyMetricsSnapshot, AiConcurrencyScope, AiConcurrencyScopeKind,
+    HistogramSnapshot, SLOT_LEASE_RENEW_INTERVAL, SLOT_LEASE_TTL, ScopeCounters, SlotGrant,
+    SlotHeartbeat, SlotLease, admission_metrics, renew_while,
+};
 pub use agents::*;
 pub use assistant::*;
 pub use classification::{
@@ -41,18 +48,15 @@ pub use endpoint::{
 };
 pub use evals::*;
 pub use gateway::{
-    ANY_MODEL, AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway,
-    build_metered_provider,
+    ANY_MODEL, AiGateway, EmbeddingGateway, PreparedCompletionRequest, RigEmbeddingGateway,
+    RigGateway, RoutedGateway, build_metered_provider,
 };
 pub use grounding::GroundingContextBuilder;
 pub use openai_compat::{
     OpenAiCompatGateway, ProviderDialect, strip_code_fence, structured_request_body,
 };
 pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, RequestedAction};
-pub use pricing::{
-    GLM_5_3_FLASH_PRICE, ModelPrice, PriceBook, UNKNOWN_MODEL_PRICE, estimate_cost_micros,
-    price_for_model,
-};
+pub use pricing::{BillableComponents, ModelPrice, PriceBook, RouteCapabilities};
 pub use prompts::{PromptDefinition, PromptRegistry, PromptVersion};
 pub use review_assistance::*;
 pub use runner::{
@@ -74,7 +78,14 @@ pub use screening::{
     SuggestedDecision, criteria_for_stage,
 };
 pub use types::*;
-pub use usage::{BudgetSnapshot, MeteredGateway, UsageEntry, UsageLedger};
+pub(crate) use usage::{
+    AssistantRequestBounds, assistant_input_bound_tokens, assistant_reservation_request,
+};
+pub use usage::{
+    MeteredGateway, ProviderUsageLookup, UsageLedger, UsageObservation, UsagePriceSnapshot,
+    UsageReservation, UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof,
+    service_usage_context,
+};
 
 #[cfg(test)]
 mod tests;

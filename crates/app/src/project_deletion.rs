@@ -24,6 +24,50 @@ pub async fn delete_project_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
+    // Share the project lifecycle lock with final settlement. If deletion
+    // detaches first, the last liability settlement collects the buckets; if
+    // settlement finishes first, this transaction sees no pending liability.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(project_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+    let workspace_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1 FOR UPDATE")
+            .bind(project_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let Some(workspace_id) = workspace_id else {
+        return Ok(false);
+    };
+    let has_open_liability: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM ai_usage_reservations
+         WHERE project_id = $1 AND state IN ('open', 'observed', 'unresolved'))",
+    )
+    .bind(project_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if has_open_liability {
+        sqlx::query(
+            "INSERT INTO ai_usage_detached_projects (project_id, workspace_id)
+             VALUES ($1, $2) ON CONFLICT (project_id) DO NOTHING",
+        )
+        .bind(project_id)
+        .bind(workspace_id)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM ai_usage_period_buckets
+             WHERE project_id = $1 AND scope_kind IN ('project', 'run')",
+        )
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query("DELETE FROM ai_usage_limits WHERE scope_kind = 'project' AND scope_id = $1")
+            .bind(project_id)
+            .execute(&mut **tx)
+            .await?;
+    }
     for statement in PROTECTED_CHILDREN_FIRST {
         sqlx::query(statement)
             .bind(project_id)

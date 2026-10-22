@@ -8,8 +8,8 @@
 //! Retry safety: terminal runs are never re-executed, the final message and
 //! plan are written idempotently under fixed ids, and a recovered lease
 //! re-drives a `running` run by continuing its append-only event log.
-//! Provider failures requeue; budget exhaustion and malformed runs fail
-//! closed.
+//! Transient provider failures and pre-dispatch admission saturation requeue;
+//! budget exhaustion, lost leases and malformed runs fail closed.
 
 use std::{sync::Arc, time::Duration};
 
@@ -35,6 +35,11 @@ use deepref_app::{
 pub struct AssistantWorkerServices {
     pub model_factory: Arc<dyn deepref_ai::runtime::AgentModelFactory>,
     pub prices: deepref_ai::PriceBook,
+    /// Operational concurrency admission for the run's model turns. `None`
+    /// runs without slots (fakes); production wires the leased-slot adapter.
+    pub admission: Option<Arc<dyn deepref_ai::AiConcurrencyAdmission>>,
+    /// The simultaneous-call ceilings the run's scopes are admitted under.
+    pub admission_limits: deepref_ai::AiConcurrencyLimits,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,10 +53,9 @@ const RETRY_DELAY: Duration = Duration::from_secs(30);
 pub async fn handle_assistant_agent_run(
     pool: &PgPool,
     job: &deepref_application::jobs::ClaimedJob,
-    owner: &str,
+    lease: &deepref_application::jobs::JobLease,
     config: &deepref_config::AiProviderConfig,
 ) -> anyhow::Result<DeliveryAction> {
-    let _ = owner;
     let Some(api_key) = config.api_key() else {
         let payload: AssistantAgentRunJobPayload = serde_json::from_value(job.payload.clone())?;
         fail_run(
@@ -67,22 +71,28 @@ pub async fn handle_assistant_agent_run(
         config.base_url.clone(),
         api_key.to_owned(),
     ));
-    let prices = deepref_ai::PriceBook::new(config.price_overrides.iter().map(|price| {
+    let prices = deepref_ai::PriceBook::new(config.model_price_table().into_iter().map(|price| {
         (
-            price.provider.clone(),
-            price.model.clone(),
+            price.provider,
+            price.model,
             deepref_ai::ModelPrice {
                 input_micros_per_million_tokens: price.input_micros_per_million_tokens,
                 output_micros_per_million_tokens: price.output_micros_per_million_tokens,
+                reasoning_micros_per_million_tokens: price.reasoning_micros_per_million_tokens,
             },
         )
     }));
-    handle_assistant_agent_run_with(
+    handle_assistant_agent_run_with_lease(
         pool,
         job,
+        Some(lease),
         &AssistantWorkerServices {
             model_factory: factory,
             prices,
+            admission: Some(Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(
+                pool,
+            ))),
+            admission_limits: crate::concurrency_limits(config),
         },
     )
     .await
@@ -91,6 +101,15 @@ pub async fn handle_assistant_agent_run(
 pub async fn handle_assistant_agent_run_with(
     pool: &PgPool,
     job: &deepref_application::jobs::ClaimedJob,
+    services: &AssistantWorkerServices,
+) -> anyhow::Result<DeliveryAction> {
+    handle_assistant_agent_run_with_lease(pool, job, None, services).await
+}
+
+async fn handle_assistant_agent_run_with_lease(
+    pool: &PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    job_lease: Option<&deepref_application::jobs::JobLease>,
     services: &AssistantWorkerServices,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: AssistantAgentRunJobPayload = serde_json::from_value(job.payload.clone())
@@ -124,7 +143,7 @@ pub async fn handle_assistant_agent_run_with(
         .await?;
         return Ok(DeliveryAction::Terminate);
     }
-    let outcome = drive_assistant_run(pool, job, &claimed, services).await;
+    let outcome = drive_assistant_run(pool, job, job_lease, &claimed, services).await;
     match outcome {
         Ok(()) => Ok(DeliveryAction::Ack),
         Err(RunFailure::Retryable(error)) => {
@@ -154,6 +173,7 @@ enum RunFailure {
 async fn drive_assistant_run(
     pool: &PgPool,
     job: &deepref_application::jobs::ClaimedJob,
+    job_lease: Option<&deepref_application::jobs::JobLease>,
     claimed: &deepref_app::ClaimedAssistantAgentRun,
     services: &AssistantWorkerServices,
 ) -> Result<(), RunFailure> {
@@ -189,6 +209,8 @@ async fn drive_assistant_run(
         conversation_id: record.conversation_id,
         actor: actor.clone(),
         route: route.clone(),
+        job_id: job_lease.map(|lease| lease.id),
+        attempt_fence: job_lease.map(|lease| lease.claim_seq),
     };
     // Who this run acts for decides how every tool call and plan action is
     // authorized. A run enqueued without a principal (an older release) is
@@ -245,6 +267,8 @@ async fn drive_assistant_run(
         host,
         ledger,
         prices: services.prices.clone(),
+        admission: services.admission.clone(),
+        admission_limits: services.admission_limits,
         config: AgentLoopConfig::default(),
         recorder: Some(recorder),
         progress: None,
@@ -323,7 +347,9 @@ async fn drive_assistant_run(
             }
             Ok(())
         }
-        Err(AiError::BudgetExceeded) => {
+        Err(
+            AiError::BudgetExceeded | AiError::UsageLimitExceeded | AiError::WorkspaceAiBlocked,
+        ) => {
             fail_run(
                 pool,
                 record.id,
@@ -353,8 +379,20 @@ async fn drive_assistant_run(
     }
 }
 
+/// A turn may be re-driven from scratch by a later durable attempt within the
+/// existing attempt and run budgets.
+///
+/// Saturation is ordinary capacity pressure, not a failed run: admission is
+/// refused before provider dispatch and the turn's reservation is voided as
+/// proven zero liability, so asking for admission afresh on the retry cannot
+/// replay a provider effect. A lost lease stays fatal: the interrupted call may
+/// already have reached the provider, so its liability and effects are
+/// ambiguous and a blind re-drive is not safe.
 fn retryable(error: &AiError) -> bool {
-    matches!(error, AiError::Gateway(_) | AiError::Persistence(_))
+    matches!(
+        error,
+        AiError::Gateway(_) | AiError::Persistence(_) | AiError::AdmissionSaturated { .. }
+    )
 }
 
 async fn fail_run(pool: &PgPool, run_id: Uuid, code: &str, message: &str) -> anyhow::Result<()> {
@@ -609,4 +647,20 @@ pub(crate) async fn reconcile_orphan_runs(pool: &PgPool) -> anyhow::Result<()> {
     }
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retryable;
+    use deepref_ai::{AiConcurrencyScopeKind, AiError};
+
+    #[test]
+    fn admission_saturation_is_retryable_but_a_lost_lease_is_not() {
+        assert!(retryable(&AiError::AdmissionSaturated {
+            scope_kind: AiConcurrencyScopeKind::Workspace
+        }));
+        // A fenced in-flight call may already have provider liability, so it is
+        // never blindly re-driven.
+        assert!(!retryable(&AiError::AdmissionLeaseLost));
+    }
 }

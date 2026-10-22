@@ -36,7 +36,7 @@ const EXPORT_KINDS: [&str; 11] = [
     "protocol.json",
 ];
 
-/// Every administrative event type the audit may hold (migration 0109).
+/// Security/account event types covered by this export scan (migration 0141).
 const ADMIN_EVENT_TYPES: [&str; 28] = [
     "auth.login",
     "auth.logout",

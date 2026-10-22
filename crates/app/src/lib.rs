@@ -4,6 +4,7 @@ mod activity;
 mod agent_tools;
 mod ai;
 mod ai_autonomy_apply;
+mod ai_concurrency;
 mod ai_exposure;
 mod ai_first;
 mod ai_reviewer;
@@ -49,6 +50,7 @@ mod second_review;
 mod study;
 #[cfg(feature = "test-support")]
 pub mod test_isolation;
+mod usage_export;
 mod worker_runtime;
 mod workflow_files;
 mod workflows;
@@ -93,6 +95,7 @@ pub use ai::{
 pub use ai_autonomy_apply::{
     AutonomyOutcome, apply_autonomy_for_proposal, sweep_ai_autonomy_outbox,
 };
+pub use ai_concurrency::{PostgresAiConcurrencyAdmission, sweep_ai_concurrency_slots};
 pub use ai_exposure::{
     ExposureSource, NewExposure, ReviewRunProposal, ReviewerPair, ReviewerPairs,
     independent_reviewer_pairs, record_exposure, record_exposure_in_transaction, record_exposures,
@@ -104,8 +107,12 @@ pub use ai_reviewer::{
     record_workflow_reviewer_decision, resolve_reviewer_conflict, reviewer_agreement,
 };
 pub use ai_usage::{
-    AiUsageError, DEFAULT_AI_MONTHLY_BUDGET_MICROS, DefaultRoutes, PostgresUsageLedger,
-    ensure_default_model_routes, get_ai_budget, set_ai_budget,
+    AiUsageBackfillSummary, AiUsageError, AiUsageLimitScope, AiUsageReconcileSummary,
+    AiUsageResolution, AiUsageRolloutGates, DEFAULT_AI_MONTHLY_BUDGET_MICROS, DefaultRoutes,
+    PostgresUsageLedger, ai_usage_rollout_gates, backfill_ai_usage_legacy, disable_ai_hard_caps,
+    disable_ai_usage_export, enable_ai_hard_caps, enable_ai_usage_export,
+    ensure_default_model_routes, get_ai_budget, reconcile_ai_usage_workspace,
+    resolve_ai_usage_reservation, set_ai_budget, set_ai_usage_cap, waive_ai_usage_overage,
 };
 pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
@@ -171,8 +178,8 @@ pub use graph::{
 };
 pub use jobs::{
     PostgresClaimTransport, PostgresDurableExecutionStore, claim_job, claim_jobs, complete_job,
-    enqueue_job, enqueue_job_pool, fail_job, job, recover_expired_jobs, release_job, renew_job,
-    scoped_job,
+    enqueue_job, enqueue_job_pool, fail_job, job, park_queued_jobs, recover_expired_jobs,
+    release_job, renew_job, scoped_job,
 };
 pub use legacy_actors::{
     LegacyActorDecision, LegacyActorDecisionKind, LegacyActorError, LegacyActorKind,
@@ -237,6 +244,10 @@ pub use study::{
     create_study_and_assign_report_in_transaction, get_study, get_study_for_report,
     list_reports_for_studies, list_studies, list_study_events, list_ungrouped_included_reports,
     remove_report_from_study, rename_study,
+};
+pub use usage_export::{
+    UsageExportBacklog, UsageExportError, UsageExportReplayParams, UsageExportReplaySummary,
+    billing_usage_export_handler, replay_usage_facts, usage_export_backlog, usage_export_registry,
 };
 pub use worker_runtime::{
     MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,

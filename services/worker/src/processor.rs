@@ -799,13 +799,23 @@ async fn handle_job_with_document_services_inner(
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
-            crate::assistant::handle_assistant_agent_run(
+            crate::assistant::handle_assistant_agent_run(&pool, job, lease, &config.runtime.ai)
+                .await
+        }
+        deepref_domain::JobKind::AiUsageReconcile => {
+            let workspace_id = job.scope.workspace_id().ok_or_else(|| {
+                anyhow::anyhow!("AI usage reconciliation requires a workspace-scoped job")
+            })?;
+            deepref_app::reconcile_ai_usage_workspace(
                 &pool,
-                job,
-                &lease.owner,
-                &config.runtime.ai,
+                workspace_id,
+                "unavailable-at-recovery",
             )
-            .await
+            .await?;
+            Ok(DeliveryAction::Ack)
+        }
+        deepref_domain::JobKind::AiUsageExportReplay => {
+            handle_ai_usage_export_replay_job(&pool, config).await
         }
         deepref_domain::JobKind::RecomputePrisma => Ok(DeliveryAction::Ack),
         deepref_domain::JobKind::RetrieveDocument => {
@@ -818,6 +828,62 @@ async fn handle_job_with_document_services_inner(
             handle_backfill_workflow_files_job(&pool, job, document_store, config).await
         }
     }
+}
+
+/// Most replay batches one export job run performs before it acks and lets the
+/// next scheduled run continue. The replay is resumable, so a run may stop at
+/// any batch boundary without losing a fact.
+const EXPORT_REPLAY_JOB_MAX_BATCHES: usize = 20;
+
+/// Emit missing usage fact events from retained facts (handoff 09 slice B).
+/// The replay is outside the AI hot path: settlement never waits for it and it
+/// never writes ledger state. Nothing is emitted while the export switch is
+/// off; a later replay emits the facts that settled meanwhile.
+async fn handle_ai_usage_export_replay_job(
+    pool: &sqlx::PgPool,
+    config: &crate::config::WorkerConfig,
+) -> anyhow::Result<DeliveryAction> {
+    let settings = &config.runtime.usage_export;
+    if !settings.enabled {
+        tracing::debug!("AI usage export is disabled; the replay job emits nothing");
+        return Ok(DeliveryAction::Ack);
+    }
+    if !deepref_app::ai_usage_rollout_gates(pool)
+        .await?
+        .export_activated
+    {
+        tracing::debug!("AI usage export is not activated; the replay job emits nothing");
+        return Ok(DeliveryAction::Ack);
+    }
+    let counters = deepref_application::usage_export::UsageExportCounters::default();
+    for _ in 0..EXPORT_REPLAY_JOB_MAX_BATCHES {
+        let summary = deepref_app::replay_usage_facts(
+            pool,
+            &counters,
+            deepref_app::UsageExportReplayParams {
+                enabled: true,
+                since: None,
+                limit: settings.replay_batch_size,
+            },
+        )
+        .await?;
+        tracing::info!(
+            facts_scanned = summary.facts_scanned,
+            facts_emitted = summary.facts_emitted,
+            facts_already_emitted = summary.facts_already_emitted,
+            corrections_emitted = summary.corrections_emitted,
+            complete = summary.complete,
+            unemitted_facts = summary.backlog.unemitted_facts,
+            unemitted_corrections = summary.backlog.unemitted_corrections,
+            pending_events = summary.backlog.pending_events,
+            oldest_unemitted_age_seconds = summary.backlog.oldest_unemitted_age_seconds,
+            "AI usage export replay batch completed"
+        );
+        if summary.complete {
+            break;
+        }
+    }
+    Ok(DeliveryAction::Ack)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1613,10 +1679,16 @@ async fn execute_review_ai_node_with_context(
                 &SystemClock,
                 &UuidProvider,
             );
+            let mut usage_context =
+                deepref_ai::service_usage_context(run.snapshot.id.as_uuid(), "review-worker");
+            usage_context.job_id = Some(lease.id);
+            usage_context.attempt_fence = Some(lease.claim_seq);
+            usage_context.step_id = Some(attempt_id.to_string());
             let execution = AiExecutionContext {
                 parent_automation_run_id: Some(run.snapshot.id.as_uuid()),
                 node_fingerprint: Some(input_fingerprint.to_string()),
                 proposal_persistence: ProposalPersistence::Skip,
+                usage_context: Some(usage_context),
             };
             let executed = match run
                 .task
@@ -1701,6 +1773,10 @@ async fn parse_stored_document(
     parser: Option<Arc<dyn DocumentParser>>,
     config: &deepref_config::PdfConfig,
 ) -> anyhow::Result<deepref_documents::StructuredDocument> {
+    // The v4 UUID makes the name unpredictable, and create_new(true) refuses
+    // to follow or reuse an existing path, so this is not a predictable-temp
+    // file creation.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let path = std::env::temp_dir().join(format!("deepref-parse-{}.pdf", Uuid::new_v4()));
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)

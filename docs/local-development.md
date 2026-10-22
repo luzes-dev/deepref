@@ -125,6 +125,19 @@ Settings:
 | `OPENCODE_BASE_URL`        | `https://opencode.ai/zen/go/v1` | Endpoint override                                                      |
 | `DEEPREF_AI_DEFAULT_MODEL` | `glm-5.3-flash`                 | Model for new AI routes                                                |
 | `DEEPREF_AI_MODEL_PRICES`  | built-in                        | Price overrides: `provider/model=input:output`, US$ per million tokens |
+| `DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE` | `4` | Shared leased-slot ceiling per workspace; positive integer |
+| `DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE` | `16` | Shared leased-slot ceiling per provider/model; positive integer |
+
+Concurrency uses PostgreSQL across API and worker replicas. Set the same limits in both roles; drain replicas with an old higher value before lowering a limit. See [AI usage concurrency admission](ai-usage.md#concurrency-admission) for rollout, expiry and cancellation behavior.
+
+Usage export to the billing provider is off by default and provider-neutral until handoff 08 picks one:
+
+| Variable                                 | Default | Meaning                                                              |
+| ---------------------------------------- | ------- | -------------------------------------------------------------------- |
+| `DEEPREF_USAGE_EXPORT_ENABLED`           | `false` | Emit settled usage facts to the billing provider's usage export sink |
+| `DEEPREF_USAGE_EXPORT_REPLAY_BATCH_SIZE` | `500`   | Usage facts one replay batch emits at most (1–1000)                  |
+
+While the export is off nothing is emitted and nothing is lost: settled usage stays in the ledger and a later replay exports it, and the worker registers no export consumer. The emitter also runs on demand as `deepref-server ai-usage export-replay [--since <rfc3339>] [--limit <rows>]`. See [AI usage reservations](ai-usage.md#export) for the event contract, the sink semantics and the runbook for enabling a provider.
 
 **Limits and budget.** OpenCode Go caps each model in dollars: a 5-hour window (20% of the monthly cap), a weekly window (50%) and the monthly cap. When a cap is spent, DeepRef stops that call without retrying and reports "AI subscription limit reached; try again later". The public docs do not give the provider's error text, so DeepRef matches the usual wording for usage, spending, weekly and monthly limits.
 
@@ -173,6 +186,22 @@ mise exec -- just test-integration
 mise exec -- just test-e2e
 mise exec -- just codegen-check
 ```
+
+With `DATABASE_URL` and `TEST_DATABASE_URL` pointing to a disposable migrated
+database, run the focused inbox suite with:
+
+```bash
+DEEPREF_REQUIRE_DATABASE=1 cargo nextest run -p deepref-worker --test inbox_processor --locked
+```
+
+The inbox lock-compatibility regression holds a real handler transaction open,
+checks the inbox row with `FOR UPDATE NOWAIT`, and renews its claim before
+releasing the handler. It awaits handler completion rather than inferring it
+from effect visibility. Healthy processor fixtures use the production shutdown
+budget; only the blocked-drain regression overrides it to 100 ms and asserts
+abort, handler cancellation, and rollback. Processor heartbeat and ownership loss
+are covered separately. Keep the configured parallel PostgreSQL test group when
+running the full integration diagnostics.
 
 Create a feature branch only from a clean worktree:
 

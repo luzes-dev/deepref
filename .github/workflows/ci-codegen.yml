@@ -1,0 +1,59 @@
+name: CI / OpenAPI and Orval drift
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  drift:
+    name: Drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cargo-cache: restore
+          sccache: local-bundle
+      - name: Set up Node.js
+        uses: ./.github/actions/setup-node
+      # Generation checks are independent; clean-tree verification depends on
+      # both completing successfully.
+      - name: Probe generated API artifacts
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check codegen.api
+      - name: Probe authorization coverage artifacts
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check codegen.authz
+      - name: Probe clean tree
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check codegen.clean-tree
+      - name: Gate codegen
+        if: always()
+        run: python3 scripts/ci/diagnose.py gate codegen
+      - name: Show sccache statistics
+        if: always()
+        run: |
+          {
+            echo '```'
+            "${SCCACHE_PATH:-sccache}" --show-stats
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-diagnostics-codegen
+          path: target/ci-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7

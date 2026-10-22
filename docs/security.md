@@ -68,14 +68,14 @@ DeepRef enforces multi-tenant boundary isolation across all data access:
 
 ## 1. The administrative audit stream
 
-`admin_audit_events` (migration 0085, widened in 0089–0116) is an append-only
+`admin_audit_events` (migration 0085, widened through 0142) is an append-only
 stream, separate from scientific provenance:
 
 - **Append-only.** UPDATE, DELETE and TRUNCATE are refused by triggers
   (migration 0085), with one narrow exception: the operator retention purge
   (section 5).
 - **Closed shapes.** Every row's `event_type` and `metadata` are checked
-  against closed lists (migration 0109, validated in 0110). No free text from
+  against closed lists (migration 0141, validated in 0142). No free text from
   a caller can reach the table.
 - **Safe context on every row:** `request_id` (the request correlation ID,
   `x-correlation-id`, or the integration-inbox receipt for webhook-driven
@@ -441,3 +441,14 @@ logged deletion end `completed`. No audit row is written twice.
 - **Public webhook signature boundary:** `crates/http-api/src/routes/workflows`,
   migrations 0071–0072.
 - **API-key handling:** handoff 11 Part A (gated; not implemented).
+
+### Audit migration ordering
+
+The unreleased 11B audit CHECK expansion and validation are 0141 and 0142
+(previously 0109 and 0110). Released migrations 0121 and 0134 rebuild these
+checks, so the combined contract must follow them. Migration 0141 preserves
+0134’s complete AI metadata rules, including both shapes of
+`ai.hard_caps_disabled`, and adds the security/account events. Migrations
+0111–0117 install tables, triggers, functions and indexes without emitting
+audit events; they do not require the expanded checks to run first. Both a
+fresh install and a database already at main through 0140 use this ordering.

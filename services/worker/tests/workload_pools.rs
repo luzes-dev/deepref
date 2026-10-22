@@ -488,12 +488,32 @@ async fn a_poison_row_is_quarantined_while_valid_batch_siblings_run() {
     };
     let project_id = project(&pool).await;
     let poison_id = Uuid::new_v4();
+    // The poison row carries a scope kind from a newer release than this
+    // binary decodes (the database allows it; the claim's row decoder does
+    // not). The claim-decode quarantine exists for exactly that
+    // forward-compatibility case. (Claims are capability-aware, so an unknown
+    // job kind is never claimed at all.)
+    sqlx::query("ALTER TABLE jobs DROP CONSTRAINT jobs_scope_check")
+        .execute(&pool)
+        .await
+        .expect("drop the scope check in the isolated database");
     sqlx::query(
-        "INSERT INTO jobs (id,project_id,kind,workload_class,priority,payload,dedupe_key)
-         VALUES ($1,$2,'invalid_persisted_kind','workflow',2147483647,'{}',$3)",
+        "ALTER TABLE jobs ADD CONSTRAINT jobs_scope_check CHECK (
+           (scope = 'project' AND workspace_id IS NULL
+             AND (project_id IS NOT NULL OR state IN ('completed','failed','dead')))
+         OR (scope = 'workspace' AND project_id IS NULL AND workspace_id IS NOT NULL)
+         OR (scope = 'platform' AND project_id IS NULL AND workspace_id IS NULL)
+         OR (scope = 'organization' AND project_id IS NULL AND workspace_id IS NULL)
+        ) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .expect("a newer release's scope kind joins the allowed set");
+    sqlx::query(
+        "INSERT INTO jobs (id,scope,kind,workload_class,priority,payload,dedupe_key)
+         VALUES ($1,'organization','durable_run_step','workflow',2147483647,'{}',$2)",
     )
     .bind(poison_id)
-    .bind(project_id.as_uuid())
     .bind(format!("pools-poison:{poison_id}"))
     .execute(&pool)
     .await
@@ -579,7 +599,8 @@ async fn a_poison_row_is_quarantined_while_valid_batch_siblings_run() {
     assert!(
         poison
             .get::<String, _>("last_error")
-            .contains("invalid_persisted_kind")
+            .contains("claim decode"),
+        "the quarantine names the decode failure"
     );
     for id in valid_ids {
         let (state, attempts) = job_row(&pool, id).await;

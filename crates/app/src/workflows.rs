@@ -1517,6 +1517,9 @@ pub async fn workflow_run_inspection_withheld(
 pub struct NodeExecution {
     pub node_run_id: Uuid,
     pub run_id: Uuid,
+    /// Claim identity for the worker attempt executing this node.
+    pub job_id: Uuid,
+    pub claim_seq: i64,
     pub project_id: Uuid,
     pub workflow_id: Uuid,
     pub node_id: String,
@@ -1589,6 +1592,8 @@ pub async fn begin_node_execution(
     Ok(StepClaim::Execute(Box::new(NodeExecution {
         node_run_id,
         run_id,
+        job_id: lease.id,
+        claim_seq: lease.claim_seq,
         project_id: row.get("project_id"),
         workflow_id: row.get("workflow_id"),
         node_id,

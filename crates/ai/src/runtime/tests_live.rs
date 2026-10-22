@@ -248,8 +248,13 @@ async fn budget_exhaustion_mid_turn_aborts_the_turn() {
 async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     let ledger = FakeLedger::default();
     let turn = vec![
+        MockStreamEvent::RequestId("req-assistant-1".to_owned()),
         MockStreamEvent::text("Done.".to_owned()),
-        MockStreamEvent::final_response(Usage::new().input_tokens(100).output_tokens(10)),
+        MockStreamEvent::FinalResponse(rig_core::operation::Finish {
+            usage: Usage::new().input_tokens(100).output_tokens(10),
+            response_id: Some("resp-assistant-1".to_owned()),
+            ..Default::default()
+        }),
     ];
     let (outcome, _) = run_script(
         vec![turn],
@@ -266,15 +271,28 @@ async fn usage_is_recorded_per_turn_with_deepref_pricing() {
     assert_eq!(outcome.output_tokens, 10);
     let entries = ledger.entries.lock().expect("entries lock").clone();
     assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    assert_eq!(entry.purpose, "chat");
-    assert_eq!(entry.provider, "test-provider");
-    assert_eq!(entry.model, "test-model");
-    assert_eq!(entry.input_tokens, 100);
-    assert_eq!(entry.output_tokens, 10);
+    let (request, observation) = &entries[0];
+    assert_eq!(request.purpose, "assistant");
+    assert_eq!(request.provider, "opencode-go");
+    assert_eq!(request.model, "glm-5.3-flash");
+    assert_eq!(observation.input_tokens, Some(100));
+    assert_eq!(observation.output_tokens, Some(10));
     assert_eq!(
-        entry.cost_micros,
-        PriceBook::default().estimate_cost_micros("test-provider", "test-model", 100, 10)
+        observation.provider_request_id.as_deref(),
+        Some("req-assistant-1")
+    );
+    assert_eq!(
+        observation.provider_response_id.as_deref(),
+        Some("resp-assistant-1")
+    );
+    assert_eq!(
+        request
+            .price
+            .actual_cost_micros(observation)
+            .expect("price"),
+        PriceBook::default()
+            .estimate_cost_micros("opencode-go", "glm-5.3-flash", 100, 10)
+            .expect("supported test route has a price")
     );
 }
 
@@ -597,6 +615,8 @@ async fn dropping_observation_does_not_cancel_the_run() {
         host: Arc::new(host),
         ledger: Arc::new(FakeLedger::default()),
         prices: PriceBook::default(),
+        admission: None,
+        admission_limits: Default::default(),
         config: test_config(),
         recorder: None,
         progress: None,
@@ -606,4 +626,112 @@ async fn dropping_observation_does_not_cancel_the_run() {
     let outcome = future.await.expect("unobserved run still completes");
     assert_eq!(outcome.reply, "Done.");
     assert_eq!(outcome.trace.len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_or_hung_renewal_drops_active_provider_work() {
+    use crate::AiConcurrencyAdmission;
+    struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    for hang in [false, true] {
+        let admission = TestAdmission {
+            fail_renewal: true,
+            hang_renewal: hang,
+            ..Default::default()
+        };
+        let lease = admission
+            .acquire(crate::AiConcurrencyScope::new(
+                deepref_domain::WorkspaceId::new(Uuid::new_v4()),
+                "test",
+                "model",
+                Default::default(),
+            ))
+            .await
+            .expect("lease");
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let work = async {
+            let _drop = Dropped(dropped.clone());
+            std::future::pending::<()>().await;
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::renew_while(&admission, &lease, work),
+        )
+        .await
+        .expect("failed renewal cannot hang the call");
+        assert!(result.is_err());
+        assert!(dropped.load(Ordering::SeqCst), "provider future dropped");
+    }
+}
+
+#[tokio::test]
+async fn a_streaming_call_is_cancelled_on_lease_loss_before_any_response() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener");
+    let address = listener.local_addr().expect("listener address");
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("provider accepted");
+        let mut bytes = [0; 1];
+        socket
+            .read_exact(&mut bytes)
+            .await
+            .expect("request received");
+        let _ = accepted_tx.send(());
+        // Keep the stream open without returning any response.
+        std::future::pending::<()>().await;
+    });
+    let admission = TestAdmission {
+        fail_renewal: true,
+        interval: Some(std::time::Duration::from_millis(500)),
+        ..Default::default()
+    };
+    let released = admission.released.clone();
+    let ledger = FakeLedger::default();
+    let (future, events) = run_rig_turn_channel(RigTurn {
+        factory: Arc::new(OpenAiCompatModelFactory::new(
+            format!("http://{address}/v1"),
+            "test-key",
+        )),
+        run_id: Uuid::new_v4(),
+        semantic_contract_id: None,
+        build_provenance: None,
+        context: test_context(),
+        history: Vec::new(),
+        user_message: "go".to_owned(),
+        host: Arc::new(FakeHost::default()),
+        ledger: Arc::new(ledger.clone()),
+        prices: PriceBook::default(),
+        admission: Some(Arc::new(admission)),
+        admission_limits: Default::default(),
+        config: test_config(),
+        recorder: None,
+        progress: None,
+    })
+    .expect("turn built");
+    drop(events);
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(3), future)
+        .await
+        .expect("lease loss stops a stalled active stream");
+    assert!(
+        matches!(outcome, Err(AiError::AdmissionLeaseLost)),
+        "{outcome:?}"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(1), accepted_rx)
+        .await
+        .expect("request reached provider")
+        .expect("accepted signal");
+    assert_eq!(released.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ledger.pending.lock().expect("pending").len(),
+        1,
+        "ambiguous provider liability remains held"
+    );
+    server.abort();
 }

@@ -57,16 +57,18 @@ async fn build_ai_gateway(
         );
         return Ok(Arc::new(RoutedGateway::default()));
     };
-    let prices = deepref_ai::PriceBook::new(ai_config.price_overrides.iter().map(|price| {
-        (
-            price.provider.clone(),
-            price.model.clone(),
-            deepref_ai::ModelPrice {
-                input_micros_per_million_tokens: price.input_micros_per_million_tokens,
-                output_micros_per_million_tokens: price.output_micros_per_million_tokens,
-            },
-        )
-    }));
+    let prices =
+        deepref_ai::PriceBook::new(ai_config.model_price_table().into_iter().map(|price| {
+            (
+                price.provider,
+                price.model,
+                deepref_ai::ModelPrice {
+                    input_micros_per_million_tokens: price.input_micros_per_million_tokens,
+                    output_micros_per_million_tokens: price.output_micros_per_million_tokens,
+                    reasoning_micros_per_million_tokens: price.reasoning_micros_per_million_tokens,
+                },
+            )
+        }));
     let routes =
         deepref_app::ensure_default_model_routes(pool, provider.id(), &ai_config.default_model)
             .await?;
@@ -82,8 +84,20 @@ async fn build_ai_gateway(
         api_key,
         Arc::new(deepref_app::PostgresUsageLedger::new(pool)),
         prices,
+        Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(pool)),
+        concurrency_limits(ai_config),
     )?;
     Ok(gateway)
+}
+
+/// The simultaneous-call ceilings one process admits its AI calls under.
+pub(crate) fn concurrency_limits(
+    ai_config: &deepref_config::AiProviderConfig,
+) -> deepref_ai::AiConcurrencyLimits {
+    deepref_ai::AiConcurrencyLimits {
+        workspace: ai_config.max_concurrent_per_workspace,
+        route: ai_config.max_concurrent_per_route,
+    }
 }
 
 pub async fn run(config: config::WorkerConfig, pools: Vec<WorkloadClass>) -> anyhow::Result<()> {
@@ -204,18 +218,34 @@ pub async fn run_with_shutdown(
         config.reconciler_interval,
         reconciler_signal.clone(),
         provider_reconcilers,
+        config.runtime.usage_export.clone(),
     ));
     // The in-process outbox dispatcher (04a) is the outbox recipient until the
-    // trigger-gated JetStream relay (04b) replaces it on the same rows. Its
-    // registry is empty in 04a; production publication starts with 04b.
-    // The inbox processor shell claims nothing
-    // until provider adapters register handlers in 02/08.
+    // trigger-gated JetStream relay (04b) replaces it on the same rows. Usage
+    // export (09 slice B) registers the first production contract; while the
+    // export switch is off no consumer is registered, so nothing is claimed
+    // and no delivery attempt is spent waiting for a billing provider.
+    let usage_export_registry = if config.runtime.usage_export.enabled {
+        let sink: Arc<dyn deepref_application::usage_export::UsageExportSink> =
+            // No billing provider is chosen yet (BUSINESS_DECISIONS.md). The
+            // disabled sink never claims success, so exported events stay
+            // pending until handoff 08 supplies an adapter.
+            Arc::new(deepref_application::usage_export::DisabledUsageExportSink);
+        deepref_app::usage_export_registry(
+            &pool,
+            sink,
+            Arc::new(deepref_application::usage_export::UsageExportCounters::default()),
+        )?
+    } else {
+        tracing::info!("AI usage export is disabled; retained usage facts wait for a later replay");
+        deepref_application::outbox::OutboxRegistry::new()
+    };
     let outbox_task = tokio::spawn(supervise_processor(
         "outbox dispatcher",
         reconciler_shutdown.clone(),
         outbox_dispatch::run(
             pool.clone(),
-            Arc::new(deepref_application::outbox::OutboxRegistry::new()),
+            Arc::new(usage_export_registry),
             owner.clone(),
             outbox_dispatch::OutboxDispatchConfig {
                 batch: 16,

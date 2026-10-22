@@ -56,9 +56,12 @@ impl AiGateway for TestGateway {
             }
             Ok(GatewayCompletion {
                 output_json: output,
-                input_tokens: 7,
-                output_tokens: 11,
+                input_tokens: Some(7),
+                output_tokens: Some(11),
+                reasoning_tokens: Some(0),
                 cost_micros: Some(13),
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -88,9 +91,12 @@ impl AiGateway for SequencedGateway {
                 output_json: output.ok_or_else(|| {
                     AiError::Gateway("sequenced test output was exhausted".to_owned())
                 })?,
-                input_tokens: 1,
-                output_tokens: 1,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -123,9 +129,12 @@ impl AiGateway for DedupeEchoGateway {
             Ok(GatewayCompletion {
                 output_json: serde_json::to_string(&output)
                     .map_err(|error| AiError::Gateway(error.to_string()))?,
-                input_tokens: 1,
-                output_tokens: 1,
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })

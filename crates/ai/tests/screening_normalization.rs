@@ -11,13 +11,14 @@
 )]
 
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     sync::{Arc, Mutex},
 };
 
+use chrono::Datelike;
 use deepref_domain::{
     CriterionDimension, CriterionKind, CriterionStage, DocumentBlockId, EligibilityCriterion,
-    ProjectId,
+    ProjectId, WorkspaceId,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -812,6 +813,28 @@ impl Script {
 }
 
 impl AiGateway for Script {
+    fn prepare(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<crate::PreparedCompletionRequest, AiError> {
+        let dialect = ProviderDialect::from_id(&request.route.provider).ok_or_else(|| {
+            AiError::UnsupportedUsageRoute {
+                provider: request.route.provider.clone(),
+                model: request.route.model.clone(),
+            }
+        })?;
+        let body = serde_json::to_vec(&structured_request_body(
+            dialect,
+            &request.route,
+            &request.system_prompt,
+            &request.user_prompt,
+            &request.evidence,
+            &request.schema,
+        ))
+        .map_err(|_| AiError::UnboundedInput)?;
+        Ok(crate::PreparedCompletionRequest::new(request, body))
+    }
+
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
             self.requests.lock().expect("requests").push(request);
@@ -823,9 +846,12 @@ impl AiGateway for Script {
                 .unwrap_or_else(|| Err(AiError::Gateway("no scripted answer".to_owned())))?;
             Ok(GatewayCompletion {
                 output_json: next,
-                input_tokens: 100,
-                output_tokens: 50,
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                reasoning_tokens: Some(0),
                 cost_micros: None,
+                provider_request_id: None,
+                provider_response_id: None,
                 served_model: None,
                 system_fingerprint: None,
             })
@@ -834,21 +860,103 @@ impl AiGateway for Script {
 }
 
 #[derive(Clone, Default)]
-struct Ledger(Arc<Mutex<Vec<UsageEntry>>>);
+struct Ledger {
+    entries: Arc<Mutex<Vec<(UsageReservationRequest, UsageObservation)>>>,
+    pending: Arc<Mutex<HashMap<Uuid, UsageReservationRequest>>>,
+}
 
 impl UsageLedger for Ledger {
-    fn budget<'a>(&'a self, _project_id: ProjectId) -> AiFuture<'a, BudgetSnapshot> {
-        Box::pin(async {
-            Ok(BudgetSnapshot {
-                budget_micros: 1_000_000_000,
-                spent_micros: 0,
+    fn reserve<'a>(&'a self, request: UsageReservationRequest) -> AiFuture<'a, UsageReservation> {
+        Box::pin(async move {
+            let reservation = UsageReservation {
+                id: Uuid::new_v4(),
+                workspace_id: request
+                    .attribution
+                    .workspace_id
+                    .unwrap_or_else(|| WorkspaceId::new(Uuid::new_v4())),
+                period_start: chrono::Utc::now()
+                    .date_naive()
+                    .with_day(1)
+                    .unwrap_or(chrono::NaiveDate::MIN),
+                reserved_cost_micros: request.reserved_cost_micros()?,
+                price: request.price.clone(),
+            };
+            self.pending
+                .lock()
+                .expect("pending")
+                .insert(reservation.id, request);
+            Ok(reservation)
+        })
+    }
+
+    fn top_up<'a>(
+        &'a self,
+        reservation: &'a UsageReservation,
+        request: UsageTopUpRequest,
+    ) -> AiFuture<'a, UsageReservation> {
+        Box::pin(async move {
+            let additional = request.reserved_cost_micros(&reservation.price)?;
+            Ok(UsageReservation {
+                id: reservation.id,
+                workspace_id: reservation.workspace_id,
+                period_start: reservation.period_start,
+                reserved_cost_micros: reservation
+                    .reserved_cost_micros
+                    .checked_add(additional)
+                    .ok_or(AiError::InvalidUsageBound)?,
+                price: reservation.price.clone(),
             })
         })
     }
 
-    fn record<'a>(&'a self, entry: UsageEntry) -> AiFuture<'a, ()> {
+    fn observe<'a>(
+        &'a self,
+        _reservation: &'a UsageReservation,
+        _observation: UsageObservation,
+    ) -> AiFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn settle<'a>(
+        &'a self,
+        reservation: &'a UsageReservation,
+        observation: UsageObservation,
+        _current_price_version: &'a str,
+    ) -> AiFuture<'a, ()> {
         Box::pin(async move {
-            self.0.lock().expect("ledger").push(entry);
+            let request = self
+                .pending
+                .lock()
+                .expect("pending")
+                .remove(&reservation.id)
+                .ok_or_else(|| AiError::Persistence("fake reservation missing".to_owned()))?;
+            self.entries
+                .lock()
+                .expect("entries")
+                .push((request, observation));
+            Ok(())
+        })
+    }
+
+    fn unresolved<'a>(
+        &'a self,
+        _reservation: &'a UsageReservation,
+        _observation: Option<UsageObservation>,
+        _reason: &'a str,
+    ) -> AiFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn void_zero_liability<'a>(
+        &'a self,
+        reservation: &'a UsageReservation,
+        _proof: ZeroLiabilityProof,
+    ) -> AiFuture<'a, ()> {
+        Box::pin(async move {
+            self.pending
+                .lock()
+                .expect("pending")
+                .remove(&reservation.id);
             Ok(())
         })
     }
@@ -864,7 +972,10 @@ impl ModelRouter for Route {
                 provider: "opencode-go".to_owned(),
                 model: "glm-5.3-flash".to_owned(),
                 model_version: "glm-5.3-flash".to_owned(),
-                parameters: ModelParameters::default(),
+                parameters: ModelParameters {
+                    max_tokens: Some(2_048),
+                    ..ModelParameters::default()
+                },
                 route_id: None,
             })
         })
@@ -990,13 +1101,21 @@ async fn a_rejected_answer_gets_one_repair_call_and_both_calls_are_counted() {
     );
     assert!(requests[1].user_prompt.contains(VALIDITY_ONLY));
 
-    let entries = outcome.ledger.0.lock().expect("ledger").clone();
+    let entries = outcome.ledger.entries.lock().expect("ledger").clone();
     assert_eq!(
         entries.len(),
         2,
         "the usage ledger records both provider calls"
     );
-    let ledger_cost: i64 = entries.iter().map(|entry| entry.cost_micros).sum();
+    let ledger_cost: i64 = entries
+        .iter()
+        .map(|(request, observation)| {
+            request
+                .price
+                .actual_cost_micros(observation)
+                .expect("valid scripted usage")
+        })
+        .sum();
     assert_eq!(result.run.usage.input_tokens, 200);
     assert_eq!(result.run.usage.output_tokens, 100);
     assert_eq!(result.run.cost_micros, Some(ledger_cost));
@@ -1013,7 +1132,7 @@ async fn a_second_rejection_fails_the_run_with_both_calls_recorded() {
         Err(AiError::SchemaValidation(_) | AiError::SemanticValidation(_))
     ));
     assert_eq!(outcome.script.requests.lock().expect("requests").len(), 2);
-    assert_eq!(outcome.ledger.0.lock().expect("ledger").len(), 2);
+    assert_eq!(outcome.ledger.entries.lock().expect("ledger").len(), 2);
     let runs = outcome.runs.0.lock().expect("runs").clone();
     let failed = runs.last().expect("the failed run is persisted");
     assert_eq!(failed.status, AiRunStatus::Failed);
@@ -1031,5 +1150,5 @@ async fn provider_failures_are_not_repaired() {
     .await;
     assert!(matches!(outcome.result, Err(AiError::Gateway(_))));
     assert_eq!(outcome.script.requests.lock().expect("requests").len(), 1);
-    assert!(outcome.ledger.0.lock().expect("ledger").is_empty());
+    assert!(outcome.ledger.entries.lock().expect("ledger").is_empty());
 }

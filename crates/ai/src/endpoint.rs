@@ -153,11 +153,12 @@ pub fn provider_endpoint(provider: &str) -> Result<Option<ProviderEndpoint>, AiE
 mod tests {
     use std::sync::Arc;
 
-    use deepref_domain::ProjectId;
+    use chrono::Datelike;
 
     use super::*;
     use crate::{
-        AiFuture, BudgetSnapshot, PriceBook, UsageEntry, UsageLedger, build_metered_provider,
+        AiFuture, PriceBook, UsageLedger, UsageObservation, UsageReservation,
+        UsageReservationRequest, UsageTopUpRequest, ZeroLiabilityProof, build_metered_provider,
     };
 
     fn normalized(raw: &str) -> String {
@@ -323,17 +324,103 @@ mod tests {
     /// A ledger that never refuses a call. The wiring test never makes one.
     struct OpenLedger;
 
-    impl UsageLedger for OpenLedger {
-        fn budget<'a>(&'a self, _project_id: ProjectId) -> AiFuture<'a, BudgetSnapshot> {
+    /// The wiring test never dispatches, so admission refuses every call.
+    struct SaturatedAdmission;
+
+    impl crate::AiConcurrencyAdmission for SaturatedAdmission {
+        fn acquire<'a>(
+            &'a self,
+            _scope: crate::AiConcurrencyScope,
+        ) -> crate::AdmissionFuture<'a, crate::SlotLease> {
             Box::pin(async {
-                Ok(BudgetSnapshot {
-                    budget_micros: i64::MAX,
-                    spent_micros: 0,
+                Err(crate::AdmissionError::Saturated {
+                    scope_kind: crate::AiConcurrencyScopeKind::Workspace,
                 })
             })
         }
 
-        fn record<'a>(&'a self, _entry: UsageEntry) -> AiFuture<'a, ()> {
+        fn renew<'a>(&'a self, _lease: &'a crate::SlotLease) -> crate::AdmissionFuture<'a, ()> {
+            Box::pin(async { Err(crate::AdmissionError::LeaseLost) })
+        }
+
+        fn release<'a>(&'a self, _lease: crate::SlotLease) -> crate::AdmissionFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl UsageLedger for OpenLedger {
+        fn reserve<'a>(
+            &'a self,
+            request: UsageReservationRequest,
+        ) -> AiFuture<'a, UsageReservation> {
+            Box::pin(async move {
+                Ok(UsageReservation {
+                    id: uuid::Uuid::new_v4(),
+                    workspace_id: request
+                        .attribution
+                        .workspace_id
+                        .unwrap_or_else(|| deepref_domain::WorkspaceId::new(uuid::Uuid::new_v4())),
+                    period_start: chrono::Utc::now()
+                        .date_naive()
+                        .with_day(1)
+                        .unwrap_or(chrono::NaiveDate::MIN),
+                    reserved_cost_micros: request.reserved_cost_micros()?,
+                    price: request.price,
+                })
+            })
+        }
+
+        fn top_up<'a>(
+            &'a self,
+            reservation: &'a UsageReservation,
+            request: UsageTopUpRequest,
+        ) -> AiFuture<'a, UsageReservation> {
+            Box::pin(async move {
+                let additional = request.reserved_cost_micros(&reservation.price)?;
+                Ok(UsageReservation {
+                    id: reservation.id,
+                    workspace_id: reservation.workspace_id,
+                    period_start: reservation.period_start,
+                    reserved_cost_micros: reservation
+                        .reserved_cost_micros
+                        .checked_add(additional)
+                        .ok_or(crate::AiError::InvalidUsageBound)?,
+                    price: reservation.price.clone(),
+                })
+            })
+        }
+
+        fn observe<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _observation: UsageObservation,
+        ) -> AiFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn settle<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _observation: UsageObservation,
+            _current_price_version: &'a str,
+        ) -> AiFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn unresolved<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _observation: Option<UsageObservation>,
+            _reason: &'a str,
+        ) -> AiFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn void_zero_liability<'a>(
+            &'a self,
+            _reservation: &'a UsageReservation,
+            _proof: ZeroLiabilityProof,
+        ) -> AiFuture<'a, ()> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -346,6 +433,8 @@ mod tests {
             "test-key",
             Arc::new(OpenLedger),
             PriceBook::new(Vec::new()),
+            Arc::new(SaturatedAdmission),
+            crate::AiConcurrencyLimits::default(),
         );
         assert!(built.is_ok());
         let registered = provider_endpoint("zai").ok().flatten();
@@ -363,6 +452,8 @@ mod tests {
                 "test-key",
                 Arc::new(OpenLedger),
                 PriceBook::new(Vec::new()),
+                Arc::new(SaturatedAdmission),
+                crate::AiConcurrencyLimits::default(),
             )
             .is_ok()
         );
@@ -373,6 +464,8 @@ mod tests {
                 "test-key",
                 Arc::new(OpenLedger),
                 PriceBook::new(Vec::new()),
+                Arc::new(SaturatedAdmission),
+                crate::AiConcurrencyLimits::default(),
             )
             .is_err()
         );

@@ -49,7 +49,7 @@ impl RejectionStage {
 
 /// Why authentication was refused: a closed vocabulary, and nothing a caller
 /// typed. The database enforces the same closed lists per stage (migration
-/// 0109).
+/// 0141).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RejectionReason {
     // Callback.

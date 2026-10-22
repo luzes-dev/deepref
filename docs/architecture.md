@@ -311,6 +311,8 @@ chosen by the caller. This table is the normative mapping:
 | Job kind               | Workload class | Bound / isolation rationale                              |
 | ---------------------- | -------------- | -------------------------------------------------------- |
 | `assistant_agent_run`  | `ai`           | model calls, bounded by provider and usage limits          |
+| `ai_usage_reconcile`  | `ai`           | workspace-scoped recovery of fenced usage reservations    |
+| `ai_usage_export_replay` | `ai`        | bounded replay emitting usage fact export events          |
 | `retrieve_document`    | `documents`    | document pipeline: full-text retrieval feeding parsing     |
 | `parse_document`       | `documents`    | CPU/memory-bound PDF parsing                              |
 | `run_deduplication`    | `documents`    | CPU/memory-bound deduplication of imported record corpora |
