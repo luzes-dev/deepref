@@ -4,7 +4,10 @@ use tokio::sync::watch;
 
 pub mod command;
 
-pub use command::{AiUsageCommand, AiUsageResolutionCommand, Command, LegacyActorCommand};
+pub use command::{
+    AccountsCommand, AiUsageCommand, AiUsageResolutionCommand, AuditCommand, Command,
+    LegacyActorCommand,
+};
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
@@ -55,6 +58,9 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
 
         Command::LegacyActor(action) => run_legacy_actor(action).await,
 
+        Command::Audit(action) => run_audit(action).await,
+
+        Command::Accounts(action) => run_accounts(action).await,
         Command::AiUsage(action) => run_ai_usage(action).await,
 
         Command::PrintOpenApi => {
@@ -204,6 +210,47 @@ async fn run_legacy_actor(action: LegacyActorCommand) -> anyhow::Result<()> {
         println!("{result}");
         Ok(())
     })
+    .await
+}
+
+async fn run_audit(action: AuditCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    with_telemetry(telemetry, async move {
+        match action {
+            AuditCommand::Purge { dry_run } => {
+                println!("{}", deepref_http_api::audit_purge(&config, dry_run).await?);
+            }
+            AuditCommand::Query(params) => {
+                let lines = deepref_http_api::audit_query(&config, params).await?;
+                for line in lines.lines() {
+                    println!("{line}");
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+async fn run_accounts(action: AccountsCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    match action {
+        AccountsCommand::CompleteDeletions => {
+            let deletion_digest =
+                deepref_config::DeletionDigestConfig::from_source(&|name| source.get(name))?;
+            with_telemetry(telemetry, async move {
+                println!(
+                    "{}",
+                    deepref_http_api::complete_account_deletions(&config, &deletion_digest).await?
+                );
+                Ok(())
+            })
+        }
+    }
     .await
 }
 

@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use deepref_config::{
-    ApiSettings, ConfigError, DocumentConfig, DocumentStorageBackend, Environment, ExposeSecret,
-    ListenConfig, PolarServer, RuntimeConfig,
+    ApiSettings, ConfigError, DeletionDigestConfig, DocumentConfig, DocumentStorageBackend,
+    Environment, ExposeSecret, ListenConfig, PolarServer, RuntimeConfig,
 };
 
 fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -20,6 +20,50 @@ fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 
 fn runtime(pairs: &[(&str, &str)]) -> Result<RuntimeConfig, ConfigError> {
     RuntimeConfig::from_map("test", &map(pairs))
+}
+
+#[test]
+fn deletion_digest_key_is_required_in_production_and_redacted() {
+    let production = DeletionDigestConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("production".into()),
+        _ => None,
+    });
+    assert!(matches!(
+        production,
+        Err(ConfigError::Missing(
+            "DEEPREF_DELETION_DIGEST_KEY",
+            Environment::Production
+        ))
+    ));
+
+    let secret = "production-deletion-digest-key-with-more-than-32-bytes";
+    let configured = DeletionDigestConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("production".into()),
+        "DEEPREF_DELETION_DIGEST_KEY" => Some(secret.into()),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(configured.expose_secret(), secret);
+    assert!(!format!("{configured:?}").contains(secret));
+}
+
+#[test]
+fn deletion_digest_development_default_is_development_only() {
+    let development = DeletionDigestConfig::from_source(&|name| {
+        (name == "APP_ENV").then(|| "development".into())
+    })
+    .unwrap();
+    assert_eq!(
+        development.expose_secret(),
+        "deepref-development-only-deletion-digest-key-not-for-production"
+    );
+
+    let short_key = DeletionDigestConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("development".into()),
+        "DEEPREF_DELETION_DIGEST_KEY" => Some("too-short".into()),
+        _ => None,
+    });
+    assert!(short_key.is_err());
 }
 
 /// The smallest valid production configuration.

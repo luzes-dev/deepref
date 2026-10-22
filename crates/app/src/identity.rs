@@ -338,11 +338,20 @@ pub async fn sign_in(
         .await?;
     } else {
         // Profile fields follow the provider; `status` is never touched here,
-        // so a profile update cannot reactivate a deactivated user.
+        // so a profile update cannot reactivate a deactivated user. An account
+        // whose deletion has been fulfilled never re-absorbs provider PII
+        // (11, BUSINESS_DECISIONS): the anonymized form stands. The durable
+        // `users.deleted_at` marker is the version-independent guard (the
+        // trigger of migration 0111 enforces it at the database boundary); the
+        // fulfillment log is the belt-and-braces one that also covers a row
+        // restored without its marker.
         sqlx::query(
             "UPDATE users
              SET primary_email = $2, verified_email = $4, display_name = $3, updated_at = now()
              WHERE workos_user_id = $1
+               AND deleted_at IS NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM fulfilled_account_deletions f WHERE f.user_id = users.id)
                AND (primary_email IS DISTINCT FROM $2
                     OR display_name IS DISTINCT FROM $3
                     OR verified_email IS DISTINCT FROM $4)",
@@ -649,13 +658,37 @@ pub async fn record_logout(
     audit: AuditRequest<'_>,
 ) -> Result<Option<RevokedSession>, IdentityStoreError> {
     let mut tx = pool.begin().await?;
+    // Finalization locks the user before deleting that user's sessions. Take
+    // the same order here so logout cannot hold a session row while waiting on
+    // the user's foreign-key lock from its audit insert.
+    let user_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM user_sessions
+         WHERE session_token_hash = $1 AND revoked_at IS NULL",
+    )
+    .bind(token_hash)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(user_id) = user_id else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let locked_user: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if locked_user.is_none() {
+        tx.commit().await?;
+        return Ok(None);
+    }
     let row = sqlx::query(
         "UPDATE user_sessions
          SET revoked_at = now()
-         WHERE session_token_hash = $1 AND revoked_at IS NULL
+         WHERE session_token_hash = $1 AND user_id = $2 AND revoked_at IS NULL
          RETURNING user_id, session_ref, sealed_provider_session",
     )
     .bind(token_hash)
+    .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {

@@ -258,6 +258,22 @@ pub static ROUTES: &[RouteRule] = &[
     authenticated(Verb::Get, "/me", "the caller reads their own profile"),
     tested(
         authenticated(
+            Verb::Delete,
+            "/me/deletion-request",
+            "the caller cancels their own pending account deletion",
+        ),
+        "authz_user_scoped::deletion_request_affects_only_its_caller",
+    ),
+    tested(
+        authenticated(
+            Verb::Post,
+            "/me/deletion-request",
+            "the caller schedules deletion of their own account (11, BUSINESS_DECISIONS)",
+        ),
+        "authz_user_scoped::deletion_request_affects_only_its_caller",
+    ),
+    tested(
+        authenticated(
             Verb::Get,
             "/notifications",
             "user-scoped inbox, filtered to projects the caller can still view",

@@ -943,3 +943,293 @@ async fn independent_job_writers_share_the_guard_without_serializing_each_other(
     .unwrap();
     held.commit().await.unwrap();
 }
+
+#[tokio::test]
+async fn account_deletion_keeps_orphan_workspace_liability_recoverable() {
+    use deepref_app::account_deletion::{complete_account_deletions, request_account_deletion};
+    use deepref_app::identity::AuditRequest;
+    use deepref_domain::{ProjectId, WorkspaceId};
+
+    let Some(pool) = database().await else { return };
+    let owner = operator(&pool).await;
+    let workspace = WorkspaceId::new(Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO workspaces(id,kind,name,slug) VALUES($1,'personal','Deletion recovery',$2)",
+    )
+    .bind(workspace.as_uuid())
+    .bind(format!("deletion-{}", workspace.as_uuid()))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO workspace_memberships(id,workspace_id,user_id,role,status,grant_source) VALUES($1,$2,$3,'owner','active','local')")
+        .bind(Uuid::new_v4()).bind(workspace.as_uuid()).bind(owner.as_uuid()).execute(&pool).await.unwrap();
+    let observed_project = ProjectId::new(Uuid::new_v4());
+    let unknown_project = ProjectId::new(Uuid::new_v4());
+    for project in [observed_project, unknown_project] {
+        sqlx::query("INSERT INTO projects(id,name,workspace_id) VALUES($1,'Deletion recovery',$2)")
+            .bind(project.as_uuid())
+            .bind(workspace.as_uuid())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("UPDATE ai_usage_limits SET limit_micros=10000000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE ai_usage_period_buckets SET limit_micros=10000000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE ai_usage_rollout_state SET ai_hard_caps_enforced=true WHERE singleton")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let ledger = deepref_app::PostgresUsageLedger::new(&pool);
+    let mut reservations = Vec::new();
+    let mut job_ids = Vec::new();
+    for project in [observed_project, unknown_project] {
+        let job_id = Uuid::new_v4();
+        deepref_app::enqueue_job_pool(
+            &pool,
+            &scoped_job(
+                job_id,
+                JobScope::Project(project),
+                JobKind::AssistantAgentRun,
+                json!({}),
+                format!("delete-recovery:{job_id}"),
+            ),
+        )
+        .await
+        .unwrap();
+        let job = deepref_app::claim_jobs(
+            &pool,
+            "provider-n",
+            Duration::from_secs(30),
+            &[WorkloadClass::Ai],
+            1,
+        )
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert_eq!(job.id, job_id);
+        let mut req = request(project, Uuid::new_v4(), 100, 1000000);
+        req.attribution.principal = Some(UsagePrincipal::User(owner));
+        req.attribution.job_id = Some(job.id);
+        req.attribution.attempt_fence = Some(job.claim_seq);
+        reservations.push(ledger.reserve(req).await.unwrap());
+        job_ids.push(job_id);
+    }
+    let observed = &reservations[0];
+    let unknown = &reservations[1];
+    ledger
+        .observe(
+            observed,
+            UsageObservation {
+                input_tokens: Some(25),
+                output_tokens: Some(0),
+                reasoning_tokens: Some(0),
+                commercial_units: None,
+                provider_request_id: None,
+                provider_response_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    ledger
+        .unresolved(unknown, None, "provider outcome unknown")
+        .await
+        .unwrap();
+    request_account_deletion(&pool, owner, AuditRequest::default())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE account_deletion_requests SET requested_at=now()-interval '31 days' WHERE user_id=$1")
+        .bind(owner.as_uuid()).execute(&pool).await.unwrap();
+    let report =
+        complete_account_deletions(&pool, "test-deletion-digest-key", AuditRequest::default())
+            .await
+            .unwrap();
+    assert_eq!(report.completed, 1);
+    assert_eq!(report.workspaces_deleted, 1);
+    let remains: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1)")
+        .bind(workspace.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!remains);
+    let jobs_left: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE id=ANY($1)")
+        .bind(&job_ids)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        jobs_left, 0,
+        "project deletion removes original jobs, not financial liabilities"
+    );
+    let held_before:i64=sqlx::query_scalar("SELECT reserved_micros FROM ai_usage_period_buckets WHERE scope_kind='workspace' AND scope_id=$1 AND period_start=$2")
+        .bind(workspace.as_uuid()).bind(observed.period_start).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        held_before,
+        observed.reserved_cost_micros + unknown.reserved_cost_micros
+    );
+    enqueue_ai_usage_reconciliation_jobs(&pool).await.unwrap();
+    assert!(
+        n1_claim(&pool).await.is_empty(),
+        "the capability fence still excludes N-1"
+    );
+    let jobs = deepref_app::claim_jobs(
+        &pool,
+        "deleted-tenant-recovery",
+        Duration::from_secs(30),
+        &[WorkloadClass::Ai],
+        100,
+    )
+    .await
+    .unwrap();
+    assert!(
+        jobs.iter()
+            .any(|j| j.scope == JobScope::Workspace(workspace)),
+        "deleted tenant with pending liability must be scheduled"
+    );
+    for job in jobs {
+        let lease = job.lease("deleted-tenant-recovery");
+        let action = handle_job_with_documents_owned(
+            pool.clone(),
+            &job,
+            &lease,
+            Duration::from_secs(30),
+            None,
+            None,
+            &worker_config(false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(action, DeliveryAction::Ack);
+        deepref_app::complete_job(&pool, &lease).await.unwrap();
+    }
+    let state: String = sqlx::query_scalar("SELECT state FROM ai_usage_reservations WHERE id=$1")
+        .bind(observed.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "settled");
+    let fact: (Uuid, Option<Uuid>, i64) = sqlx::query_as(
+        "SELECT workspace_id,project_id,cost_micros FROM ai_usage_ledger WHERE reservation_id=$1",
+    )
+    .bind(observed.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        fact,
+        (workspace.as_uuid(), Some(observed_project.as_uuid()), 25),
+        "financial history retains tenant/project identity"
+    );
+    let state: String = sqlx::query_scalar("SELECT state FROM ai_usage_reservations WHERE id=$1")
+        .bind(unknown.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "unresolved");
+    let held:i64=sqlx::query_scalar("SELECT reserved_micros FROM ai_usage_period_buckets WHERE scope_kind='workspace' AND scope_id=$1 AND period_start=$2")
+        .bind(workspace.as_uuid()).bind(unknown.period_start).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        held, unknown.reserved_cost_micros,
+        "only proven usage releases its hold"
+    );
+    for project in [observed_project, unknown_project] {
+        let detached: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM ai_usage_detached_projects WHERE project_id=$1)",
+        )
+        .bind(project.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(detached, project == unknown_project);
+        let buckets:i64=sqlx::query_scalar("SELECT count(*) FROM ai_usage_period_buckets WHERE project_id=$1 AND scope_kind IN ('project','run')")
+            .bind(project.as_uuid()).fetch_one(&pool).await.unwrap();
+        assert_eq!(buckets, if project == unknown_project { 2 } else { 0 });
+    }
+    // Once all liabilities are terminal, retained history must not keep an
+    // extinct workspace in the scheduler forever.
+    deepref_app::resolve_ai_usage_reservation(
+        &pool,
+        unknown.id,
+        operator(&pool).await,
+        deepref_app::AiUsageResolution::Void {
+            reason: "operator verified zero liability".into(),
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM jobs WHERE kind='ai_usage_reconcile' AND workspace_id=$1 AND state='completed'")
+        .bind(workspace.as_uuid()).execute(&pool).await.unwrap();
+    enqueue_ai_usage_reconciliation_jobs(&pool).await.unwrap();
+    let scheduled: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE kind='ai_usage_reconcile' AND workspace_id=$1)",
+    )
+    .bind(workspace.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!scheduled);
+
+    // A restore or interrupted historical cleanup can leave a detached marker
+    // with terminal liabilities only. It still needs a scheduled sweep.
+    sqlx::query("INSERT INTO ai_usage_detached_projects(project_id,workspace_id) VALUES($1,$2)")
+        .bind(observed_project.as_uuid())
+        .bind(workspace.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ai_usage_period_buckets(scope_kind,scope_id,workspace_id,project_id,period_start,limit_micros) VALUES('project',$1,$2,$1,$3,10000000)")
+        .bind(observed_project.as_uuid()).bind(workspace.as_uuid()).bind(observed.period_start).execute(&pool).await.unwrap();
+    enqueue_ai_usage_reconciliation_jobs(&pool).await.unwrap();
+    let jobs = deepref_app::claim_jobs(
+        &pool,
+        "detached-cleanup",
+        Duration::from_secs(30),
+        &[WorkloadClass::Ai],
+        100,
+    )
+    .await
+    .unwrap();
+    assert!(
+        jobs.iter()
+            .any(|j| j.scope == JobScope::Workspace(workspace)),
+        "detached marker alone schedules cleanup"
+    );
+    for job in jobs {
+        let lease = job.lease("detached-cleanup");
+        assert_eq!(
+            handle_job_with_documents_owned(
+                pool.clone(),
+                &job,
+                &lease,
+                Duration::from_secs(30),
+                None,
+                None,
+                &worker_config(false)
+            )
+            .await
+            .unwrap(),
+            DeliveryAction::Ack
+        );
+        deepref_app::complete_job(&pool, &lease).await.unwrap();
+    }
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ai_usage_detached_projects WHERE workspace_id=$1")
+            .bind(workspace.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 0);
+    let buckets: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ai_usage_period_buckets WHERE project_id=$1")
+            .bind(observed_project.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(buckets, 0);
+}

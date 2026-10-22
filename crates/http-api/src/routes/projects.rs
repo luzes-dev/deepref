@@ -15,8 +15,9 @@ use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
 };
+use deepref_app::identity::AuditRequest;
 use deepref_domain::{
-    UserId, WorkspaceId,
+    ProjectId, UserId, WorkspaceId,
     authorization::{Permission, Resource},
 };
 
@@ -138,6 +139,7 @@ pub(crate) async fn create_project(
         }
     };
     let id = Uuid::new_v4();
+    let mut tx = state.pool.begin().await?;
     let row = sqlx::query(
         r#"
         INSERT INTO projects (id, name, description, default_max_depth, workspace_id)
@@ -151,8 +153,23 @@ pub(crate) async fn create_project(
     .bind(input.description)
     .bind(default_max_depth)
     .bind(workspace.as_uuid())
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
+    let actor = session
+        .as_ref()
+        .and_then(|CurrentSession(context)| context.principal.user_id());
+    deepref_app::record_project_created(
+        &mut tx,
+        actor,
+        workspace,
+        ProjectId::new(id),
+        AuditRequest {
+            request_id: crate::error::correlation_id().as_deref(),
+            session_ref: None,
+        },
+    )
+    .await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(project_from_row(row))))
 }
 
@@ -275,11 +292,37 @@ pub(crate) async fn update_project(
 pub(crate) async fn delete_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    session: Option<CurrentSession>,
 ) -> Result<StatusCode, ApiError> {
+    let actor = session
+        .as_ref()
+        .and_then(|CurrentSession(context)| context.principal.user_id());
     let mut tx = state.pool.begin().await?;
+    // The audit row names the workspace the project leaves (the trigger
+    // guarantees one; the migration workspace is its default).
+    let workspace: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(workspace_id) = workspace else {
+        return Err(ApiError::NotFound("project not found".into()));
+    };
     if !deepref_app::delete_project_in_transaction(&mut tx, project_id).await? {
         return Err(ApiError::NotFound("project not found".into()));
     }
+    let workspace = WorkspaceId::new(workspace_id);
+    deepref_app::record_project_deleted(
+        &mut tx,
+        actor,
+        workspace,
+        ProjectId::new(project_id),
+        AuditRequest {
+            request_id: crate::error::correlation_id().as_deref(),
+            session_ref: None,
+        },
+    )
+    .await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

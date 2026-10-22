@@ -259,11 +259,14 @@ pub(crate) async fn record_denial(
     denied_for: DeniedFor,
     resource: DeniedResource,
 ) {
+    let request_id = request_id
+        .map(str::to_owned)
+        .or_else(crate::error::correlation_id);
     let denial = Denial {
         user,
         denied_for,
         resource,
-        request_id,
+        request_id: request_id.as_deref(),
     };
     if let Err(error) = state.denials.record(denial).await {
         tracing::warn!(%error, "authorization denial could not be audited");
@@ -380,8 +383,12 @@ mod tests {
     use super::*;
 
     fn lazy_state() -> AppState {
+        // A pool no test may query, failing an acquire immediately instead of
+        // waiting out the default 30-second timeout when a denial audit write
+        // reaches it.
         AppState::new(
             sqlx::postgres::PgPoolOptions::new()
+                .acquire_timeout(std::time::Duration::from_millis(250))
                 .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
                 .unwrap(),
         )

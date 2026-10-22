@@ -11,8 +11,13 @@
 //! absence at the provider deactivates `workos_mirrored` grants and nothing
 //! else, `local` grants are preserved, and every disagreement is returned as
 //! a [`ReconciliationFinding`] instead of being resolved silently.
+//!
+//! Membership transactions take locks in this order: workspace row first,
+//! then user rows needed by audit inserts in id order, then invitations, then
+//! membership rows. WorkOS reconciliation locks the workspace before touching
+//! membership rows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use deepref_application::workspaces::{
     DirectoryError, DirectoryMembership, DirectoryMembershipStatus, DirectoryOrganization,
@@ -28,6 +33,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::deletion_digest::hmac_normalized_email;
 use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
 
 /// The deterministic migration workspace that holds every project created
@@ -77,6 +83,8 @@ pub enum WorkspaceError {
     InvitationExpired,
     #[error("the invitation was issued to a different address")]
     InvitationEmailMismatch,
+    #[error("could not compute the invitation deletion digest")]
+    DeletionDigest,
     #[error("the provider has not verified the account's email address")]
     InvitationEmailUnverified,
     #[error(
@@ -451,8 +459,10 @@ async fn load_membership_for_update(
 }
 
 /// Serializes membership changes inside one workspace, so two concurrent
-/// changes cannot both decide they are not the last owner.
-async fn lock_workspace(
+/// changes cannot both decide they are not the last owner. Account deletion
+/// completion takes the same lock before it re-checks a workspace, so a member
+/// joining between the candidate scan and the deletion cannot slip past it.
+pub(crate) async fn lock_workspace(
     tx: &mut Transaction<'_, Postgres>,
     workspace_id: WorkspaceId,
 ) -> Result<(), WorkspaceError> {
@@ -873,6 +883,45 @@ pub async fn delete_workspace(
     if projects > 0 {
         return Err(WorkspaceError::WorkspaceHasProjects);
     }
+    delete_workspace_rows(&mut tx, actor, workspace_id, audit).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The workspace-level deletion itself, inside the caller's transaction and
+/// under the workspace lock the caller already took: pending invitations end
+/// as revoked (audited), every membership is audited as removed, and the
+/// workspace disappears. Account deletion completion calls this after it has
+/// deleted the workspace's projects in the same transaction, so projects,
+/// content and workspace go in ONE transaction.
+pub(crate) async fn delete_workspace_rows(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    workspace_id: WorkspaceId,
+    audit: AuditRequest<'_>,
+) -> Result<(), WorkspaceError> {
+    // Audit inserts below carry the acting user and every affected member as
+    // foreign keys. Lock those user rows before invitations so this path
+    // follows finalization's user-before-invitation order and cannot hold an
+    // invitation while waiting for finalization's user lock.
+    let member_user_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM workspace_memberships
+         WHERE workspace_id = $1 ORDER BY user_id",
+    )
+    .bind(workspace_id.as_uuid())
+    .fetch_all(&mut **tx)
+    .await?;
+    let user_ids: Vec<Uuid> = std::iter::once(actor.as_uuid())
+        .chain(member_user_ids)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let _locked_users =
+        sqlx::query("SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR KEY SHARE")
+            .bind(&user_ids)
+            .fetch_all(&mut **tx)
+            .await?;
+
     // Pending invitations end as revoked (audited); every invitation row is
     // then deleted with the workspace, its history living in the audit trail.
     let pending = sqlx::query(
@@ -880,14 +929,14 @@ pub async fn delete_workspace(
          WHERE workspace_id = $1 AND status = 'pending' ORDER BY created_at, id",
     )
     .bind(workspace_id.as_uuid())
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     for row in &pending {
         let id: Uuid = row.try_get("id")?;
         let role: String = row.try_get("role")?;
         let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
         write_tenancy_audit(
-            &mut tx,
+            tx,
             TenancyEvent::InvitationRevoked(role, id),
             AuditPrincipal::User(actor),
             None,
@@ -899,19 +948,19 @@ pub async fn delete_workspace(
     }
     sqlx::query("DELETE FROM workspace_invitations WHERE workspace_id = $1")
         .bind(workspace_id.as_uuid())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     let members = sqlx::query(
         "SELECT id, workspace_id, user_id, role, status, grant_source, workos_membership_id
          FROM workspace_memberships WHERE workspace_id = $1 ORDER BY created_at, id",
     )
     .bind(workspace_id.as_uuid())
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     for row in &members {
         let member = membership_record(row)?;
         write_tenancy_audit(
-            &mut tx,
+            tx,
             TenancyEvent::MembershipRemoved(member.role, member.grant_source),
             AuditPrincipal::User(actor),
             Some(member.user_id),
@@ -922,7 +971,7 @@ pub async fn delete_workspace(
         .await?;
     }
     write_tenancy_audit(
-        &mut tx,
+        tx,
         TenancyEvent::WorkspaceDeleted,
         AuditPrincipal::User(actor),
         None,
@@ -933,14 +982,189 @@ pub async fn delete_workspace(
     .await?;
     sqlx::query("DELETE FROM workspace_memberships WHERE workspace_id = $1")
         .bind(workspace_id.as_uuid())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("DELETE FROM workspaces WHERE id = $1")
         .bind(workspace_id.as_uuid())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(())
+}
+
+/// Removes one membership inside the caller's transaction, with the
+/// `membership.removed` audit row. Unlike [`remove_membership`] it never
+/// refuses the last-owner loss: an account deletion (and 02's global
+/// deactivation, which never passes through the voluntary path) withdraws
+/// access from someone who is leaving the platform, and a workspace whose last
+/// owner leaves that way is left ownerless for the operator recovery flow. The
+/// workspace lock must already be held.
+pub(crate) async fn remove_membership_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    workspace_id: WorkspaceId,
+    user_id: UserId,
+    audit: AuditRequest<'_>,
+) -> Result<MembershipRecord, WorkspaceError> {
+    let membership = load_membership_for_update(tx, workspace_id, user_id).await?;
+    sqlx::query("DELETE FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2")
+        .bind(workspace_id.as_uuid())
+        .bind(user_id.as_uuid())
+        .execute(&mut **tx)
+        .await?;
+    write_tenancy_audit(
+        tx,
+        TenancyEvent::MembershipRemoved(membership.role, membership.grant_source),
+        AuditPrincipal::User(actor),
+        Some(user_id),
+        Some(workspace_id),
+        None,
+        audit,
+    )
+    .await?;
+    Ok(membership)
+}
+
+/// Account-deletion PII erasure for invitations (11 Part B): a pending
+/// invitation addressed to the account is revoked (audited) and deleted, and
+/// every other invitation row that carries the address keeps its history under
+/// the tombstone `deleted-<invitation id>@invalid`. The parameter contains
+/// only keyed HMAC-SHA256 digests of normalized account addresses, so replay
+/// does not depend on the restored profile. The stored completion timestamp
+/// fences off invitations created after the original deletion. Returns how
+/// many rows changed.
+pub(crate) async fn scrub_user_invitations(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    email_hmac_sha256: &[String],
+    completed_at: chrono::DateTime<chrono::Utc>,
+    digest_key: &str,
+    audit: AuditRequest<'_>,
+) -> Result<u64, WorkspaceError> {
+    let digests: BTreeSet<String> = email_hmac_sha256.iter().cloned().collect::<BTreeSet<_>>();
+    if digests.is_empty() {
+        return Ok(0);
+    }
+
+    // The HMAC key never crosses the SQL boundary. Read addresses from rows
+    // created before the original fulfillment, then compare their HMACs in
+    // process memory. The timestamp fence leaves every later re-signup's
+    // invitations untouched on replay.
+    let candidates = sqlx::query(
+        "SELECT id, email FROM workspace_invitations
+         WHERE created_at < $1 ORDER BY created_at, id",
+    )
+    .bind(completed_at)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let mut matching_ids = BTreeSet::new();
+    for row in &candidates {
+        let id: Uuid = row.try_get("id")?;
+        let email: String = row.try_get("email")?;
+        let Some(normalized) = normalize_invitation_email(&email) else {
+            continue;
+        };
+        let digest = hmac_normalized_email(&normalized, digest_key.as_bytes())
+            .map_err(|_| WorkspaceError::DeletionDigest)?;
+        if digests.contains(&digest) {
+            matching_ids.insert(id);
+        }
+    }
+    if matching_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let matching_ids: Vec<Uuid> = matching_ids.into_iter().collect();
+    // Lock only candidate rows, then recheck their current address and status
+    // before auditing or mutating them.
+    let matching = sqlx::query(
+        "SELECT id, workspace_id, role, status, email
+         FROM workspace_invitations
+         WHERE id = ANY($1) AND created_at < $2
+         ORDER BY created_at, id FOR UPDATE",
+    )
+    .bind(&matching_ids)
+    .bind(completed_at)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let mut pending = Vec::new();
+    let mut historical_ids = Vec::new();
+    for row in &matching {
+        let id: Uuid = row.try_get("id")?;
+        let email: String = row.try_get("email")?;
+        let Some(normalized) = normalize_invitation_email(&email) else {
+            continue;
+        };
+        let digest = hmac_normalized_email(&normalized, digest_key.as_bytes())
+            .map_err(|_| WorkspaceError::DeletionDigest)?;
+        if !digests.contains(&digest) {
+            continue;
+        }
+        let status: String = row.try_get("status")?;
+        if status == "pending" {
+            let workspace_id = WorkspaceId::new(row.try_get("workspace_id")?);
+            let role: String = row.try_get("role")?;
+            let role = WorkspaceRole::parse(&role).ok_or(WorkspaceError::Corrupt("role"))?;
+            pending.push((id, workspace_id, role));
+        } else {
+            historical_ids.push(id);
+        }
+    }
+
+    for (id, workspace_id, role) in &pending {
+        write_tenancy_audit(
+            tx,
+            TenancyEvent::InvitationRevoked(*role, *id),
+            AuditPrincipal::User(actor),
+            None,
+            Some(*workspace_id),
+            None,
+            audit,
+        )
+        .await?;
+    }
+    let pending_ids: Vec<Uuid> = pending.iter().map(|(id, _, _)| *id).collect();
+    let deleted = if pending_ids.is_empty() {
+        0
+    } else {
+        sqlx::query(
+            "DELETE FROM workspace_invitations
+             WHERE id = ANY($1) AND status = 'pending' AND created_at < $2",
+        )
+        .bind(&pending_ids)
+        .bind(completed_at)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected()
+    };
+    let rewritten = if historical_ids.is_empty() {
+        0
+    } else {
+        sqlx::query(
+            "UPDATE workspace_invitations
+             SET email = 'deleted-' || id || '@invalid', updated_at = now()
+             WHERE id = ANY($1) AND status <> 'pending' AND created_at < $2",
+        )
+        .bind(&historical_ids)
+        .bind(completed_at)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected()
+    };
+    Ok(deleted + rewritten)
+}
+
+/// Normalizes and deduplicates addresses before they cross the SQL boundary.
+/// The result is used only to derive keyed HMAC-SHA256 values for deletion
+/// replay; the original addresses are never persisted in the fulfillment log.
+pub(crate) fn normalize_invitation_emails(emails: &[String]) -> Vec<String> {
+    emails
+        .iter()
+        .filter_map(|email| normalize_invitation_email(email))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Applies one WorkOS Organization snapshot to local projections, in one
@@ -971,12 +1195,6 @@ pub async fn apply_organization_snapshot(
         ))
         .execute(&mut *tx)
         .await?;
-    let watermark: Option<Option<chrono::DateTime<chrono::Utc>>> = sqlx::query_scalar(
-        "SELECT workos_reconciled_through FROM workspaces WHERE workos_organization_id = $1",
-    )
-    .bind(snapshot.organization.external_organization_id.as_str())
-    .fetch_optional(&mut *tx)
-    .await?;
     let workspace = match find_workspace_by_organization(
         &mut tx,
         &snapshot.organization.external_organization_id,
@@ -1006,6 +1224,15 @@ pub async fn apply_organization_snapshot(
             workspace
         }
     };
+    // All membership writers and account deletion take the workspace row
+    // before locking membership rows. Acquire it before the snapshot read too,
+    // or deletion can form a lock cycle with this reconciliation.
+    lock_workspace(&mut tx, workspace.id).await?;
+    let watermark: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT workos_reconciled_through FROM workspaces WHERE id = $1")
+            .bind(workspace.id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await?;
     let mut report = ReconciliationReport {
         workspace_id: workspace.id,
         created: 0,
@@ -1013,7 +1240,7 @@ pub async fn apply_organization_snapshot(
         status_changes: 0,
         findings: Vec::new(),
     };
-    if let Some(Some(through)) = watermark
+    if let Some(through) = watermark
         && snapshot.fetch_started_at < through
     {
         // Newer state is already applied. Applying this snapshot could restore

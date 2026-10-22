@@ -113,10 +113,21 @@ pub async fn enqueue_ai_usage_export_replay_job(
 /// capability fence prevents N-1 from claiming this kind, while a capable N
 /// worker can settle saved evidence even after admissions are suspended.
 pub async fn enqueue_ai_usage_reconciliation_jobs(pool: &PgPool) -> anyhow::Result<u64> {
-    let workspace_ids =
-        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM workspaces ORDER BY id")
-            .fetch_all(pool)
-            .await?;
+    // Account deletion removes solely-owned workspaces, but usage identities
+    // and financial holds survive. Keep their recovery scheduled until every
+    // reservation is terminal and detached cleanup finishes; five-year settled
+    // history adds no candidates.
+    let workspace_ids = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM workspaces
+         UNION
+         SELECT workspace_id FROM ai_usage_reservations
+         WHERE state IN ('open', 'observed', 'unresolved')
+         UNION
+         SELECT workspace_id FROM ai_usage_detached_projects
+         ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
     let minute = chrono::Utc::now().format("%Y%m%d%H%M").to_string();
     let mut queued = 0;
     for workspace_id in workspace_ids {

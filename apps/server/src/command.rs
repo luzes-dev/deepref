@@ -1,4 +1,5 @@
 use deepref_domain::WorkloadClass;
+use deepref_http_api::AuditQueryParams;
 use uuid::Uuid;
 
 /// Quiet window `ai-usage enable-export` checks without `--quiet-window-seconds`.
@@ -18,8 +19,26 @@ pub enum Command {
     Migrate,
     BackfillProjectWorkspaces,
     LegacyActor(LegacyActorCommand),
+    Audit(AuditCommand),
+    Accounts(AccountsCommand),
     AiUsage(AiUsageCommand),
     PrintOpenApi,
+}
+
+/// Administrative audit tooling (handoff 11 Part B).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditCommand {
+    /// Deletes audit rows past their retention cutoff.
+    Purge { dry_run: bool },
+    /// Prints matching audit rows as JSON lines.
+    Query(AuditQueryParams),
+}
+
+/// Account lifecycle tooling (handoff 11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountsCommand {
+    /// Completes account deletions whose 30-day window has passed.
+    CompleteDeletions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,8 +360,51 @@ impl Command {
                     fields().deny()
                 }))
             }
+            [command, action] if command == "accounts" && action == "complete-deletions" => {
+                Ok(Self::Accounts(AccountsCommand::CompleteDeletions))
+            }
+            [command, action, rest @ ..] if command == "audit" && action == "purge" => {
+                let mut dry_run = false;
+                for flag in rest {
+                    match flag.as_str() {
+                        "--dry-run" => dry_run = true,
+                        _ => anyhow::bail!(AUDIT_USAGE),
+                    }
+                }
+                Ok(Self::Audit(AuditCommand::Purge { dry_run }))
+            }
+            [command, action, rest @ ..] if command == "audit" && action == "query" => {
+                let mut params = AuditQueryParams::default();
+                let mut flags = rest.iter();
+                while let Some(flag) = flags.next() {
+                    let value = flags
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("missing value for {flag}"))?;
+                    match flag.as_str() {
+                        "--workspace" => {
+                            params.workspace_id = Some(parse_uuid(value, "--workspace")?);
+                        }
+                        "--principal" => {
+                            params.principal_user_id = Some(parse_uuid(value, "--principal")?);
+                        }
+                        "--target" => {
+                            params.target_user_id = Some(parse_uuid(value, "--target")?);
+                        }
+                        "--event-type" => params.event_type = Some(value.clone()),
+                        "--since" => params.since = Some(value.clone()),
+                        "--until" => params.until = Some(value.clone()),
+                        "--limit" => {
+                            params.limit = value
+                                .parse()
+                                .map_err(|error| anyhow::anyhow!("invalid --limit: {error}"))?;
+                        }
+                        _ => anyhow::bail!(AUDIT_USAGE),
+                    }
+                }
+                Ok(Self::Audit(AuditCommand::Query(params)))
+            }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
             ),
         }
     }
@@ -364,6 +426,8 @@ impl Command {
         Ok(pools)
     }
 }
+
+const AUDIT_USAGE: &str = "usage: deepref-server audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]";
 
 struct LegacyActorFields {
     kind: String,
@@ -603,6 +667,55 @@ mod tests {
             })
         );
         assert!(Command::parse(["import-legacy".into()]).is_err());
+    }
+
+    #[test]
+    fn parses_audit_and_account_commands() {
+        assert_eq!(
+            Command::parse(["audit".into(), "purge".into()]).unwrap(),
+            Command::Audit(AuditCommand::Purge { dry_run: false })
+        );
+        assert_eq!(
+            Command::parse(["audit".into(), "purge".into(), "--dry-run".into()]).unwrap(),
+            Command::Audit(AuditCommand::Purge { dry_run: true })
+        );
+        assert_eq!(
+            Command::parse(["accounts".into(), "complete-deletions".into()]).unwrap(),
+            Command::Accounts(AccountsCommand::CompleteDeletions)
+        );
+        let params = AuditQueryParams {
+            workspace_id: Some(Uuid::parse_str("00000000-0000-0000-0000-00000000000a").unwrap()),
+            principal_user_id: Some(
+                Uuid::parse_str("00000000-0000-0000-0000-00000000000b").unwrap(),
+            ),
+            target_user_id: None,
+            event_type: Some("authorization.denied".into()),
+            since: Some("2026-01-01T00:00:00Z".into()),
+            until: None,
+            limit: 50,
+        };
+        assert_eq!(
+            Command::parse([
+                "audit".into(),
+                "query".into(),
+                "--workspace".into(),
+                "00000000-0000-0000-0000-00000000000a".into(),
+                "--principal".into(),
+                "00000000-0000-0000-0000-00000000000b".into(),
+                "--event-type".into(),
+                "authorization.denied".into(),
+                "--since".into(),
+                "2026-01-01T00:00:00Z".into(),
+                "--limit".into(),
+                "50".into(),
+            ])
+            .unwrap(),
+            Command::Audit(AuditCommand::Query(params))
+        );
+        assert!(Command::parse(["audit".into(), "query".into(), "--limit".into()]).is_err());
+        assert!(
+            Command::parse(["audit".into(), "purge".into(), "--limit".into(), "5".into()]).is_err()
+        );
     }
 
     #[test]

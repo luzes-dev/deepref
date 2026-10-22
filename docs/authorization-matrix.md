@@ -9,13 +9,13 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 
 | Rule | Rows |
 | --- | --- |
-| Authenticated | 8 |
+| Authenticated | 10 |
 | Handler | 3 |
 | Open | 10 |
 | PlatformOperator | 1 |
 | Require | 143 |
 | RequireIfPresent | 1 |
-| **Total HTTP** | **166** |
+| **Total HTTP** | **168** |
 | **Non-HTTP paths** | **10** |
 
 ## HTTP routes
@@ -35,6 +35,8 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 | POST | `/hooks/email/{token}` | Open | - | - | `n/a` | machine delivery authenticated by its private address token |
 | POST | `/hooks/workflows/{token}` | Open | - | - | `n/a` | machine delivery authenticated by its private address token and HMAC signature |
 | GET | `/me` | Authenticated | - | user-scoped | `n/a` | the caller reads their own profile |
+| DELETE | `/me/deletion-request` | Authenticated | - | user-scoped | `authz_user_scoped::deletion_request_affects_only_its_caller` | the caller cancels their own pending account deletion |
+| POST | `/me/deletion-request` | Authenticated | - | user-scoped | `authz_user_scoped::deletion_request_affects_only_its_caller` | the caller schedules deletion of their own account (11, BUSINESS_DECISIONS) |
 | GET | `/notifications` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | user-scoped inbox, filtered to projects the caller can still view |
 | POST | `/notifications/mark-read` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | marks only notifications of projects the caller can still view |
 | GET | `/notifications/unread-count` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | user-scoped count over projects the caller can still view |

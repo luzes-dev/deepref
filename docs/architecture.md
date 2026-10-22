@@ -442,6 +442,10 @@ the previous release provisioned (no memberships) is onboarded by their next
 sign-in. Invitations bind only to the address the provider verified
 (`users.verified_email`, which must equal the current `primary_email`). WorkOS reconciliation is serialized per Organization
 and rejects any snapshot that began before `workspaces.workos_reconciled_through`.
+Membership writes and reconciliation take locks in the order **workspace row,
+then membership rows**. Account-deletion workspace cleanup takes the same
+order; the overlapping-transaction test protects against reconciliation
+holding memberships while waiting for the workspace.
 
 ## Migration recovery: the denial-window index (handoff 03b)
 
@@ -459,3 +463,51 @@ Migration 0101 asserts the index is valid, ready and unique and refuses to
 continue otherwise, so a skipped or half-built index can never be accepted. The
 two migrations are unreleased; once released they are immutable and any repair
 is a new migration.
+
+Migrations 0113–0115 build the `auth.rejected` window index and the two
+incident-response query indexes the same way (`CREATE INDEX CONCURRENTLY`,
+`-- no-transaction`, no `IF NOT EXISTS`), and migration 0116 refuses to
+continue unless all three exist and are valid and ready. Recovery is the same
+one: `DROP INDEX CONCURRENTLY IF EXISTS <name>;` by hand, then rerun.
+
+## Audit retention and purge (handoff 11)
+
+The administrative/security audit (`admin_audit_events`) is retained 6 months
+and the proof that a deletion request was fulfilled (`account.deletion_completed`
+and `fulfilled_account_deletions`) 5 years; the fulfillment log contains only
+user/time identifiers and normalized-email HMAC-SHA256 digests, never
+plaintext. The HMACs are pseudonymous, linkable data, not a contentless log,
+per BUSINESS_DECISIONS. Retention is enforced by the append-only trigger
+(migration 0112): only `deepref-server audit purge`, running with the
+transaction-local `deepref.audit_purge` key, can delete, and only rows already
+past their cutoff. The purge runs **daily** (cron or the platform scheduler),
+deletes in bounded batches, is safe to interrupt and rerun, and records each
+real run as `audit.purged`. Details, the incident-response query
+(`deepref-server audit query`) and the account-deletion restore step are in
+[security.md](security.md).
+
+Account deletion is a request state machine (`account_deletion_requests`:
+`requested`, `cancelled`, `completing`, `completed`). Cancellation and
+completion lock the request row, then the user row; completion claims a due
+request before any destructive work, deletes a workspace only under
+`lock_workspace` after re-checking sole ownership, and finishes in one
+transaction that anonymizes the user, sets the durable `users.deleted_at`
+marker (held by a database trigger) and moves the request to `completed`.
+Logout uses the same user-before-session row order as finalization. Workspace
+deletion locks the workspace, affected users in UUID order, invitations, then
+memberships; it takes user `FOR KEY SHARE` locks before invitation changes to
+match finalization's user-before-invitation order. The five-year fulfillment
+log stores normalized-email HMAC-SHA256 digests and the original completion
+timestamp so replay scrubs only older invitations without consulting the
+anonymized profile or touching re-signup invitations. The HMAC key is held
+outside PostgreSQL and is read only by the completion/replay command. Audit
+PII redaction runs through the restricted
+`redact_deleted_user_audit(user_id)` SECURITY DEFINER function; its gate is
+transaction-local and accepts only a deleted account or a request in
+`completing`. The 0117 trigger also checks the target user and deletion state.
+Actual function privilege separation requires migrations to run under an owner
+role distinct from the runtime role; a runtime role that owns the function
+does not get a meaningful boundary from the conditional `deepref_app` grant.
+Restore: re-import the `fulfilled_account_deletions` log and run
+`deepref-server accounts complete-deletions`, which replays every logged
+deletion idempotently.

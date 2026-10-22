@@ -302,6 +302,58 @@ async fn settings_update_is_reserved_for_operators() {
 }
 
 #[tokio::test]
+async fn deletion_request_affects_only_its_caller() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let a = h.sign_in("user_A", "a@example.org").await;
+    let b = h.sign_in("user_B", "b@example.org").await;
+
+    async fn pending(h: &Harness, user: deepref_domain::UserId) -> bool {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM account_deletion_requests
+             WHERE user_id = $1 AND state = 'requested'",
+        )
+        .bind(user.as_uuid())
+        .fetch_one(&h.pool)
+        .await
+        .unwrap()
+            > 0
+    }
+
+    let (status, _) = h
+        .send(&a, Method::POST, "/me/deletion-request", Some("{}"))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert!(
+        pending(&h, a.user).await,
+        "the caller's request is recorded"
+    );
+    assert!(!pending(&h, b.user).await, "another account is untouched");
+
+    // The cancellation is user-scoped too: b's cancels nothing of a's.
+    let (status, _) = h
+        .send(&b, Method::DELETE, "/me/deletion-request", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(pending(&h, a.user).await, "a's request survives b's cancel");
+    let (status, _) = h
+        .send(&a, Method::DELETE, "/me/deletion-request", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!pending(&h, a.user).await);
+
+    // One audit row for the one request that existed.
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM admin_audit_events WHERE event_type = 'account.deletion_requested'",
+    )
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, 1);
+}
+
+#[tokio::test]
 async fn user_scoped_routes_answer_the_caller_only() {
     let Some(h) = Harness::new().await else {
         return;

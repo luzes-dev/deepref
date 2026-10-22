@@ -424,3 +424,213 @@ export const prefetchGetCurrentUserQuery = async <
 
 	return queryClient;
 };
+
+export type requestAccountDeletionResponse202 = {
+	data: void;
+	status: 202;
+};
+
+export type requestAccountDeletionResponse401 = {
+	data: ApiErrorBody;
+	status: 401;
+};
+
+export type requestAccountDeletionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type requestAccountDeletionResponseSuccess = requestAccountDeletionResponse202 & {
+	headers: Headers;
+};
+export type requestAccountDeletionResponseError = (
+	requestAccountDeletionResponse401 | requestAccountDeletionResponse404
+) & {
+	headers: Headers;
+};
+
+export const getRequestAccountDeletionUrl = () => {
+	return `/api/me/deletion-request`;
+};
+
+export const requestAccountDeletion = async (
+	options?: Parameters<typeof customFetch>[1]
+): Promise<requestAccountDeletionResponseSuccess> => {
+	return customFetch<requestAccountDeletionResponseSuccess>(getRequestAccountDeletionUrl(), {
+		...options,
+		method: 'POST'
+	});
+};
+
+export const getRequestAccountDeletionMutationKey = () => ['requestAccountDeletion'] as const;
+
+export const getRequestAccountDeletionMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof requestAccountDeletion>>,
+		TError,
+		void,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof requestAccountDeletion>>,
+	TError,
+	void,
+	TContext
+> => {
+	const mutationKey = getRequestAccountDeletionMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof requestAccountDeletion>>,
+		void
+	> = () => {
+		return requestAccountDeletion(requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RequestAccountDeletionMutationResult = NonNullable<
+	Awaited<ReturnType<typeof requestAccountDeletion>>
+>;
+
+export type RequestAccountDeletionMutationError = ErrorType<ApiErrorBody>;
+
+export const createRequestAccountDeletion = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof requestAccountDeletion>>,
+			TError,
+			void,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof requestAccountDeletion>>,
+	TError,
+	void,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRequestAccountDeletionMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type cancelAccountDeletionResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type cancelAccountDeletionResponse401 = {
+	data: ApiErrorBody;
+	status: 401;
+};
+
+export type cancelAccountDeletionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type cancelAccountDeletionResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type cancelAccountDeletionResponseSuccess = cancelAccountDeletionResponse204 & {
+	headers: Headers;
+};
+export type cancelAccountDeletionResponseError = (
+	| cancelAccountDeletionResponse401
+	| cancelAccountDeletionResponse404
+	| cancelAccountDeletionResponse409
+) & {
+	headers: Headers;
+};
+
+export const getCancelAccountDeletionUrl = () => {
+	return `/api/me/deletion-request`;
+};
+
+export const cancelAccountDeletion = async (
+	options?: Parameters<typeof customFetch>[1]
+): Promise<cancelAccountDeletionResponseSuccess> => {
+	return customFetch<cancelAccountDeletionResponseSuccess>(getCancelAccountDeletionUrl(), {
+		...options,
+		method: 'DELETE'
+	});
+};
+
+export const getCancelAccountDeletionMutationKey = () => ['cancelAccountDeletion'] as const;
+
+export const getCancelAccountDeletionMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof cancelAccountDeletion>>,
+		TError,
+		void,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof cancelAccountDeletion>>,
+	TError,
+	void,
+	TContext
+> => {
+	const mutationKey = getCancelAccountDeletionMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof cancelAccountDeletion>>,
+		void
+	> = () => {
+		return cancelAccountDeletion(requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type CancelAccountDeletionMutationResult = NonNullable<
+	Awaited<ReturnType<typeof cancelAccountDeletion>>
+>;
+
+export type CancelAccountDeletionMutationError = ErrorType<ApiErrorBody>;
+
+export const createCancelAccountDeletion = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof cancelAccountDeletion>>,
+			TError,
+			void,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof cancelAccountDeletion>>,
+	TError,
+	void,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getCancelAccountDeletionMutationOptions(options?.()) }),
+		queryClient
+	);
+};

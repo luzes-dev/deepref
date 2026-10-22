@@ -290,10 +290,22 @@ async fn a_callback_with_a_missing_or_wrong_state_is_rejected() {
         );
     }
     assert_eq!(count(&h.pool, "SELECT count(*) FROM users").await, 0);
+    // The refusals are audited (11 Part B), bounded to one row per window;
+    // nothing else is recorded: no user, no login, no session.
     assert_eq!(
-        count(&h.pool, "SELECT count(*) FROM admin_audit_events").await,
+        count(
+            &h.pool,
+            "SELECT count(*) FROM admin_audit_events WHERE event_type <> 'auth.rejected'"
+        )
+        .await,
         0
     );
+    let rejections = count(
+        &h.pool,
+        "SELECT count(*) FROM admin_audit_events WHERE event_type = 'auth.rejected'",
+    )
+    .await;
+    assert!((1..=2).contains(&rejections), "{rejections} rejection rows");
 }
 
 #[tokio::test]
