@@ -18,7 +18,7 @@ use std::{
 use chrono::Datelike;
 use deepref_domain::{
     CriterionDimension, CriterionKind, CriterionStage, DocumentBlockId, EligibilityCriterion,
-    ProjectId,
+    ProjectId, WorkspaceId,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -870,6 +870,10 @@ impl UsageLedger for Ledger {
         Box::pin(async move {
             let reservation = UsageReservation {
                 id: Uuid::new_v4(),
+                workspace_id: request
+                    .attribution
+                    .workspace_id
+                    .unwrap_or_else(|| WorkspaceId::new(Uuid::new_v4())),
                 period_start: chrono::Utc::now()
                     .date_naive()
                     .with_day(1)
@@ -894,6 +898,7 @@ impl UsageLedger for Ledger {
             let additional = request.reserved_cost_micros(&reservation.price)?;
             Ok(UsageReservation {
                 id: reservation.id,
+                workspace_id: reservation.workspace_id,
                 period_start: reservation.period_start,
                 reserved_cost_micros: reservation
                     .reserved_cost_micros

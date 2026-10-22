@@ -103,6 +103,10 @@ impl UsageLedger for FakeLedger {
             let reserved_cost_micros = request.reserved_cost_micros()?;
             let reservation = UsageReservation {
                 id: Uuid::new_v4(),
+                workspace_id: request
+                    .attribution
+                    .workspace_id
+                    .unwrap_or_else(|| deepref_domain::WorkspaceId::new(Uuid::new_v4())),
                 period_start: chrono::Utc::now()
                     .date_naive()
                     .with_day(1)
@@ -127,6 +131,7 @@ impl UsageLedger for FakeLedger {
             let additional = request.reserved_cost_micros(&reservation.price)?;
             Ok(UsageReservation {
                 id: reservation.id,
+                workspace_id: reservation.workspace_id,
                 period_start: reservation.period_start,
                 reserved_cost_micros: reservation
                     .reserved_cost_micros
@@ -234,6 +239,8 @@ pub(super) async fn run_script(
             host: Arc::new(host),
             ledger: Arc::new(ledger),
             prices: PriceBook::default(),
+            admission: None,
+            admission_limits: Default::default(),
             config,
             recorder: None,
             progress,
@@ -286,4 +293,61 @@ pub(super) fn stream_call(id: &str, name: &str, args: Value) -> Vec<MockStreamEv
             .with_call_id(id.to_owned()),
         MockStreamEvent::final_response_with_total_tokens(4),
     ]
+}
+
+/// Deterministic lease seam for stream cancellation and renewal failures.
+#[derive(Clone, Default)]
+pub(super) struct TestAdmission {
+    pub(super) released: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) fail_renewal: bool,
+    pub(super) hang_renewal: bool,
+    pub(super) interval: Option<std::time::Duration>,
+}
+
+impl crate::AiConcurrencyAdmission for TestAdmission {
+    fn acquire<'a>(
+        &'a self,
+        scope: crate::AiConcurrencyScope,
+    ) -> crate::AdmissionFuture<'a, crate::SlotLease> {
+        Box::pin(async move {
+            let keys = scope.keys();
+            let grant = |index: usize| crate::SlotGrant {
+                scope_kind: keys[index].0,
+                scope_key: keys[index].1.clone(),
+                slot_index: 0,
+                holder_id: Uuid::nil(),
+                generation: 1,
+                lease_expires_at: chrono::Utc::now() + chrono::Duration::seconds(60),
+            };
+            Ok(crate::SlotLease {
+                workspace: grant(0),
+                route: grant(1),
+                scope,
+            })
+        })
+    }
+
+    fn renew<'a>(&'a self, _lease: &'a crate::SlotLease) -> crate::AdmissionFuture<'a, ()> {
+        Box::pin(async move {
+            if self.hang_renewal {
+                return std::future::pending().await;
+            }
+            if self.fail_renewal {
+                return Err(crate::AdmissionError::Persistence(
+                    "database unavailable".to_owned(),
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    fn release<'a>(&'a self, _lease: crate::SlotLease) -> crate::AdmissionFuture<'a, ()> {
+        self.released.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn renew_interval(&self) -> std::time::Duration {
+        self.interval
+            .unwrap_or(std::time::Duration::from_millis(20))
+    }
 }

@@ -84,8 +84,20 @@ async fn build_ai_gateway(
         api_key,
         Arc::new(deepref_app::PostgresUsageLedger::new(pool)),
         prices,
+        Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(pool)),
+        concurrency_limits(ai_config),
     )?;
     Ok(gateway)
+}
+
+/// The simultaneous-call ceilings one process admits its AI calls under.
+pub(crate) fn concurrency_limits(
+    ai_config: &deepref_config::AiProviderConfig,
+) -> deepref_ai::AiConcurrencyLimits {
+    deepref_ai::AiConcurrencyLimits {
+        workspace: ai_config.max_concurrent_per_workspace,
+        route: ai_config.max_concurrent_per_route,
+    }
 }
 
 pub async fn run(config: config::WorkerConfig, pools: Vec<WorkloadClass>) -> anyhow::Result<()> {

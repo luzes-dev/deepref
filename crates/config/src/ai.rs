@@ -10,6 +10,13 @@ pub const DEFAULT_OPENCODE_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 /// Legacy Z.AI endpoint, used only with `DEEPREF_AI_PROVIDER=zai`.
 pub const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 pub const DEFAULT_AI_MODEL: &str = "glm-5.3-flash";
+/// Conservative operational concurrency ceilings: simultaneous AI calls one
+/// workspace or one provider/model route may run. They bound provider spend
+/// and blast radius during incidents, not cost accounting (that is the
+/// reservation's job). Lowering one stops granting slots at or above the new
+/// value; leases already granted there drain normally.
+pub const DEFAULT_MAX_CONCURRENT_PER_WORKSPACE: u32 = 4;
+pub const DEFAULT_MAX_CONCURRENT_PER_ROUTE: u32 = 16;
 
 const PRICES_VARIABLE: &str = "DEEPREF_AI_MODEL_PRICES";
 const CONFIGURED_MODEL_PRICES: [(&str, i64, i64); 4] = [
@@ -78,6 +85,11 @@ pub struct AiProviderConfig {
     pub base_url: String,
     pub default_model: String,
     pub price_overrides: Vec<ModelPriceOverride>,
+    /// Operational concurrency ceiling: simultaneous AI calls per workspace.
+    pub max_concurrent_per_workspace: u32,
+    /// Operational concurrency ceiling: simultaneous AI calls per
+    /// provider/model route, before any reviewed per-route narrowing.
+    pub max_concurrent_per_route: u32,
     deprecations: Vec<&'static str>,
 }
 
@@ -90,6 +102,11 @@ impl fmt::Debug for AiProviderConfig {
             .field("base_url", &self.base_url)
             .field("default_model", &self.default_model)
             .field("price_overrides", &self.price_overrides)
+            .field(
+                "max_concurrent_per_workspace",
+                &self.max_concurrent_per_workspace,
+            )
+            .field("max_concurrent_per_route", &self.max_concurrent_per_route)
             .finish()
     }
 }
@@ -145,6 +162,16 @@ impl AiProviderConfig {
                 .unwrap_or_else(|| DEFAULT_AI_MODEL.to_owned()),
             price_overrides: parse_price_overrides(
                 crate::optional(get, PRICES_VARIABLE).as_deref(),
+            )?,
+            max_concurrent_per_workspace: concurrency_limit(
+                get,
+                "DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE",
+                DEFAULT_MAX_CONCURRENT_PER_WORKSPACE,
+            )?,
+            max_concurrent_per_route: concurrency_limit(
+                get,
+                "DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE",
+                DEFAULT_MAX_CONCURRENT_PER_ROUTE,
             )?,
             deprecations,
         })
@@ -247,6 +274,23 @@ fn usd_to_micros(text: &str) -> Result<i64, ConfigError> {
     Ok((value * 1_000_000.0).round() as i64)
 }
 
+/// A concurrency ceiling must be a positive integer: zero would refuse every
+/// call and a missing value keeps the conservative default.
+fn concurrency_limit(
+    get: &dyn Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: u32,
+) -> Result<u32, ConfigError> {
+    let value = crate::parse::<u32>(get, name, default)?;
+    if value == 0 || value > i32::MAX as u32 {
+        return Err(ConfigError::Invalid {
+            name,
+            reason: "must be between 1 and 2147483647".to_owned(),
+        });
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +351,38 @@ mod tests {
         assert_eq!(config.base_url, "https://proxy.example/zen/go/v1");
         assert_eq!(config.default_model, "kimi-k2.6");
         assert!(load_error(&[("OPENCODE_BASE_URL", "ftp://nope")]).contains("OPENCODE_BASE_URL"));
+    }
+
+    #[test]
+    fn concurrency_ceilings_default_conservatively_and_can_be_lowered() {
+        let config = load(&[("OPENCODE_API_KEY", "k")]);
+        assert_eq!(
+            config.max_concurrent_per_workspace,
+            DEFAULT_MAX_CONCURRENT_PER_WORKSPACE
+        );
+        assert_eq!(
+            config.max_concurrent_per_route,
+            DEFAULT_MAX_CONCURRENT_PER_ROUTE
+        );
+        let lowered = load(&[
+            ("OPENCODE_API_KEY", "k"),
+            ("DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE", "1"),
+            ("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE", "3"),
+        ]);
+        assert_eq!(lowered.max_concurrent_per_workspace, 1);
+        assert_eq!(lowered.max_concurrent_per_route, 3);
+        assert!(
+            load_error(&[("DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE", "0")])
+                .contains("DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE")
+        );
+        assert!(
+            load_error(&[("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE", "2147483648")])
+                .contains("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE")
+        );
+        assert!(
+            load_error(&[("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE", "-2")])
+                .contains("DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE")
+        );
     }
 
     #[test]

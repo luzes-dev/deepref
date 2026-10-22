@@ -44,6 +44,14 @@ pub struct RouteCapabilities {
     pub per_tool_wrapper_bytes: u64,
     /// Maximum fixed wrapper bytes for each serialized tool-call argument.
     pub per_tool_argument_wrapper_bytes: u64,
+    /// Optional operational ceiling for simultaneous calls on this route,
+    /// narrower than the configured `DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE`.
+    /// `None` inherits the configured value. A route entry may only narrow the
+    /// configured ceiling. This is admission state, not a billing fact: it is
+    /// deliberately excluded from the price version identity, so tuning
+    /// concurrency can never change the price version recorded with a
+    /// settlement.
+    pub max_concurrent: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +74,20 @@ const fn text_function_route(
         per_message_overhead_bytes,
         per_tool_wrapper_bytes,
         per_tool_argument_wrapper_bytes,
+        max_concurrent: None,
+    }
+}
+
+impl RouteCapabilities {
+    /// Returns the route with `max_concurrent` narrowed to `max`. Review
+    /// entries use it to give one route a stricter simultaneous-call ceiling
+    /// than the deployment default.
+    #[must_use]
+    pub const fn with_max_concurrent(self, max: u32) -> Self {
+        Self {
+            max_concurrent: Some(max),
+            ..self
+        }
     }
 }
 
@@ -228,6 +250,9 @@ fn cost_micros(price: ModelPrice, input_tokens: u64, output_tokens: u64) -> Resu
 }
 
 fn version_for(routes: &BTreeMap<(String, String), RoutePrice>) -> String {
+    // Deliberately not hashed: `RouteCapabilities::max_concurrent` is
+    // operational admission state. Tuning concurrency must never change the
+    // price version recorded with a settlement.
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut feed = |bytes: &[u8]| {
         for byte in bytes {

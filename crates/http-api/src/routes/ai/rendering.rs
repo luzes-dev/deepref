@@ -105,6 +105,18 @@ pub(crate) fn map_ai_error(error: AiError) -> ApiError {
             message: "Paid AI dispatch is disabled until usage hard caps are enabled".to_owned(),
             details: Value::Null,
         },
+        AiError::AdmissionSaturated { scope_kind } => ApiError::Conflict {
+            code: "ai_concurrency_saturated".to_owned(),
+            message: format!(
+                "AI concurrency is saturated for {scope_kind}; try again when calls finish"
+            ),
+            details: Value::Null,
+        },
+        AiError::AdmissionLeaseLost => ApiError::Conflict {
+            code: "ai_concurrency_lease_lost".to_owned(),
+            message: "The AI concurrency lease was lost; the call must stop".to_owned(),
+            details: Value::Null,
+        },
         AiError::Route(message) => ApiError::Configuration(message),
         AiError::Gateway(message) => {
             ApiError::Configuration(format!("AI provider is unavailable: {message}"))

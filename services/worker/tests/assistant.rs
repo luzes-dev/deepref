@@ -119,6 +119,8 @@ fn services(model: MockCompletionModel) -> AssistantWorkerServices {
     AssistantWorkerServices {
         model_factory: Arc::new(StaticModelFactory::new(model.erase())),
         prices: deepref_ai::PriceBook::default(),
+        admission: None,
+        admission_limits: Default::default(),
     }
 }
 

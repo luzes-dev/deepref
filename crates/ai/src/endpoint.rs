@@ -324,6 +324,30 @@ mod tests {
     /// A ledger that never refuses a call. The wiring test never makes one.
     struct OpenLedger;
 
+    /// The wiring test never dispatches, so admission refuses every call.
+    struct SaturatedAdmission;
+
+    impl crate::AiConcurrencyAdmission for SaturatedAdmission {
+        fn acquire<'a>(
+            &'a self,
+            _scope: crate::AiConcurrencyScope,
+        ) -> crate::AdmissionFuture<'a, crate::SlotLease> {
+            Box::pin(async {
+                Err(crate::AdmissionError::Saturated {
+                    scope_kind: crate::AiConcurrencyScopeKind::Workspace,
+                })
+            })
+        }
+
+        fn renew<'a>(&'a self, _lease: &'a crate::SlotLease) -> crate::AdmissionFuture<'a, ()> {
+            Box::pin(async { Err(crate::AdmissionError::LeaseLost) })
+        }
+
+        fn release<'a>(&'a self, _lease: crate::SlotLease) -> crate::AdmissionFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
     impl UsageLedger for OpenLedger {
         fn reserve<'a>(
             &'a self,
@@ -332,6 +356,10 @@ mod tests {
             Box::pin(async move {
                 Ok(UsageReservation {
                     id: uuid::Uuid::new_v4(),
+                    workspace_id: request
+                        .attribution
+                        .workspace_id
+                        .unwrap_or_else(|| deepref_domain::WorkspaceId::new(uuid::Uuid::new_v4())),
                     period_start: chrono::Utc::now()
                         .date_naive()
                         .with_day(1)
@@ -351,6 +379,7 @@ mod tests {
                 let additional = request.reserved_cost_micros(&reservation.price)?;
                 Ok(UsageReservation {
                     id: reservation.id,
+                    workspace_id: reservation.workspace_id,
                     period_start: reservation.period_start,
                     reserved_cost_micros: reservation
                         .reserved_cost_micros
@@ -404,6 +433,8 @@ mod tests {
             "test-key",
             Arc::new(OpenLedger),
             PriceBook::new(Vec::new()),
+            Arc::new(SaturatedAdmission),
+            crate::AiConcurrencyLimits::default(),
         );
         assert!(built.is_ok());
         let registered = provider_endpoint("zai").ok().flatten();
@@ -421,6 +452,8 @@ mod tests {
                 "test-key",
                 Arc::new(OpenLedger),
                 PriceBook::new(Vec::new()),
+                Arc::new(SaturatedAdmission),
+                crate::AiConcurrencyLimits::default(),
             )
             .is_ok()
         );
@@ -431,6 +464,8 @@ mod tests {
                 "test-key",
                 Arc::new(OpenLedger),
                 PriceBook::new(Vec::new()),
+                Arc::new(SaturatedAdmission),
+                crate::AiConcurrencyLimits::default(),
             )
             .is_err()
         );

@@ -35,6 +35,11 @@ use deepref_app::{
 pub struct AssistantWorkerServices {
     pub model_factory: Arc<dyn deepref_ai::runtime::AgentModelFactory>,
     pub prices: deepref_ai::PriceBook,
+    /// Operational concurrency admission for the run's model turns. `None`
+    /// runs without slots (fakes); production wires the leased-slot adapter.
+    pub admission: Option<Arc<dyn deepref_ai::AiConcurrencyAdmission>>,
+    /// The simultaneous-call ceilings the run's scopes are admitted under.
+    pub admission_limits: deepref_ai::AiConcurrencyLimits,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +89,10 @@ pub async fn handle_assistant_agent_run(
         &AssistantWorkerServices {
             model_factory: factory,
             prices,
+            admission: Some(Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(
+                pool,
+            ))),
+            admission_limits: crate::concurrency_limits(config),
         },
     )
     .await
@@ -258,6 +267,8 @@ async fn drive_assistant_run(
         host,
         ledger,
         prices: services.prices.clone(),
+        admission: services.admission.clone(),
+        admission_limits: services.admission_limits,
         config: AgentLoopConfig::default(),
         recorder: Some(recorder),
         progress: None,

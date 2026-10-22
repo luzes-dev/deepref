@@ -125,6 +125,10 @@ Settings:
 | `OPENCODE_BASE_URL`        | `https://opencode.ai/zen/go/v1` | Endpoint override                                                      |
 | `DEEPREF_AI_DEFAULT_MODEL` | `glm-5.3-flash`                 | Model for new AI routes                                                |
 | `DEEPREF_AI_MODEL_PRICES`  | built-in                        | Price overrides: `provider/model=input:output`, US$ per million tokens |
+| `DEEPREF_AI_MAX_CONCURRENT_PER_WORKSPACE` | `4` | Shared leased-slot ceiling per workspace; positive integer |
+| `DEEPREF_AI_MAX_CONCURRENT_PER_ROUTE` | `16` | Shared leased-slot ceiling per provider/model; positive integer |
+
+Concurrency uses PostgreSQL across API and worker replicas. Set the same limits in both roles; drain replicas with an old higher value before lowering a limit. See [AI usage concurrency admission](ai-usage.md#concurrency-admission) for rollout, expiry and cancellation behavior.
 
 Usage export to the billing provider is off by default and provider-neutral until handoff 08 picks one:
 

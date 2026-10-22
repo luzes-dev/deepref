@@ -60,6 +60,16 @@ pub async fn run_with_provider_reconcilers(
         if let Err(error) = enqueue_ai_usage_export_replay_job(&pool, &usage_export).await {
             tracing::error!(%error, "AI usage export replay jobs could not be enqueued");
         }
+        // Cheap periodic sweep: slots freed by crash or expiry are deleted
+        // once they are long past any lease, so the table stays small.
+        match deepref_app::sweep_ai_concurrency_slots(&pool).await {
+            Ok(0) => {}
+            Ok(deleted) => tracing::debug!(deleted, "expired AI concurrency slots swept"),
+            Err(error) => tracing::warn!(%error, "AI concurrency slot sweep failed"),
+        }
+        // Structured, fixed-cardinality snapshots are scrapeable from worker
+        // logs until the metrics exporter is introduced.
+        tracing::info!(metrics = ?deepref_ai::admission_metrics().snapshot(), "AI concurrency admission metrics");
         crate::second_review::sweep(&pool).await;
     }
 }

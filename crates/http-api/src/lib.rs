@@ -381,6 +381,11 @@ pub async fn serve_with_shutdown(
                 api_key,
                 std::sync::Arc::new(deepref_app::PostgresUsageLedger::new(&pool)),
                 price_book(ai_config),
+                std::sync::Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(&pool)),
+                deepref_ai::AiConcurrencyLimits {
+                    workspace: ai_config.max_concurrent_per_workspace,
+                    route: ai_config.max_concurrent_per_route,
+                },
             )?;
             let routes = deepref_app::ensure_default_model_routes(
                 &pool,
