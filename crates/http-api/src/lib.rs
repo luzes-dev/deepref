@@ -13,6 +13,9 @@ use uuid::Uuid;
 
 use crate::{config::ApiConfig, state::AppState};
 
+/// Facts one `ai-usage export-replay` invocation inspects without `--limit`.
+const DEFAULT_USAGE_EXPORT_REPLAY_LIMIT: i64 = 10_000;
+
 pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
     let pool = database_pool(config).await?;
     deepref_app::migrate(&pool).await?;
@@ -187,6 +190,80 @@ pub async fn ai_usage_backfill(config: &ApiConfig, batch_size: usize) -> anyhow:
     let pool = database_pool(config).await?;
     let summary = deepref_app::backfill_ai_usage_legacy(&pool, batch_size).await?;
     Ok(serde_json::to_string_pretty(&summary)?)
+}
+
+/// Emit one bounded, resumable batch of usage fact export events from retained
+/// usage facts (handoff 09 slice B). Idempotent: rerunning it re-emits nothing,
+/// and a fact settled while the export switch was off is emitted now.
+pub async fn ai_usage_export_replay(
+    config: &ApiConfig,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    limit: Option<i64>,
+) -> anyhow::Result<String> {
+    let settings = &config.runtime.usage_export;
+    let limit = limit.unwrap_or(DEFAULT_USAGE_EXPORT_REPLAY_LIMIT);
+    anyhow::ensure!(limit > 0, "limit must be positive");
+    let pool = database_pool(config).await?;
+    let counters = deepref_application::usage_export::UsageExportCounters::default();
+    let summary = deepref_app::replay_usage_facts(
+        &pool,
+        &counters,
+        deepref_app::UsageExportReplayParams {
+            enabled: settings.enabled,
+            since,
+            limit,
+        },
+    )
+    .await?;
+    tracing::info!(
+        enabled = summary.enabled,
+        facts_scanned = summary.facts_scanned,
+        facts_emitted = summary.facts_emitted,
+        corrections_emitted = summary.corrections_emitted,
+        complete = summary.complete,
+        "AI usage export replay finished"
+    );
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "summary": summary,
+        "counters": counters.snapshot(),
+    }))?)
+}
+
+/// Activate the usage export rollout gate after checking the live worker
+/// fleet decodes the replay job kind and the N-1 quiet window.
+pub async fn ai_usage_enable_export(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+    quiet_window_seconds: u64,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    deepref_app::enable_ai_usage_export(
+        &pool,
+        deepref_domain::UserId::new(operator_user_id),
+        quiet_window_seconds,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_usage_export_activated": true,
+        "quiet_window_seconds": quiet_window_seconds,
+    }))?)
+}
+
+/// Deactivate the usage export rollout gate and park queued replay jobs, so a
+/// rollback can never expose the job kind to a binary that would dead-letter
+/// it. Rollback requires this command first.
+pub async fn ai_usage_disable_export(
+    config: &ApiConfig,
+    operator_user_id: Uuid,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let parked_jobs =
+        deepref_app::disable_ai_usage_export(&pool, deepref_domain::UserId::new(operator_user_id))
+            .await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "ai_usage_export_activated": false,
+        "parked_jobs": parked_jobs,
+    }))?)
 }
 
 pub async fn ai_usage_enable_hard_caps(

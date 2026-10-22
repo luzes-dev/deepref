@@ -90,6 +90,20 @@ async fn run_ai_usage(action: AiUsageCommand) -> anyhow::Result<()> {
             AiUsageCommand::DisableHardCaps { operator_user_id } => {
                 deepref_http_api::ai_usage_disable_hard_caps(&config, operator_user_id).await?
             }
+            AiUsageCommand::EnableExport {
+                operator_user_id,
+                quiet_window_seconds,
+            } => {
+                deepref_http_api::ai_usage_enable_export(
+                    &config,
+                    operator_user_id,
+                    quiet_window_seconds,
+                )
+                .await?
+            }
+            AiUsageCommand::DisableExport { operator_user_id } => {
+                deepref_http_api::ai_usage_disable_export(&config, operator_user_id).await?
+            }
             AiUsageCommand::Resolve {
                 reservation_id,
                 operator_user_id,
@@ -112,6 +126,9 @@ async fn run_ai_usage(action: AiUsageCommand) -> anyhow::Result<()> {
             }
             AiUsageCommand::Reconcile { workspace_id } => {
                 deepref_http_api::ai_usage_reconcile(&config, workspace_id).await?
+            }
+            AiUsageCommand::ExportReplay { since, limit } => {
+                deepref_http_api::ai_usage_export_replay(&config, since, limit).await?
             }
             AiUsageCommand::WaiveOverage {
                 workspace_id,

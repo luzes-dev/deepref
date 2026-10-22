@@ -16,6 +16,7 @@ pub enum JobKind {
     RetrieveDocument,
     ParseDocument,
     AiUsageReconcile,
+    AiUsageExportReplay,
     BackfillWorkflowFiles,
 }
 
@@ -86,6 +87,30 @@ impl std::fmt::Display for WorkloadClass {
 }
 
 impl JobKind {
+    /// Every job kind, in declaration order. This is the set of kinds the
+    /// running binary decodes. Claims filter this set before LIMIT and declare
+    /// it transaction-locally to the database capability fence. Heartbeats
+    /// report the set for diagnostics; they do not establish fleet readiness.
+    pub const ALL: [Self; 12] = [
+        Self::WorkFetchRequested,
+        Self::RecomputeMetrics,
+        Self::ImportDeduplication,
+        Self::PmidImport,
+        Self::DurableRunStep,
+        Self::AssistantAgentRun,
+        Self::RecomputePrisma,
+        Self::RetrieveDocument,
+        Self::ParseDocument,
+        Self::AiUsageReconcile,
+        Self::AiUsageExportReplay,
+        Self::BackfillWorkflowFiles,
+    ];
+
+    /// Persisted spellings of [`JobKind::ALL`].
+    pub fn known_kinds() -> Vec<&'static str> {
+        Self::ALL.iter().map(|kind| kind.as_str()).collect()
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::WorkFetchRequested => "work_fetch_requested",
@@ -98,6 +123,7 @@ impl JobKind {
             Self::RetrieveDocument => "retrieve_document",
             Self::ParseDocument => "parse_document",
             Self::AiUsageReconcile => "ai_usage_reconcile",
+            Self::AiUsageExportReplay => "ai_usage_export_replay",
             Self::BackfillWorkflowFiles => "backfill_workflow_files",
         }
     }
@@ -106,8 +132,11 @@ impl JobKind {
     /// stored on the job row at enqueue so claims can filter by pool.
     pub const fn workload_class(self) -> WorkloadClass {
         match self {
-            // Model calls and workspace-scoped usage recovery.
-            Self::AssistantAgentRun | Self::AiUsageReconcile => WorkloadClass::Ai,
+            // Model calls, workspace-scoped usage recovery and the platform
+            // usage export replay.
+            Self::AssistantAgentRun | Self::AiUsageReconcile | Self::AiUsageExportReplay => {
+                WorkloadClass::Ai
+            }
             // The document pipeline: full-text retrieval feeds parsing, and
             // corpus deduplication is CPU/memory-bound local processing.
             Self::RetrieveDocument | Self::ParseDocument | Self::ImportDeduplication => {
@@ -162,6 +191,7 @@ impl std::str::FromStr for JobKind {
             "retrieve_document" => Ok(Self::RetrieveDocument),
             "parse_document" => Ok(Self::ParseDocument),
             "ai_usage_reconcile" => Ok(Self::AiUsageReconcile),
+            "ai_usage_export_replay" => Ok(Self::AiUsageExportReplay),
             "backfill_workflow_files" => Ok(Self::BackfillWorkflowFiles),
             _ => Err(InvalidJobKind(value.to_owned())),
         }
@@ -178,6 +208,8 @@ impl std::fmt::Display for JobKind {
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
     Queued,
+    /// Pending work excluded from legacy claim candidates; requires a decoder declaration.
+    CapabilityWait,
     Running,
     Completed,
     Failed,
@@ -188,6 +220,7 @@ impl JobState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
+            Self::CapabilityWait => "capability_wait",
             Self::Running => "running",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -206,6 +239,7 @@ impl std::str::FromStr for JobState {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "queued" => Ok(Self::Queued),
+            "capability_wait" => Ok(Self::CapabilityWait),
             "running" => Ok(Self::Running),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
@@ -252,6 +286,7 @@ mod tests {
         for (kind, class) in [
             (JobKind::AssistantAgentRun, WorkloadClass::Ai),
             (JobKind::AiUsageReconcile, WorkloadClass::Ai),
+            (JobKind::AiUsageExportReplay, WorkloadClass::Ai),
             (JobKind::RetrieveDocument, WorkloadClass::Documents),
             (JobKind::ParseDocument, WorkloadClass::Documents),
             (JobKind::ImportDeduplication, WorkloadClass::Documents),
@@ -288,9 +323,23 @@ mod tests {
     }
 
     #[test]
+    fn job_kind_capability_lists_are_the_decodable_kinds() {
+        let known = JobKind::known_kinds();
+        assert_eq!(known.len(), JobKind::ALL.len());
+        for kind in JobKind::ALL {
+            assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
+            assert_eq!(
+                known.iter().filter(|name| **name == kind.as_str()).count(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn durable_job_states_round_trip_and_reject_invalid_values() {
         for state in [
             JobState::Queued,
+            JobState::CapabilityWait,
             JobState::Running,
             JobState::Completed,
             JobState::Failed,

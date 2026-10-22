@@ -221,7 +221,7 @@ fn reservation_and_settlement_use_each_captured_token_rate() {
 
 #[test]
 fn concurrent_index_migrations_are_marked_no_transaction() {
-    for version in [123, 125, 126] {
+    for version in [123, 125, 126, 131] {
         let index_migration = deepref_app::MIGRATOR
             .iter()
             .find(|migration| migration.version == version)
@@ -1037,7 +1037,7 @@ async fn hard_caps_enable_checks_quiet_window_and_queued_ai_jobs_and_audits_roll
     let queued = deepref_app::scoped_job(
         job_id,
         JobScope::Workspace(workspace),
-        JobKind::AiUsageReconcile,
+        JobKind::AssistantAgentRun,
         serde_json::json!({}),
         format!("hard-cap-gate-test:{job_id}"),
     );

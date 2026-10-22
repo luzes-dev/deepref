@@ -585,13 +585,31 @@ async fn a_poison_row_is_quarantined_without_stranding_valid_batch_siblings() ->
     let valid_ids = [Uuid::new_v4(), Uuid::new_v4()];
     let queue = PostgresDurableExecutionStore { pool: pool.clone() };
     let result = async {
+        // The poison row carries a scope kind from a newer release than this
+        // binary decodes (the database allows it; `row_job` does not). The
+        // claim-decode quarantine exists for exactly that forward-compatibility
+        // case. (Claims are capability-aware, so an unknown job kind is a
+        // different case: it is never claimed and never dead-lettered.)
+        sqlx::query("ALTER TABLE jobs DROP CONSTRAINT jobs_scope_check")
+            .execute(&pool)
+            .await?;
         sqlx::query(
-            "INSERT INTO jobs (id,project_id,kind,workload_class,payload,priority,dedupe_key)
-             VALUES ($1,$2,'invalid_persisted_kind','workflow','{}',2147483647,$3)",
+            "ALTER TABLE jobs ADD CONSTRAINT jobs_scope_check CHECK (
+               (scope = 'project' AND workspace_id IS NULL
+                 AND (project_id IS NOT NULL OR state IN ('completed','failed','dead')))
+             OR (scope = 'workspace' AND project_id IS NULL AND workspace_id IS NOT NULL)
+             OR (scope = 'platform' AND project_id IS NULL AND workspace_id IS NULL)
+             OR (scope = 'organization' AND project_id IS NULL AND workspace_id IS NULL)
+            ) NOT VALID",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO jobs (id,scope,kind,workload_class,payload,priority,dedupe_key)
+             VALUES ($1,'organization','durable_run_step','workflow','{}',2147483647,$2)",
         )
         .bind(poison_id)
-        .bind(project_id.as_uuid())
-        .bind(format!("invalid-kind:{poison_id}"))
+        .bind(format!("unknown-scope:{poison_id}"))
         .execute(&pool)
         .await?;
         for id in valid_ids {
@@ -621,13 +639,14 @@ async fn a_poison_row_is_quarantined_without_stranding_valid_batch_siblings() ->
             .bind(poison_id)
             .fetch_one(&pool)
             .await?;
-        ensure!(poison.get::<String, _>("kind") == "invalid_persisted_kind");
+        ensure!(poison.get::<String, _>("kind") == "durable_run_step");
         ensure!(poison.get::<String, _>("state") == "dead");
         ensure!(poison.get::<i32, _>("attempts") == 0);
         ensure!(
             poison
                 .get::<String, _>("last_error")
-                .contains("invalid_persisted_kind")
+                .contains("claim decode"),
+            "the quarantine names the decode failure"
         );
         for id in valid_ids {
             let row = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
@@ -637,6 +656,65 @@ async fn a_poison_row_is_quarantined_without_stranding_valid_batch_siblings() ->
             ensure!(row.get::<String, _>("state") == "running");
             ensure!(row.get::<i32, _>("attempts") == 1);
         }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    cleanup(&pool, project_id).await?;
+    result
+}
+
+/// Claims are capability-aware: a job kind this binary cannot decode is never
+/// claimed at all, so the claim-decode path can never dead-letter work that a
+/// later deployment understands. It waits in `queued` for that deployment.
+#[tokio::test]
+async fn unknown_job_kinds_are_never_claimed_or_dead_lettered() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let project_id = fixture_project(&pool).await?;
+    let unknown_id = Uuid::new_v4();
+    let valid_id = Uuid::new_v4();
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
+    let result = async {
+        sqlx::query(
+            "INSERT INTO jobs (id,project_id,kind,workload_class,payload,priority,dedupe_key)
+             VALUES ($1,$2,'future_unknown_kind','workflow','{}',2147483647,$3)",
+        )
+        .bind(unknown_id)
+        .bind(project_id.as_uuid())
+        .bind(format!("unknown-kind:{unknown_id}"))
+        .execute(&pool)
+        .await?;
+        queue
+            .enqueue(fixture_job(
+                project_id,
+                valid_id,
+                deepref_domain::JobKind::DurableRunStep,
+                format!("valid-sibling:{valid_id}"),
+            ))
+            .await?;
+        let claimed = claim_jobs(
+            &pool,
+            "unknown-kind-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Workflow],
+            3,
+        )
+        .await?;
+        ensure!(
+            claimed.len() == 1 && claimed[0].id == valid_id,
+            "the unknown kind does not strand its valid siblings"
+        );
+        let unknown = sqlx::query("SELECT state,attempts,last_error FROM jobs WHERE id=$1")
+            .bind(unknown_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(
+            unknown.get::<String, _>("state") == "queued",
+            "an undecodable kind is never claimed and never destroyed"
+        );
+        ensure!(unknown.get::<i32, _>("attempts") == 0);
+        ensure!(unknown.get::<Option<String>, _>("last_error").is_none());
         Ok::<_, anyhow::Error>(())
     }
     .await;

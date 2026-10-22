@@ -1,12 +1,16 @@
+use std::time::Duration;
+
 use deepref_ai::{
     AiError, AiFuture, BudgetSnapshot, ModelProfile, UsageLedger, UsageObservation,
     UsagePriceSnapshot, UsageReservation, UsageReservationRequest, UsageTopUpRequest,
     ZeroLiabilityProof,
 };
-use deepref_domain::{ProjectId, UserId, WorkspaceId};
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use deepref_domain::{JobKind, ProjectId, UserId, WorkspaceId};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::jobs::park_queued_jobs;
 
 /// Default monthly AI budget (US$5.00) in micro-dollars; mirrors the column
 /// default in migration 0027.
@@ -34,6 +38,13 @@ pub enum AiUsageError {
     InvalidBackfillBatchSize,
     #[error("AI hard caps cannot be enabled: {0}")]
     HardCapsGate(String),
+    #[error("AI usage export cannot be enabled: {0}")]
+    UsageExportGate(String),
+    /// Contention, not failure: another rollout transition or an in-flight job
+    /// write holds the rollout locks. Every lock the attempt took has been
+    /// released; retrying the whole command is safe.
+    #[error("an AI usage rollout transition is already in progress; retry")]
+    RolloutBusy,
     #[error("AI usage reservation was not found or is already terminal")]
     ReservationNotResolvable,
     #[error("AI usage resolution is invalid")]
@@ -1522,6 +1533,82 @@ pub async fn backfill_ai_usage_legacy(
     })
 }
 
+/// The job-write guard installed by 0138: every `jobs` INSERT/UPDATE takes
+/// this advisory lock shared before it touches a job row, and rollout
+/// transitions take it exclusively while they change gates and park work.
+const JOB_WRITE_ADVISORY_LOCK: (i32, i32) = (913, 9);
+/// How many fresh attempts a rollout transition makes before giving up with
+/// [`AiUsageError::RolloutBusy`]. Each attempt is a new transaction; every lock
+/// it took is released before the next one starts.
+const ROLLOUT_LOCK_ATTEMPTS: u32 = 4;
+const ROLLOUT_LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Take the two rollout locks without ever waiting while holding either: the
+/// job-write advisory lock `(913, 9)` exclusively (`pg_try_`, never blocking),
+/// then the rollout singleton row `FOR UPDATE NOWAIT`.
+///
+/// A blocking exclusive acquisition deadlocks against ordinary transactions
+/// that own a project row and then write a job (their shared statement lock),
+/// against N-1 ledger writers that own the rollout row and then lock a project
+/// row, and against the operator command in between: each holds one lock the
+/// next one needs. Contention is therefore [`AiUsageError::RolloutBusy`],
+/// returned only after this attempt has released every lock it took. The
+/// caller receives the transaction with the rollout row locked (or `None`
+/// when the singleton is missing) and decides what its own gate errors mean.
+async fn begin_rollout_transition(
+    pool: &PgPool,
+) -> Result<(Transaction<'_, Postgres>, Option<PgRow>), AiUsageError> {
+    let mut attempt = 1;
+    loop {
+        match try_begin_rollout_transition(pool).await {
+            Err(AiUsageError::RolloutBusy) if attempt < ROLLOUT_LOCK_ATTEMPTS => {
+                tokio::time::sleep(ROLLOUT_LOCK_RETRY_DELAY).await;
+                attempt += 1;
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
+async fn try_begin_rollout_transition(
+    pool: &PgPool,
+) -> Result<(Transaction<'_, Postgres>, Option<PgRow>), AiUsageError> {
+    let mut tx = pool.begin().await?;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1, $2)")
+        .bind(JOB_WRITE_ADVISORY_LOCK.0)
+        .bind(JOB_WRITE_ADVISORY_LOCK.1)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !acquired {
+        tx.rollback().await?;
+        return Err(AiUsageError::RolloutBusy);
+    }
+    let rollout = sqlx::query(
+        "SELECT singleton, ai_hard_caps_enforced, last_legacy_ledger_insert_at,
+                ai_usage_export_activated
+         FROM ai_usage_rollout_state WHERE singleton FOR UPDATE NOWAIT",
+    )
+    .fetch_optional(&mut *tx)
+    .await;
+    match rollout {
+        Ok(rollout) => Ok((tx, rollout)),
+        Err(error) if lock_not_available(&error) => {
+            tx.rollback().await?;
+            Err(AiUsageError::RolloutBusy)
+        }
+        Err(error) => {
+            let _rollback = tx.rollback().await;
+            Err(AiUsageError::Database(error))
+        }
+    }
+}
+
+/// `FOR UPDATE NOWAIT` refuses a contended row with SQLSTATE 55P03 instead of
+/// waiting for it.
+fn lock_not_available(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Database(error) if error.code().as_deref() == Some("55P03"))
+}
+
 pub async fn enable_ai_hard_caps(
     pool: &PgPool,
     operator: UserId,
@@ -1531,14 +1618,9 @@ pub async fn enable_ai_hard_caps(
         .ok()
         .filter(|seconds| (1..=2_592_000).contains(seconds))
         .ok_or(AiUsageError::InvalidResolution)?;
-    let mut tx = pool.begin().await?;
-    let rollout = sqlx::query(
-        "SELECT ai_hard_caps_enforced, last_legacy_ledger_insert_at
-         FROM ai_usage_rollout_state WHERE singleton FOR UPDATE",
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AiUsageError::HardCapsGate("rollout state is missing".to_owned()))?;
+    let (mut tx, rollout) = begin_rollout_transition(pool).await?;
+    let rollout =
+        rollout.ok_or_else(|| AiUsageError::HardCapsGate("rollout state is missing".to_owned()))?;
     let last_legacy: Option<chrono::DateTime<chrono::Utc>> =
         rollout.get("last_legacy_ledger_insert_at");
     if last_legacy
@@ -1567,7 +1649,9 @@ pub async fn enable_ai_hard_caps(
     }
     let legacy_jobs: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM jobs
-         WHERE jobs_workload_class_for_kind(kind) = 'ai' AND state IN ('queued', 'running'))",
+         WHERE jobs_workload_class_for_kind(kind) = 'ai'
+           AND kind NOT IN ('ai_usage_reconcile', 'ai_usage_export_replay')
+           AND state IN ('queued', 'running'))",
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -1598,11 +1682,8 @@ pub async fn enable_ai_hard_caps(
 }
 
 pub async fn disable_ai_hard_caps(pool: &PgPool, operator: UserId) -> Result<(), AiUsageError> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SELECT singleton FROM ai_usage_rollout_state WHERE singleton FOR UPDATE")
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| AiUsageError::HardCapsGate("rollout state is missing".to_owned()))?;
+    let (mut tx, rollout) = begin_rollout_transition(pool).await?;
+    rollout.ok_or_else(|| AiUsageError::HardCapsGate("rollout state is missing".to_owned()))?;
     sqlx::query(
         "UPDATE ai_usage_rollout_state
          SET ai_hard_caps_enforced = false, hard_caps_disabled_at = now(), updated_at = now()
@@ -1610,17 +1691,133 @@ pub async fn disable_ai_hard_caps(pool: &PgPool, operator: UserId) -> Result<(),
     )
     .execute(&mut *tx)
     .await?;
+    // Suspending admission must not suspend recovery of existing liabilities.
+    // The database capability fence protects recovery jobs from N-1 claims.
     sqlx::query(
         "INSERT INTO admin_audit_events
          (id, event_type, principal_kind, principal_user_id, metadata)
-         VALUES ($1, 'ai.hard_caps_disabled', 'user', $2, '{}'::jsonb)",
+         VALUES ($1, 'ai.hard_caps_disabled', 'user', $2, $3)",
     )
     .bind(Uuid::new_v4())
     .bind(operator.as_uuid())
+    .bind(serde_json::json!({"parked_jobs": 0}))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Durable admission and export rollout gates. Liability recovery is
+/// independent; database capability fencing protects its jobs during rollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AiUsageRolloutGates {
+    /// Admission enforcement only; liability recovery remains available.
+    pub hard_caps_enforced: bool,
+    /// `ai_usage_export_replay` is scheduled only while this is set.
+    pub export_activated: bool,
+}
+
+pub async fn ai_usage_rollout_gates(pool: &PgPool) -> Result<AiUsageRolloutGates, AiUsageError> {
+    let row = sqlx::query(
+        "SELECT ai_hard_caps_enforced, ai_usage_export_activated
+         FROM ai_usage_rollout_state WHERE singleton",
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AiUsageError::Reconciliation)?;
+    Ok(AiUsageRolloutGates {
+        hard_caps_enforced: row.get("ai_hard_caps_enforced"),
+        export_activated: row.get("ai_usage_export_activated"),
+    })
+}
+
+/// Activate the usage export rollout gate. `ai_usage_export_replay` jobs are
+/// scheduled only while this is set. The database independently fences claims
+/// by decoder declaration, including N-1 workers with absent/stale heartbeats.
+/// The quiet window checks legacy AI writers, not worker membership.
+pub async fn enable_ai_usage_export(
+    pool: &PgPool,
+    operator: UserId,
+    quiet_window_seconds: u64,
+) -> Result<(), AiUsageError> {
+    let seconds = i64::try_from(quiet_window_seconds)
+        .ok()
+        .filter(|seconds| (1..=2_592_000).contains(seconds))
+        .ok_or(AiUsageError::InvalidResolution)?;
+    let (mut tx, rollout) = begin_rollout_transition(pool).await?;
+    rollout.ok_or_else(|| AiUsageError::UsageExportGate("rollout state is missing".to_owned()))?;
+    let last_legacy: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT last_legacy_ledger_insert_at FROM ai_usage_rollout_state WHERE singleton",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if last_legacy
+        .is_some_and(|inserted| inserted > chrono::Utc::now() - chrono::Duration::seconds(seconds))
+    {
+        return Err(AiUsageError::UsageExportGate(
+            "an N-1 ledger insert occurred within the quiet window".to_owned(),
+        ));
+    }
+    sqlx::query(
+        "UPDATE ai_usage_rollout_state
+         SET ai_usage_export_activated = true, ai_usage_export_activated_at = now(), updated_at = now()
+         WHERE singleton",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO admin_audit_events
+         (id, event_type, principal_kind, principal_user_id, metadata)
+         VALUES ($1, 'ai.usage_export_enabled', 'user', $2, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(operator.as_uuid())
+    .bind(serde_json::json!({"quiet_window_seconds": quiet_window_seconds}))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Deactivate the usage export rollout gate before a rollback. Scheduling
+/// stops and every queued replay job is parked in a state no claim accepts, so
+/// an N-1 binary can never claim and dead-letter the kind. Rollback requires
+/// this command first.
+///
+/// Like every rollout transition it never waits for the job-write guard or the
+/// rollout row: contention returns [`AiUsageError::RolloutBusy`] with every
+/// lock released, and the operator retries until the command reports success.
+/// A successful command is final: writers before it are committed and parked
+/// by this pass, writers after it park themselves against the closed gate.
+pub async fn disable_ai_usage_export(pool: &PgPool, operator: UserId) -> Result<u64, AiUsageError> {
+    let (mut tx, rollout) = begin_rollout_transition(pool).await?;
+    rollout.ok_or_else(|| AiUsageError::UsageExportGate("rollout state is missing".to_owned()))?;
+    sqlx::query(
+        "UPDATE ai_usage_rollout_state
+         SET ai_usage_export_activated = false, ai_usage_export_deactivated_at = now(),
+             updated_at = now()
+         WHERE singleton",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let parked_jobs = park_queued_jobs(
+        &mut tx,
+        &JobKind::AiUsageExportReplay,
+        "parked by ai-usage disable-export",
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO admin_audit_events
+         (id, event_type, principal_kind, principal_user_id, metadata)
+         VALUES ($1, 'ai.usage_export_disabled', 'user', $2, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(operator.as_uuid())
+    .bind(serde_json::json!({"parked_jobs": parked_jobs}))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(parked_jobs)
 }
 
 pub async fn resolve_ai_usage_reservation(

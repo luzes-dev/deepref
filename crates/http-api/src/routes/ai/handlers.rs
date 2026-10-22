@@ -246,6 +246,16 @@ fn map_usage_error(error: deepref_app::AiUsageError) -> ApiError {
             message: reason,
             details: serde_json::Value::Null,
         },
+        deepref_app::AiUsageError::UsageExportGate(reason) => ApiError::Conflict {
+            code: "ai_usage_export_gate_closed".to_owned(),
+            message: reason,
+            details: serde_json::Value::Null,
+        },
+        deepref_app::AiUsageError::RolloutBusy => ApiError::Conflict {
+            code: "ai_rollout_transition_busy".to_owned(),
+            message: "an AI usage rollout transition is already in progress; retry".to_owned(),
+            details: serde_json::Value::Null,
+        },
         deepref_app::AiUsageError::ReservationNotResolvable => ApiError::Conflict {
             code: "ai_reservation_not_resolvable".to_owned(),
             message: "AI usage reservation is missing or already terminal".to_owned(),

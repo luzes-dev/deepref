@@ -167,3 +167,44 @@ async fn dependencies_report_per_pool_queue_age_inflight_and_capacity() {
     assert!(worker["last_heartbeat_at"].is_string(), "{worker}");
     assert_eq!(worker["state"], "degraded", "{worker}");
 }
+
+#[tokio::test]
+async fn protected_pending_maintenance_is_visible_in_backlog_and_due_age() {
+    let Some(pool) = database().await else { return };
+    sqlx::query(
+        "INSERT INTO jobs (id,scope,kind,workload_class,payload,available_at,dedupe_key)
+         VALUES ($1,'platform','ai_usage_reconcile','ai','{}',now()-interval '10 minutes','protected-due'),
+                ($2,'platform','ai_usage_reconcile','ai','{}',now()+interval '1 day','protected-future')",
+    ).bind(Uuid::new_v4()).bind(Uuid::new_v4()).execute(&pool).await.expect("protected pending jobs");
+    let worker = worker_health(&pool).await;
+    assert_eq!(
+        worker["backlog"], 2,
+        "due and future protected jobs are pending: {worker}"
+    );
+    assert_eq!(
+        worker["state"], "degraded",
+        "no recovery worker can progress: {worker}"
+    );
+    assert!(
+        worker["oldest_age_seconds"].as_i64().unwrap() >= 600,
+        "{worker}"
+    );
+    assert_eq!(
+        worker["recent_failed"], 0,
+        "protected pending work is not failure: {worker}"
+    );
+    let ai = worker["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pool| pool["class"] == "ai")
+        .unwrap();
+    assert_eq!(
+        ai["queue_depth"], 1,
+        "future maintenance is not due: {worker}"
+    );
+    assert!(
+        ai["oldest_due_age_seconds"].as_i64().unwrap() >= 600,
+        "{worker}"
+    );
+}

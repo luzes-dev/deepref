@@ -44,6 +44,7 @@ mod second_review;
 mod study;
 #[cfg(feature = "test-support")]
 pub mod test_isolation;
+mod usage_export;
 mod worker_runtime;
 mod workflow_files;
 mod workflows;
@@ -100,8 +101,9 @@ pub use ai_reviewer::{
 };
 pub use ai_usage::{
     AiUsageBackfillSummary, AiUsageError, AiUsageLimitScope, AiUsageReconcileSummary,
-    AiUsageResolution, DEFAULT_AI_MONTHLY_BUDGET_MICROS, DefaultRoutes, PostgresUsageLedger,
-    backfill_ai_usage_legacy, disable_ai_hard_caps, enable_ai_hard_caps,
+    AiUsageResolution, AiUsageRolloutGates, DEFAULT_AI_MONTHLY_BUDGET_MICROS, DefaultRoutes,
+    PostgresUsageLedger, ai_usage_rollout_gates, backfill_ai_usage_legacy, disable_ai_hard_caps,
+    disable_ai_usage_export, enable_ai_hard_caps, enable_ai_usage_export,
     ensure_default_model_routes, get_ai_budget, reconcile_ai_usage_workspace,
     resolve_ai_usage_reservation, set_ai_budget, set_ai_usage_cap, waive_ai_usage_overage,
 };
@@ -169,8 +171,8 @@ pub use graph::{
 };
 pub use jobs::{
     PostgresClaimTransport, PostgresDurableExecutionStore, claim_job, claim_jobs, complete_job,
-    enqueue_job, enqueue_job_pool, fail_job, job, recover_expired_jobs, release_job, renew_job,
-    scoped_job,
+    enqueue_job, enqueue_job_pool, fail_job, job, park_queued_jobs, recover_expired_jobs,
+    release_job, renew_job, scoped_job,
 };
 pub use legacy_actors::{
     LegacyActorDecision, LegacyActorDecisionKind, LegacyActorError, LegacyActorKind,
@@ -234,6 +236,10 @@ pub use study::{
     create_study_and_assign_report_in_transaction, get_study, get_study_for_report,
     list_reports_for_studies, list_studies, list_study_events, list_ungrouped_included_reports,
     remove_report_from_study, rename_study,
+};
+pub use usage_export::{
+    UsageExportBacklog, UsageExportError, UsageExportReplayParams, UsageExportReplaySummary,
+    billing_usage_export_handler, replay_usage_facts, usage_export_backlog, usage_export_registry,
 };
 pub use worker_runtime::{
     MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,
