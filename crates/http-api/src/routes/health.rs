@@ -116,10 +116,10 @@ async fn workload_pool_health(
          )
          SELECT classes.class,
                 count(j.id) FILTER (
-                    WHERE j.state='queued' AND j.available_at <= now()
+                    WHERE j.state IN ('queued','capability_wait') AND j.available_at <= now()
                 )::bigint AS queue_depth,
                 EXTRACT(EPOCH FROM (now() - min(j.available_at) FILTER (
-                    WHERE j.state='queued' AND j.available_at <= now()
+                    WHERE j.state IN ('queued','capability_wait') AND j.available_at <= now()
                 )))::bigint AS oldest_due_age_seconds,
                 count(j.id) FILTER (WHERE j.state='running')::bigint AS in_flight,
                 COALESCE(capacities.capacity,0)::bigint AS capacity
@@ -232,12 +232,12 @@ async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> Depend
         }
     };
     let worker = match sqlx::query(
-        "SELECT count(*) FILTER (WHERE state IN ('queued','running'))::bigint AS backlog,
+        "SELECT count(*) FILTER (WHERE state IN ('queued','capability_wait','running'))::bigint AS backlog,
                 count(*) FILTER (
                     WHERE state = 'dead'
                       AND available_at > now() - make_interval(secs => $1::double precision)
                 )::bigint AS recent_dead,
-                EXTRACT(EPOCH FROM (now() - min(available_at) FILTER (WHERE state = 'queued')))::bigint AS oldest_age_seconds,
+                EXTRACT(EPOCH FROM (now() - min(available_at) FILTER (WHERE state IN ('queued','capability_wait'))))::bigint AS oldest_age_seconds,
                 max(completed_at) AS last_success_at,
                 (SELECT count(*) FROM worker_heartbeats
                   WHERE seen_at > now() - make_interval(secs => $3::double precision))::bigint

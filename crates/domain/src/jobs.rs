@@ -88,9 +88,9 @@ impl std::fmt::Display for WorkloadClass {
 
 impl JobKind {
     /// Every job kind, in declaration order. This is the set of kinds the
-    /// running binary decodes: claiming is capability-aware and the worker
-    /// heartbeat declares it, so a job kind an older binary cannot decode is
-    /// never dead-lettered by a claim and never scheduled onto one.
+    /// running binary decodes. Claims filter this set before LIMIT and declare
+    /// it transaction-locally to the database capability fence. Heartbeats
+    /// report the set for diagnostics; they do not establish fleet readiness.
     pub const ALL: [Self; 12] = [
         Self::WorkFetchRequested,
         Self::RecomputeMetrics,
@@ -208,6 +208,8 @@ impl std::fmt::Display for JobKind {
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
     Queued,
+    /// Pending work excluded from legacy claim candidates; requires a decoder declaration.
+    CapabilityWait,
     Running,
     Completed,
     Failed,
@@ -218,6 +220,7 @@ impl JobState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
+            Self::CapabilityWait => "capability_wait",
             Self::Running => "running",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -236,6 +239,7 @@ impl std::str::FromStr for JobState {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "queued" => Ok(Self::Queued),
+            "capability_wait" => Ok(Self::CapabilityWait),
             "running" => Ok(Self::Running),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
@@ -335,6 +339,7 @@ mod tests {
     fn durable_job_states_round_trip_and_reject_invalid_values() {
         for state in [
             JobState::Queued,
+            JobState::CapabilityWait,
             JobState::Running,
             JobState::Completed,
             JobState::Failed,

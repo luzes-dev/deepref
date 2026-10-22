@@ -3,8 +3,7 @@
 -- `enable-export` is recorded like `enable-hard-caps`, and both disable
 -- commands record how many queued jobs they parked before a rollback. The
 -- checks stay NOT VALID here, preserving the established expand/validate
--- split; the validating migration follows in a later release (the same
--- posture as the 09a period-start check).
+-- split; 0139 validates both checks after this widening.
 ALTER TABLE admin_audit_events DROP CONSTRAINT admin_audit_events_event_type_check;
 ALTER TABLE admin_audit_events DROP CONSTRAINT admin_audit_events_check;
 ALTER TABLE admin_audit_events ADD CONSTRAINT admin_audit_events_event_type_check CHECK (event_type IN (

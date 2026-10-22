@@ -7,6 +7,10 @@
 -- route every writer through it, including N-1 ledger inserts that know
 -- nothing about the export.
 
+-- Block N-1 writers before the first audit/backfill snapshot, and retain
+-- these locks until both capture triggers are installed at commit.
+LOCK TABLE ai_usage_ledger, ai_usage_corrections IN SHARE ROW EXCLUSIVE MODE;
+
 -- Audit existing overlaps first: this migration refuses to proceed on a
 -- database whose namespace is already ambiguous.
 DO $$

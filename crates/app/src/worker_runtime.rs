@@ -141,9 +141,9 @@ async fn record_worker_heartbeat_inner(
     owner: &str,
     pool_capacities: Option<serde_json::Value>,
 ) -> anyhow::Result<()> {
-    // Every heartbeat declares the job kinds this binary decodes, so an
-    // operator command can prove the fleet understands a kind before a rollout
-    // schedules work of it.
+    // Diagnostic decoder inventory only: stale or absent heartbeats cannot
+    // prove fleet membership. Job claim/recovery transactions declare their
+    // capabilities separately to the authoritative database fence.
     let known_job_kinds = JobKind::known_kinds();
     let mut tx = pool.begin().await?;
     match pool_capacities {

@@ -68,8 +68,8 @@ pub async fn run_with_provider_reconcilers(
 /// Both the deployment switch and the durable activation flag must be set: a
 /// job kind an older binary cannot decode is dead-lettered by its claim, so
 /// nothing is scheduled before `deepref-server ai-usage enable-export`. The
-/// job itself re-checks both gates, so an in-flight schedule after a disable
-/// emits nothing. While disabled no job row is created at all.
+/// database serializes enqueue with disable and parks late queued writes;
+/// the processor also re-checks both gates before emitting.
 pub async fn enqueue_ai_usage_export_replay_job(
     pool: &PgPool,
     usage_export: &UsageExportConfig,
@@ -99,17 +99,10 @@ pub async fn enqueue_ai_usage_export_replay_job(
     Ok(1)
 }
 
-/// Schedule workspace usage recovery only once `enable-hard-caps` has flipped
-/// the durable rollout gate. The kind is unknown to N-1 binaries, and their
-/// claim would dead-letter it, so it is never scheduled into a fleet that
-/// still runs them.
+/// Schedule liability recovery independently of admission caps. The database
+/// capability fence prevents N-1 from claiming this kind, while a capable N
+/// worker can settle saved evidence even after admissions are suspended.
 pub async fn enqueue_ai_usage_reconciliation_jobs(pool: &PgPool) -> anyhow::Result<u64> {
-    if !deepref_app::ai_usage_rollout_gates(pool)
-        .await?
-        .hard_caps_enforced
-    {
-        return Ok(0);
-    }
     let workspace_ids =
         sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM workspaces ORDER BY id")
             .fetch_all(pool)

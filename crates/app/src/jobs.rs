@@ -11,7 +11,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 /// Claim the next eligible batch for the selected workload pools in
-/// one statement. Eligibility is persisted state only: `queued`, due
+/// one statement. Eligibility is persisted state only: `queued` or
+/// `capability_wait` (protected pending maintenance), due
 /// (`available_at <= now()`), and within the attempt budget. Claiming is
 /// filtered by workload class, never by `project_id IS NOT NULL`, so workspace-
 /// and platform-scoped work is claimable and no row needs a fabricated
@@ -27,7 +28,7 @@ const CLAIM: &str = r#"
 WITH candidate AS (
   SELECT id
   FROM jobs
-  WHERE state = 'queued' AND available_at <= now()
+  WHERE state IN ('queued', 'capability_wait') AND available_at <= now()
     AND attempts < max_attempts
     AND kind = ANY($5)
     AND (cardinality($3::text[]) = 0 OR workload_class = ANY($3))
@@ -92,6 +93,12 @@ pub async fn enqueue_job_pool(pool: &PgPool, job: &EnqueueJob) -> anyhow::Result
 /// its worker is not reclaimed at once by the next one. Recovery never
 /// increments attempts: the expired claim already spent its attempt.
 pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
+    let mut tx = pool.begin().await?;
+    let kinds = JobKind::known_kinds();
+    sqlx::query("SELECT set_config('deepref.job_kinds', $1, true)")
+        .bind(kinds.join(","))
+        .execute(&mut *tx)
+        .await?;
     let recovered = sqlx::query!(
         r#"UPDATE jobs
            SET state = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
@@ -101,11 +108,13 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
                lease_owner = NULL,
                leased_until = NULL,
                lease_renewed_at = NULL
-           WHERE state = 'running' AND leased_until < now()
+           WHERE state = 'running' AND leased_until < now() AND kind = ANY($1)
            RETURNING id, kind, attempts, max_attempts, state"#,
+        &kinds as &[&str],
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     for job in &recovered {
         let kind = job
             .kind
@@ -150,14 +159,23 @@ pub async fn claim_jobs(
 ) -> anyhow::Result<Vec<ClaimedJob>> {
     let pools: Vec<String> = pools.iter().map(|pool| pool.as_str().to_owned()).collect();
     let kinds = JobKind::known_kinds();
+    let mut tx = pool.begin().await?;
+    // The database fence also protects these kinds from N-1 claim SQL, which
+    // has no kind filter and makes no decoder declaration. SET LOCAL cannot
+    // leak capabilities to the next borrower of this pooled connection.
+    sqlx::query("SELECT set_config('deepref.job_kinds', $1, true)")
+        .bind(kinds.join(","))
+        .execute(&mut *tx)
+        .await?;
     let rows = sqlx::query(CLAIM)
         .bind(owner)
         .bind(lease.as_millis() as i64)
         .bind(&pools)
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
         .bind(&kinds)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?;
+    tx.commit().await?;
     let mut claimed = Vec::with_capacity(rows.len());
     for row in &rows {
         match row_job(row) {
@@ -424,7 +442,7 @@ pub async fn park_queued_jobs(
         "UPDATE jobs
          SET state = 'failed', last_error = $2, available_at = now(),
              lease_owner = NULL, leased_until = NULL, lease_renewed_at = NULL
-         WHERE kind = $1 AND state = 'queued'",
+         WHERE kind = $1 AND state IN ('queued', 'capability_wait')",
     )
     .bind(kind.as_str())
     .bind(reason)

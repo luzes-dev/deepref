@@ -25,9 +25,9 @@ use deepref_app::outbox::{
 };
 use deepref_app::{
     AiUsageError, PostgresUsageLedger, UsageExportError, UsageExportReplayParams,
-    ai_usage_rollout_gates, billing_usage_export_handler, disable_ai_hard_caps,
-    enable_ai_usage_export, enqueue_job_pool, replay_usage_facts, scoped_job, usage_export_backlog,
-    usage_export_registry,
+    billing_usage_export_handler, disable_ai_hard_caps, disable_ai_usage_export,
+    enable_ai_hard_caps, enable_ai_usage_export, enqueue_job, enqueue_job_pool, job,
+    replay_usage_facts, scoped_job, usage_export_backlog, usage_export_registry,
 };
 use deepref_application::jobs::JobScope;
 use deepref_application::outbox::{DeliveryContext, NewOutboxEvent, OutboxMessage, OutboxRegistry};
@@ -269,19 +269,51 @@ async fn replay_is_idempotent_across_runs_and_concurrent_tasks() -> Result<()> {
     for _ in 0..8 {
         fresh.push(settled_fact(&pool, project, 100).await);
     }
-    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    // Stop both transactions inside their first INSERT, after their scans.
+    // A start barrier alone allows the second scan to see zero facts.
+    sqlx::raw_sql(
+        "CREATE FUNCTION test_pause_export_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN PERFORM pg_advisory_xact_lock_shared(914, 9); RETURN NEW; END $$;
+         CREATE TRIGGER test_pause_export_insert BEFORE INSERT ON outbox_events
+         FOR EACH ROW EXECUTE FUNCTION test_pause_export_insert();",
+    )
+    .execute(&pool)
+    .await?;
+    let mut blocker = pool.acquire().await?;
+    sqlx::query("SELECT pg_advisory_lock(914, 9)")
+        .execute(&mut *blocker)
+        .await?;
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..2 {
         let pool = pool.clone();
-        let barrier = Arc::clone(&barrier);
         tasks.spawn(async move {
-            barrier.wait().await;
             let counters = UsageExportCounters::default();
             replay_usage_facts(&pool, &counters, UsageExportReplayParams::enabled(500))
                 .await
                 .expect("concurrent replay completes")
         });
     }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_locks WHERE locktype='advisory'
+                 AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+                 AND classid=914 AND objid=9 AND NOT granted",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("insert waiters are observable");
+            if waiting == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both replays scanned before either inserts");
+    sqlx::query("SELECT pg_advisory_unlock(914, 9)")
+        .execute(&mut *blocker)
+        .await?;
     let mut summaries = Vec::new();
     while let Some(result) = tasks.join_next().await {
         let summary = result.expect("replay task joins");
@@ -297,13 +329,14 @@ async fn replay_is_idempotent_across_runs_and_concurrent_tasks() -> Result<()> {
         emitted, 8,
         "concurrent replay emits each fresh fact exactly once"
     );
-    assert!(
+    assert!(summaries.iter().all(|summary| summary.facts_scanned == 8));
+    assert_eq!(
         summaries
             .iter()
-            .map(|summary| summary.facts_scanned)
-            .sum::<u64>()
-            >= 8,
-        "both tasks scanned the unemitted page"
+            .map(|summary| summary.facts_already_emitted)
+            .sum::<u64>(),
+        8,
+        "every competing insert reports the existing fact as a duplicate"
     );
     assert_eq!(fact_event_count(&pool).await, 13);
 
@@ -925,19 +958,6 @@ async fn operator(pool: &PgPool) -> UserId {
     operator
 }
 
-/// One live worker heartbeat. `known_job_kinds: None` is a binary that
-/// predates capability declaration.
-async fn heartbeat(pool: &PgPool, owner: &str, known_job_kinds: Option<Vec<String>>) {
-    sqlx::query(
-        "INSERT INTO worker_heartbeats (owner, known_job_kinds, seen_at) VALUES ($1, $2, now())",
-    )
-    .bind(owner)
-    .bind(known_job_kinds)
-    .execute(pool)
-    .await
-    .expect("worker heartbeat inserts");
-}
-
 async fn insert_correction(
     pool: &PgPool,
     correction_id: Uuid,
@@ -963,56 +983,6 @@ async fn jobs_of_kind_in_state(pool: &PgPool, kind: &str, state: &str) -> i64 {
         .fetch_one(pool)
         .await
         .expect("job count")
-}
-
-/// Rollout gate (N-1 compatibility): `enable-export` refuses while any live
-/// worker binary does not decode the replay job kind.
-#[tokio::test]
-async fn enable_export_refuses_until_the_fleet_decodes_the_kind() -> Result<()> {
-    let Some(pool) = database().await else {
-        return Ok(());
-    };
-    let operator = operator(&pool).await;
-    heartbeat(&pool, "deepref-worker-pre-capability", None).await;
-    let error = enable_ai_usage_export(&pool, operator, 60)
-        .await
-        .expect_err("a heartbeat without the declaration is an old binary");
-    assert!(matches!(error, AiUsageError::UsageExportGate(_)));
-    assert!(!ai_usage_rollout_gates(&pool).await?.export_activated);
-
-    heartbeat(
-        &pool,
-        "deepref-worker-09a",
-        Some(vec![
-            "ai_usage_reconcile".to_owned(),
-            "durable_run_step".to_owned(),
-        ]),
-    )
-    .await;
-    let error = enable_ai_usage_export(&pool, operator, 60)
-        .await
-        .expect_err("a binary that decodes only the 09a kinds is still too old");
-    assert!(matches!(error, AiUsageError::UsageExportGate(_)));
-
-    sqlx::query("UPDATE worker_heartbeats SET known_job_kinds = $2 WHERE owner = $1")
-        .bind("deepref-worker-09a")
-        .bind(vec![
-            "ai_usage_reconcile".to_owned(),
-            "ai_usage_export_replay".to_owned(),
-            "durable_run_step".to_owned(),
-        ])
-        .execute(&pool)
-        .await
-        .expect("worker upgrades");
-    sqlx::query("DELETE FROM worker_heartbeats WHERE owner = 'deepref-worker-pre-capability'")
-        .execute(&pool)
-        .await
-        .expect("old worker drains");
-    enable_ai_usage_export(&pool, operator, 60)
-        .await
-        .expect("every live worker decodes the kind");
-    assert!(ai_usage_rollout_gates(&pool).await?.export_activated);
-    Ok(())
 }
 
 /// Rollout gate (N-1 compatibility): `enable-export` refuses while N-1 AI
@@ -1047,10 +1017,9 @@ async fn enable_export_refuses_during_the_n1_quiet_window() -> Result<()> {
     Ok(())
 }
 
-/// Rollout gate symmetry: rolling back hard caps parks the queued recovery
-/// jobs of the kind only N decodes, before any N-1 binary can claim one.
+/// Suspending admissions retains queued liability recovery work.
 #[tokio::test]
-async fn disable_hard_caps_parks_queued_reconcile_jobs() -> Result<()> {
+async fn disable_hard_caps_preserves_queued_reconcile_jobs() -> Result<()> {
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -1070,17 +1039,17 @@ async fn disable_hard_caps_parks_queued_reconcile_jobs() -> Result<()> {
         .await?;
     }
     assert_eq!(
-        jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "queued").await,
+        jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "capability_wait").await,
         2
     );
     disable_ai_hard_caps(&pool, operator).await?;
     assert_eq!(
-        jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "queued").await,
-        0
+        jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "capability_wait").await,
+        2
     );
     assert_eq!(
         jobs_of_kind_in_state(&pool, "ai_usage_reconcile", "failed").await,
-        2
+        0
     );
     Ok(())
 }
@@ -1205,5 +1174,312 @@ async fn an_unrelated_outbox_event_cannot_shadow_a_fact() -> Result<()> {
         error,
         UsageExportError::EventIdentityConflict { .. }
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn registry_migration_captures_an_n1_insert_during_backfill() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let (project, _) = fixture(&pool).await;
+    let original = settled_fact(&pool, project, 100).await;
+    // Restore the pre-0133 schema in this private database.
+    sqlx::raw_sql(
+        "DROP TRIGGER ai_usage_register_usage_fact_id_trigger ON ai_usage_ledger;
+         DROP TRIGGER ai_usage_register_correction_fact_id_trigger ON ai_usage_corrections;
+         DROP TABLE ai_usage_fact_ids;",
+    )
+    .execute(&pool)
+    .await?;
+    let migration = include_str!("../migrations/0133_ai_usage_fact_ids.sql");
+    let (backfill, capture) = migration
+        .split_once("CREATE OR REPLACE FUNCTION")
+        .expect("migration capture phase");
+    let mut tx = pool.begin().await?;
+    sqlx::raw_sql(backfill).execute(&mut *tx).await?;
+    let mut writer = pool.acquire().await?;
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *writer)
+        .await?;
+    let fact = Uuid::new_v4();
+    let insert = tokio::spawn(async move {
+        // N-1 does not know about the registry or its trigger.
+        sqlx::query("INSERT INTO ai_usage_ledger (id,project_id,profile,provider,model,purpose,input_tokens,output_tokens,cost_micros)
+                     VALUES ($1,$2,'reasoning','test-provider','test-model','structured',10,0,10)")
+            .bind(fact).bind(project.as_uuid()).execute(&mut *writer).await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT cardinality(pg_blocking_pids($1)) > 0")
+                .bind(pid)
+                .fetch_one(&pool)
+                .await
+                .expect("writer lock state");
+            if blocked {
+                break;
+            }
+            assert!(
+                !insert.is_finished(),
+                "N-1 insert must wait until capture is installed"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("N-1 writer is blocked behind the backfill lock");
+    let capture = format!("CREATE OR REPLACE FUNCTION{capture}");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(capture))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    insert.await??;
+    let registered: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ai_usage_fact_ids WHERE fact_id=$1 AND fact_kind='usage'",
+    )
+    .bind(fact)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        registered, 1,
+        "the blocked N-1 writer uses the installed trigger"
+    );
+    assert!(insert_correction(&pool, fact, original).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn export_audit_checks_finish_validated() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let checks: Vec<bool> = sqlx::query_scalar(
+        "SELECT convalidated FROM pg_constraint WHERE conrelid='admin_audit_events'::regclass
+         AND conname IN ('admin_audit_events_event_type_check','admin_audit_events_check')",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(checks, vec![true, true]);
+    let job_state_validated: bool = sqlx::query_scalar("SELECT convalidated FROM pg_constraint WHERE conrelid='jobs'::regclass AND conname='jobs_state_check'")
+        .fetch_one(&pool).await?;
+    assert!(job_state_validated);
+
+    Ok(())
+}
+
+/// A rollout command must answer; a hang is a failure, not a slow pass.
+async fn bounded<T: std::fmt::Debug>(command: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(10), command)
+        .await
+        .expect("a rollout transition answers instead of waiting")
+}
+
+/// Every rollout transition shares one lock pattern: job-write advisory lock
+/// exclusively, then the rollout singleton row. It must never wait for either
+/// while holding the other — a waiting exclusive holder closes the cycle with
+/// ordinary enqueues (project row, then job INSERT) and N-1 ledger writers
+/// (rollout row, then project row). Contention is a typed busy error returned
+/// after every lock is released; ordinary job writes stay concurrent; all four
+/// commands succeed again as soon as the row is free.
+#[tokio::test]
+async fn every_rollout_transition_refuses_instead_of_waiting_for_the_rollout_row() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let (project, _workspace) = fixture(&pool).await;
+    let operator = operator(&pool).await;
+    // Another writer owns the rollout singleton row, exactly as an N-1 ledger
+    // insert does before it waits for a project row.
+    let mut owner = pool.begin().await?;
+    sqlx::query("SELECT singleton FROM ai_usage_rollout_state WHERE singleton FOR UPDATE")
+        .execute(&mut *owner)
+        .await?;
+    // Ordinary job writes share the guard and stay concurrent with the held
+    // rollout row.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        enqueue_job_pool(
+            &pool,
+            &job(
+                Uuid::new_v4(),
+                project,
+                deepref_domain::JobKind::RecomputeMetrics,
+                json!({}),
+                format!("rollout-contention:{}", Uuid::new_v4()),
+            ),
+        ),
+    )
+    .await
+    .expect("a held rollout row never blocks ordinary job writes")?;
+    // Two rounds prove the refusals release their locks instead of leaking one.
+    for round in 0..2 {
+        let busy = bounded(enable_ai_hard_caps(&pool, operator, 60)).await;
+        assert!(
+            matches!(busy, Err(AiUsageError::RolloutBusy)),
+            "round {round}: enable-hard-caps refuses instead of waiting: {busy:?}"
+        );
+        let busy = bounded(disable_ai_hard_caps(&pool, operator)).await;
+        assert!(
+            matches!(busy, Err(AiUsageError::RolloutBusy)),
+            "round {round}: disable-hard-caps refuses instead of waiting: {busy:?}"
+        );
+        let busy = bounded(enable_ai_usage_export(&pool, operator, 60)).await;
+        assert!(
+            matches!(busy, Err(AiUsageError::RolloutBusy)),
+            "round {round}: enable-export refuses instead of waiting: {busy:?}"
+        );
+        let busy = bounded(disable_ai_usage_export(&pool, operator)).await;
+        assert!(
+            matches!(busy, Err(AiUsageError::RolloutBusy)),
+            "round {round}: disable-export refuses instead of waiting: {busy:?}"
+        );
+    }
+    owner.commit().await?;
+    // The refusals released every lock: all four commands work again.
+    bounded(enable_ai_usage_export(&pool, operator, 60)).await?;
+    bounded(disable_ai_usage_export(&pool, operator)).await?;
+    bounded(enable_ai_hard_caps(&pool, operator, 60)).await?;
+    bounded(disable_ai_hard_caps(&pool, operator)).await?;
+    Ok(())
+}
+
+/// The exact three-transaction interleaving the blocking rollout lock created
+/// (A -> C -> B -> A): an ordinary enqueue transaction owns the project row
+/// before its job INSERT (graph `enqueue_metrics_recompute`), an N-1 ledger
+/// writer owns the rollout singleton row before it waits for that project row
+/// (0120 `ai_usage_ledger_count_legacy_spend`), and `disable-export` runs
+/// concurrently in between. Ordinary work and the legacy writer must both
+/// commit — no 40P01 — while disable reports the contention and succeeds on a
+/// clean retry.
+#[tokio::test]
+async fn rollout_transitions_never_deadlock_an_enqueue_and_a_legacy_ledger_writer() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let (project, _workspace) = fixture(&pool).await;
+    let operator = operator(&pool).await;
+
+    // A: `enqueue_metrics_recompute`'s own shape, paused between the project
+    // row it owns and the job INSERT that shares the job-write guard.
+    let mut enqueueing = pool.begin().await?;
+    let enqueue_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *enqueueing)
+        .await?;
+    sqlx::query(
+        "UPDATE projects SET metric_requested_revision = metric_requested_revision + 1
+         WHERE id = $1",
+    )
+    .bind(project.as_uuid())
+    .execute(&mut *enqueueing)
+    .await?;
+
+    // B: an N-1 legacy ledger write. Its trigger owns the rollout singleton
+    // row, then waits for A's project row.
+    let mut legacy = pool.acquire().await?;
+    let legacy_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *legacy)
+        .await?;
+    let fact = Uuid::new_v4();
+    let legacy_write = tokio::spawn(async move {
+        sqlx::query(
+            "INSERT INTO ai_usage_ledger
+               (id, project_id, profile, provider, model, purpose,
+                input_tokens, output_tokens, cost_micros)
+             VALUES ($1, $2, 'reasoning', 'test-provider', 'test-model', 'structured', 10, 5, 15)",
+        )
+        .bind(fact)
+        .bind(project.as_uuid())
+        .execute(&mut *legacy)
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let blocked_by_enqueue: bool = sqlx::query_scalar(
+                "SELECT cardinality(pg_blocking_pids($1)) > 0 AND $2 = ANY(pg_blocking_pids($1))",
+            )
+            .bind(legacy_pid)
+            .bind(enqueue_pid)
+            .fetch_one(&pool)
+            .await
+            .expect("legacy writer lock state");
+            if blocked_by_enqueue {
+                break;
+            }
+            assert!(
+                !legacy_write.is_finished(),
+                "the legacy writer waits on the project row instead of failing"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the N-1 ledger writer owns the rollout row and waits for the project row");
+
+    // C: disable-export runs concurrently, the way an operator command does.
+    // It must refuse cleanly instead of waiting for B's rollout row while
+    // holding the job-write lock.
+    let disabling = tokio::spawn({
+        let pool = pool.clone();
+        async move { disable_ai_usage_export(&pool, operator).await }
+    });
+    // Give the command its transaction window. A blocking acquisition parks
+    // here on B's rollout row while owning the job-write lock — the state that
+    // turned the next INSERT into a three-transaction cycle.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    // A reaches its job INSERT while C is active and commits: ordinary work
+    // survives. With the blocking lock this closes A -> C -> B -> A and
+    // PostgreSQL must abort one of the three with 40P01.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        enqueue_job(
+            &mut enqueueing,
+            &job(
+                Uuid::new_v4(),
+                project,
+                deepref_domain::JobKind::RecomputeMetrics,
+                json!({}),
+                format!("deadlock-regression:{fact}"),
+            ),
+        ),
+    )
+    .await
+    .expect("the ordinary job INSERT is never trapped behind a rollout transition")?;
+
+    // B is still blocked on A's project row, so the command's outcome is
+    // decided contention, not a race with B's release.
+    let outcome = tokio::time::timeout(Duration::from_secs(10), disabling)
+        .await
+        .expect("disable-export answers instead of queueing behind the rollout row")
+        .expect("disable-export task joins");
+    enqueueing.commit().await?;
+
+    // B commits too: the legacy spend is counted and no transaction was
+    // aborted with 40P01. With the blocking lock the database must abort one
+    // of the three transactions, and this is where that abort surfaces.
+    tokio::time::timeout(Duration::from_secs(10), legacy_write)
+        .await
+        .expect("the legacy ledger write completes once the project row is free")??;
+    assert!(
+        matches!(outcome, Err(AiUsageError::RolloutBusy)),
+        "disable-export refuses instead of closing the A -> C -> B -> A cycle: {outcome:?}"
+    );
+    let last_legacy: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT last_legacy_ledger_insert_at FROM ai_usage_rollout_state WHERE singleton",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(
+        last_legacy.is_some(),
+        "the legacy accounting write landed and is counted"
+    );
+    let enqueued: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='recompute_metrics'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(enqueued, 1, "the ordinary enqueue committed");
+
+    // The operator retries after the writers are done and succeeds.
+    assert_eq!(disable_ai_usage_export(&pool, operator).await?, 0);
     Ok(())
 }
