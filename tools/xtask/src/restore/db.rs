@@ -40,13 +40,21 @@ pub(super) async fn connect(url: &str, timeout_ms: u64) -> CheckResult<PgConnect
         .map_err(|_| "database_connect_failed")
 }
 
-pub(super) async fn scan(config: &Config, url: &str, report: &mut Database) -> CheckResult<()> {
+pub(super) async fn scan(
+    config: &Config,
+    url: &str,
+    report: &mut Database,
+    deadline: &super::deadline::Deadline,
+) -> CheckResult<()> {
+    deadline.check()?;
     let mut connection = connect(url, config.limits.statement_timeout_ms).await?;
+    deadline.check()?;
     let mut tx = connection
         .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .await
         .map_err(|_| "snapshot_begin_failed")?;
     let result = async {
+        deadline.check()?;
         report.snapshot = Some(
             sqlx::query_scalar::<_, Value>(
                 "SELECT jsonb_build_object('observed_at', transaction_timestamp(),
@@ -66,10 +74,12 @@ pub(super) async fn scan(config: &Config, url: &str, report: &mut Database) -> C
             "outbox",
             "reservations",
         ] {
+            deadline.check()?;
             report.scans.insert(table.into(), Scan::default());
             report.records.insert(table.into(), Vec::new());
             let mut cursor: Option<String> = None;
             loop {
+                deadline.check()?;
                 let remaining = config.limits.rows_per_table - report.scans[table].rows;
                 let limit = config.limits.page_rows.min(remaining + 1);
                 let query = query(table);
@@ -84,6 +94,7 @@ pub(super) async fn scan(config: &Config, url: &str, report: &mut Database) -> C
                     .fetch_all(&mut *tx)
                     .await
                     .map_err(|_| "database_scan_failed")?;
+                deadline.check()?;
                 let fetched = rows.len();
                 let scan = report.scans.get_mut(table).ok_or("internal_scan_missing")?;
                 let records = report
@@ -91,6 +102,7 @@ pub(super) async fn scan(config: &Config, url: &str, report: &mut Database) -> C
                     .get_mut(table)
                     .ok_or("internal_scan_missing")?;
                 for row in rows.into_iter().take(remaining) {
+                    deadline.check()?;
                     cursor = Some(
                         row.try_get("cursor")
                             .map_err(|_| "database_decode_failed")?,
@@ -107,7 +119,7 @@ pub(super) async fn scan(config: &Config, url: &str, report: &mut Database) -> C
                 }
             }
         }
-        Ok(())
+        deadline.check()
     }
     .await;
     tx.rollback()
@@ -128,6 +140,7 @@ fn query(table: &str) -> &'static str {
           FROM workflow_files WHERE ($1::text IS NULL OR id > $1::uuid) ORDER BY id LIMIT $2",
         "jobs" => "SELECT id::text AS cursor, jsonb_build_object('id',id,'kind',kind,'state',state,
           'attempts',attempts,'max_attempts',max_attempts,'claim_seq',claim_seq,
+          'lease_owner_present',lease_owner IS NOT NULL,
           'leased_until',leased_until,'lease_expired_at_restore_target',leased_until < $4,
           'lease_expired_at_snapshot',leased_until < transaction_timestamp(),'stale',created_at <= $3,'available_at',available_at,
           'recovery_evidence', CASE
@@ -180,14 +193,19 @@ fn query(table: &str) -> &'static str {
     }
 }
 
-pub(super) fn operational_findings(database: &Database) -> Vec<Value> {
+pub(super) fn operational_findings(
+    database: &Database,
+    deadline: &super::deadline::Deadline,
+) -> CheckResult<Vec<Value>> {
     let mut findings = Vec::new();
     for (table, records) in &database.records {
         for record in records {
+            deadline.check()?;
             let evidence = record["recovery_evidence"].as_str().unwrap_or("");
             let anomaly = match table.as_str() {
                 "jobs" => {
-                    evidence.starts_with("expired_")
+                    (record["state"] == "running" && record["lease_owner_present"] == false)
+                        || evidence.starts_with("expired_")
                         || matches!(
                             evidence,
                             "running_without_lease" | "unknown_kind_requires_inspection"
@@ -204,7 +222,8 @@ pub(super) fn operational_findings(database: &Database) -> Vec<Value> {
             }
         }
     }
-    findings
+    deadline.check()?;
+    Ok(findings)
 }
 
 pub(super) fn observed_at(database: &Database) -> Option<DateTime<Utc>> {

@@ -32,21 +32,25 @@ pub(super) async fn scan(
     config: &Config,
     inventory: &Inventory,
     report: &mut Report,
+    deadline: &super::deadline::Deadline,
 ) -> CheckResult<()> {
+    deadline.check()?;
     // Unlike DocumentStore::from_config/local, this does not create a root.
     // Use the repository's object_store boundary directly; no application boot.
     let store: Arc<dyn ObjectStore> = Arc::new(
         LocalFileSystem::new_with_prefix(&config.quarantine_root)
             .map_err(|_| "quarantine_store_failed")?,
     );
-    let entries: BTreeMap<_, _> = inventory
-        .entries
-        .iter()
-        .map(|e| (e.key.as_str(), e))
-        .collect();
+    deadline.check()?;
+    let mut entries = BTreeMap::new();
+    for entry in &inventory.entries {
+        deadline.check()?;
+        entries.insert(entry.key.as_str(), entry);
+    }
     let mut present = BTreeSet::new();
     for (key, entry) in &entries {
-        match materialized_size(config, key)? {
+        deadline.check()?;
+        match materialized_size(config, key, deadline)? {
             Some(size) => {
                 present.insert(*key);
                 if size != entry.byte_size {
@@ -61,11 +65,12 @@ pub(super) async fn scan(
         }
         report.objects.inventory_checked += 1;
     }
-    report.objects.materializations_complete = true;
+    deadline.check()?;
     let mut referenced = BTreeSet::new();
     let mut samples = Vec::new();
     for table in ["documents", "workflow_files"] {
         for raw in report.database.records.get(table).into_iter().flatten() {
+            deadline.check()?;
             let reference: Reference =
                 serde_json::from_value(raw.clone()).map_err(|_| "metadata_decode_failed")?;
             let Some(key) = &reference.key else {
@@ -95,7 +100,7 @@ pub(super) async fn scan(
                 continue;
             };
             validate_key(key)?;
-            let actual_size = materialized_size(config, key)?;
+            let actual_size = materialized_size(config, key, deadline)?;
             report.objects.references_statted += 1;
             if reference.already_marked_blob_missing == Some(true) {
                 report.objects.documents_already_marked_blob_missing += 1;
@@ -145,6 +150,8 @@ pub(super) async fn scan(
             }
         }
     }
+    deadline.check()?;
+    report.objects.materializations_complete = true;
     let metadata_complete = ["documents", "workflow_files"].iter().all(|table| {
         report
             .database
@@ -153,14 +160,18 @@ pub(super) async fn scan(
             .is_some_and(|s| s.complete)
     });
     for key in entries.keys() {
+        deadline.check()?;
         if !referenced.contains(*key) {
             report.findings.push(json!({"code":if metadata_complete {"inventory_orphan"} else {"unmatched_inventory_candidate"},"key":key}));
         }
     }
     report.objects.orphan_comparison_complete = metadata_complete;
+    deadline.check()?;
     samples.sort_by(|a, b| (&a.0, a.1, &a.2.id).cmp(&(&b.0, b.1, &b.2.id)));
+    deadline.check()?;
     report.objects.hash_eligible = samples.len();
     for (_, table, reference) in samples.into_iter().take(config.limits.hash_samples) {
+        deadline.check()?;
         let key = reference
             .key
             .as_deref()
@@ -179,7 +190,7 @@ pub(super) async fn scan(
         {
             return Err("hash_byte_budget_exceeded");
         }
-        reject_symlinks(&config.quarantine_root.join(key))?;
+        reject_symlinks(&config.quarantine_root.join(key), Some(deadline))?;
         let result = store
             .get(&Path::from(key))
             .await
@@ -192,6 +203,7 @@ pub(super) async fn scan(
         let mut hasher = Sha256::new();
         let mut bytes = 0;
         while let Some(chunk) = stream.next().await {
+            deadline.check()?;
             let chunk = chunk.map_err(|_| "object_stream_failed")?;
             bytes += chunk.len() as u64;
             if bytes > size
@@ -218,6 +230,7 @@ pub(super) async fn scan(
         }
         report.objects.hash_checked += 1;
     }
+    deadline.check()?;
     report.objects.hash_scan_complete = true;
     Ok(())
 }
@@ -230,10 +243,17 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn materialized_size(config: &Config, key: &str) -> CheckResult<Option<u64>> {
+fn materialized_size(
+    config: &Config,
+    key: &str,
+    deadline: &super::deadline::Deadline,
+) -> CheckResult<Option<u64>> {
+    deadline.check()?;
     let path = config.quarantine_root.join(key);
-    reject_symlinks(&path)?;
-    match std::fs::symlink_metadata(path) {
+    reject_symlinks(&path, Some(deadline))?;
+    let metadata = std::fs::symlink_metadata(path);
+    deadline.check()?;
+    match metadata {
         Ok(meta) if meta.is_file() => Ok(Some(meta.len())),
         Ok(_) => Err("nonregular_materialization_refused"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),

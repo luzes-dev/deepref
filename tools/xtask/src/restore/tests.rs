@@ -99,6 +99,10 @@ impl Drop for Fixture {
 fn reference(id: Uuid, key: &str, bytes: &[u8]) -> Value {
     json!({"id":id,"key":key,"sha256":objects::digest(bytes),"byte_size":bytes.len()})
 }
+fn local_deadline() -> super::deadline::Deadline {
+    super::deadline::Deadline::after(std::time::Duration::from_secs(30))
+}
+
 fn codes(report: &Report) -> Vec<&str> {
     report
         .findings
@@ -131,18 +135,18 @@ fn refuses_unsafe_config_inventory_paths_and_duplicates() {
     f.object("objects/a", Some(b"abc"));
     f.object("objects/a", Some(b"abc"));
     assert_eq!(
-        f.inventory.validate(&f.config),
+        f.inventory.validate(&f.config, &local_deadline()),
         Err("inventory_duplicate_key")
     );
     f.inventory.entries.pop();
     f.inventory.restore_target -= Duration::seconds(1);
     assert_eq!(
-        f.inventory.validate(&f.config),
+        f.inventory.validate(&f.config, &local_deadline()),
         Err("inventory_contract_invalid_or_limit")
     );
     std::fs::write(&f.config.inventory, b"{}").unwrap();
     assert_eq!(
-        super::config::read_json::<Value>(&f.config.inventory, 1),
+        super::config::read_json::<Value>(&f.config.inventory, 1, None),
         Err("input_byte_limit")
     );
 }
@@ -153,7 +157,7 @@ async fn refuses_symlink_materializations_and_unsafe_database_keys() {
     let mut f = Fixture::new();
     std::os::unix::fs::symlink("/etc", f.root.join("escape")).unwrap();
     assert_eq!(
-        reject_symlinks(&f.root.join("escape/passwd")),
+        reject_symlinks(&f.root.join("escape/passwd"), None),
         Err("symlink_refused")
     );
     f.inventory.entries.push(Entry {
@@ -163,7 +167,7 @@ async fn refuses_symlink_materializations_and_unsafe_database_keys() {
     });
     let mut report = f.report();
     assert_eq!(
-        objects::scan(&f.config, &f.inventory, &mut report).await,
+        objects::scan(&f.config, &f.inventory, &mut report, &local_deadline()).await,
         Err("symlink_refused")
     );
     assert_eq!(report.finish(), 2);
@@ -176,7 +180,7 @@ async fn refuses_symlink_materializations_and_unsafe_database_keys() {
         .unwrap()
         .push(reference(Uuid::new_v4(), "../secret", b"abc"));
     assert_eq!(
-        objects::scan(&f.config, &f.inventory, &mut report).await,
+        objects::scan(&f.config, &f.inventory, &mut report, &local_deadline()).await,
         Err("unsafe_object_key")
     );
     assert_eq!(report.finish(), 2);
@@ -200,7 +204,7 @@ async fn detects_missing_versions_orphans_hashes_and_inline_compatibility() {
     r.database.records.get_mut("workflow_files").unwrap().push(
         json!({"id":Uuid::new_v4(),"key":null,"sha256":null,"byte_size":null,"inline_bytes":7}),
     );
-    objects::scan(&f.config, &f.inventory, &mut r)
+    objects::scan(&f.config, &f.inventory, &mut r, &local_deadline())
         .await
         .unwrap();
     for code in [
@@ -234,10 +238,10 @@ async fn deterministic_sample_and_byte_budgets_never_substitute_or_green() {
         .get_mut("documents")
         .unwrap()
         .extend(a.database.records["documents"].iter().rev().cloned());
-    objects::scan(&f.config, &f.inventory, &mut a)
+    objects::scan(&f.config, &f.inventory, &mut a, &local_deadline())
         .await
         .unwrap();
-    objects::scan(&f.config, &f.inventory, &mut b)
+    objects::scan(&f.config, &f.inventory, &mut b, &local_deadline())
         .await
         .unwrap();
     assert_eq!(a.objects.hash_selected, b.objects.hash_selected);
@@ -247,7 +251,7 @@ async fn deterministic_sample_and_byte_budgets_never_substitute_or_green() {
     assert_eq!(a.verdict, "no_anomalies_in_completed_checks");
     assert!(!a.full_restore_verified);
     f.config.limits.hash_object_bytes = 2;
-    let error = objects::scan(&f.config, &f.inventory, &mut b)
+    let error = objects::scan(&f.config, &f.inventory, &mut b, &local_deadline())
         .await
         .unwrap_err();
     b.failures.push(error);
@@ -257,7 +261,7 @@ async fn deterministic_sample_and_byte_budgets_never_substitute_or_green() {
     let mut c = f.report();
     c.database.records = a.database.records;
     assert_eq!(
-        objects::scan(&f.config, &f.inventory, &mut c).await,
+        objects::scan(&f.config, &f.inventory, &mut c, &local_deadline()).await,
         Err("hash_byte_budget_exceeded")
     );
     assert_eq!(c.finish(), 2);
@@ -269,7 +273,7 @@ async fn incomplete_inventory_database_and_io_failures_never_green() {
     f.object("objects/a", Some(b"abc"));
     let mut r = f.report();
     r.database.scans.get_mut("documents").unwrap().complete = false;
-    objects::scan(&f.config, &f.inventory, &mut r)
+    objects::scan(&f.config, &f.inventory, &mut r, &local_deadline())
         .await
         .unwrap();
     assert!(codes(&r).contains(&"unmatched_inventory_candidate"));
@@ -277,7 +281,7 @@ async fn incomplete_inventory_database_and_io_failures_never_green() {
     assert_eq!(r.finish(), 2);
     let mut r = f.report();
     r.inventory = Some(json!({"operator_attested_complete":false}));
-    objects::scan(&f.config, &f.inventory, &mut r)
+    objects::scan(&f.config, &f.inventory, &mut r, &local_deadline())
         .await
         .unwrap();
     assert_eq!(r.finish(), 2);
@@ -289,7 +293,7 @@ async fn incomplete_inventory_database_and_io_failures_never_green() {
         .push(reference(Uuid::new_v4(), "objects/a", b"abc"));
     f.inventory.entries[0].byte_size = 2;
     assert_eq!(
-        objects::scan(&f.config, &f.inventory, &mut r).await,
+        objects::scan(&f.config, &f.inventory, &mut r, &local_deadline()).await,
         Err("sample_size_changed_or_inventory_inconsistent")
     );
     assert!(codes(&r).contains(&"inventory_size_mismatch"));
@@ -319,7 +323,9 @@ async fn postgres_current_schema_evidence_snapshot_and_read_only() {
     .await
     .unwrap();
     let mut r = f.report();
-    db::scan(&f.config, &url, &mut r.database).await.unwrap();
+    db::scan(&f.config, &url, &mut r.database, &local_deadline())
+        .await
+        .unwrap();
     assert_eq!(r.database.snapshot.as_ref().unwrap()["read_only"], "on");
     assert_eq!(
         r.database.snapshot.as_ref().unwrap()["isolation"],
@@ -342,6 +348,22 @@ async fn postgres_current_schema_evidence_snapshot_and_read_only() {
     assert!(
         jobs.iter().any(|v| v["lease_expired_at_snapshot"] == true
             && v["lease_expired_at_restore_target"] == false)
+    );
+    let future_ownerless = jobs
+        .iter()
+        .find(|v| v["recovery_evidence"] == "lease_not_expired" && v["stale"] == false)
+        .unwrap();
+    assert_eq!(future_ownerless["lease_owner_present"], false);
+    assert!(
+        db::operational_findings(&r.database, &local_deadline())
+            .unwrap()
+            .iter()
+            .any(|v| v["evidence"]["id"] == future_ownerless["id"])
+    );
+    assert!(
+        jobs.iter()
+            .any(|v| v["recovery_evidence"] == "expired_retry_candidate"
+                && v["lease_owner_present"] == false)
     );
     let reservations = &r.database.records["reservations"];
     for fence in [
@@ -366,8 +388,9 @@ async fn postgres_current_schema_evidence_snapshot_and_read_only() {
             .iter()
             .any(|v| v["observation_complete"] == false)
     );
-    r.findings.extend(db::operational_findings(&r.database));
-    objects::scan(&f.config, &f.inventory, &mut r)
+    r.findings
+        .extend(db::operational_findings(&r.database, &local_deadline()).unwrap());
+    objects::scan(&f.config, &f.inventory, &mut r, &local_deadline())
         .await
         .unwrap();
     assert_eq!(r.objects.inline_only_workflow_files, 1);
@@ -413,7 +436,9 @@ async fn postgres_current_schema_evidence_snapshot_and_read_only() {
     tx.rollback().await.unwrap();
     f.config.limits.rows_per_table = 1;
     let mut r = f.report();
-    db::scan(&f.config, &url, &mut r.database).await.unwrap();
+    db::scan(&f.config, &url, &mut r.database, &local_deadline())
+        .await
+        .unwrap();
     assert!(!r.database.scans["jobs"].complete);
     assert_eq!(r.finish(), 2);
     // Unavailable current schema produces sanitized failure and incomplete evidence.
@@ -423,7 +448,7 @@ async fn postgres_current_schema_evidence_snapshot_and_read_only() {
         .unwrap();
     let mut r = f.report();
     assert_eq!(
-        db::scan(&f.config, &url, &mut r.database).await,
+        db::scan(&f.config, &url, &mut r.database, &local_deadline()).await,
         Err("database_scan_failed")
     );
     assert_eq!(r.finish(), 2);
@@ -491,6 +516,9 @@ async fn seed_database(pool: &PgPool, f: &mut Fixture) {
         sqlx::query("INSERT INTO jobs(id,project_id,kind,state,attempts,claim_seq,lease_owner,leased_until,created_at) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $4='running' THEN 'fixture' END,CASE WHEN $4='running' THEN now()-interval '1 hour' END,now()-interval '2 hours')").bind(id).bind(project).bind(kind).bind(state).bind(attempts).bind(claim_seq as i64).execute(pool).await.unwrap();
         jobs.push(id);
     }
+    for future in [false, true] {
+        sqlx::query("INSERT INTO jobs(id,project_id,kind,state,attempts,claim_seq,lease_owner,leased_until,created_at) VALUES($1,$2,'recompute_metrics','running',1,1,NULL,now()+CASE WHEN $3 THEN interval '1 day' ELSE interval '-1 day' END,now())").bind(Uuid::new_v4()).bind(project).bind(future).execute(pool).await.unwrap();
+    }
     sqlx::query("UPDATE jobs SET leased_until=$2 WHERE id=$1")
         .bind(jobs[0])
         .bind(f.config.restore_target)
@@ -521,7 +549,7 @@ async fn zero_hash_sample_still_checks_all_sizes_and_nonregular_objects() {
         .get_mut("documents")
         .unwrap()
         .push(reference(Uuid::new_v4(), "objects/a", b"abcdef"));
-    objects::scan(&f.config, &f.inventory, &mut r)
+    objects::scan(&f.config, &f.inventory, &mut r, &local_deadline())
         .await
         .unwrap();
     assert_eq!(r.objects.hash_checked, 0);
@@ -532,8 +560,43 @@ async fn zero_hash_sample_still_checks_all_sizes_and_nonregular_objects() {
     std::fs::create_dir(f.root.join("objects/a")).unwrap();
     let mut r = f.report();
     assert_eq!(
-        objects::scan(&f.config, &f.inventory, &mut r).await,
+        objects::scan(&f.config, &f.inventory, &mut r, &local_deadline()).await,
         Err("nonregular_materialization_refused")
     );
+    assert_eq!(r.finish(), 2);
+}
+
+#[tokio::test]
+async fn cooperative_deadline_stops_local_scan_after_clock_expires() {
+    use std::{
+        cell::Cell,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
+    let mut f = Fixture::new();
+    f.config.limits.hash_samples = 0;
+    for key in ["objects/a", "objects/b", "objects/c"] {
+        f.object(key, Some(b"abc"));
+    }
+    let ticks = Rc::new(Cell::new(0_u32));
+    let observed = Rc::clone(&ticks);
+    let start = Instant::now();
+    let deadline =
+        super::deadline::Deadline::with_clock(start + Duration::from_millis(30), move || {
+            let tick = observed.get();
+            observed.set(tick + 1);
+            start + Duration::from_millis(u64::from(tick))
+        });
+    let mut r = f.report();
+    let result = objects::scan(&f.config, &f.inventory, &mut r, &deadline).await;
+    assert_eq!(result, Err("overall_timeout"));
+    assert!(
+        ticks.get() > 1,
+        "clock advanced during bounded local operations"
+    );
+    assert!(r.objects.inventory_checked > 0);
+    assert!(r.objects.inventory_checked < f.inventory.entries.len());
+    assert!(!r.objects.materializations_complete);
+    r.failures.push(result.unwrap_err());
     assert_eq!(r.finish(), 2);
 }

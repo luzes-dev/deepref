@@ -2,6 +2,7 @@
 //! provider calls, historical version resolution or acceptance verdict.
 mod config;
 mod db;
+mod deadline;
 mod inventory;
 mod objects;
 #[cfg(test)]
@@ -79,6 +80,10 @@ impl Report {
                 "database_references_are_key_only_no_historical_version_agreement_verified",
                 "inventory_versions_are_labels_no_cloud_pitr_or_version_resolution",
                 "quarantine_must_remain_immutable_and_read_only_during_execution",
+                "config_loading_runtime_setup_and_root_validation_occur_before_the_execution_deadline",
+                "final_report_encoding_and_output_occur_outside_the_execution_deadline",
+                "execution_deadline_is_cooperative_between_bounded_operations_not_a_strict_process_wallclock_limit",
+                "in_progress_synchronous_filesystem_calls_and_bounded_parsing_cannot_be_preempted",
                 "hashes_cover_only_the_reported_deterministic_sample",
                 "inline_only_workflow_bytes_are_compatibility_content_not_object_migration_completion",
                 "backlog_age_is_diagnostic_not_proof_of_unrecoverability_or_zero_cost",
@@ -129,9 +134,12 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
                 .map_err(|_| "runtime_initialization_failed")?
                 .block_on(async {
                     let started = std::time::Instant::now();
+                    let deadline = deadline::Deadline::after(Duration::from_millis(
+                        config.limits.overall_timeout_ms,
+                    ));
                     let outcome = tokio::time::timeout(
                         Duration::from_millis(config.limits.overall_timeout_ms),
-                        execute(&config, &mut report),
+                        execute(&config, &mut report, &deadline),
                     )
                     .await
                     .map_err(|_| "overall_timeout")?;
@@ -139,6 +147,7 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
                     {
                         return Err("overall_timeout");
                     }
+                    deadline.check()?;
                     outcome
                 })
         }),
@@ -160,11 +169,16 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
     std::process::ExitCode::from(exit)
 }
 
-async fn execute(config: &Config, report: &mut Report) -> CheckResult<()> {
+async fn execute(
+    config: &Config,
+    report: &mut Report,
+    deadline: &deadline::Deadline,
+) -> CheckResult<()> {
+    deadline.check()?;
     report.restore_target = Some(config.restore_target);
     report.stale_before = Some(config.stale_before);
     report.limits = Some(config.limits.clone());
-    let inventory = Inventory::load(config)?;
+    let inventory = Inventory::load(config, deadline)?;
     report.inventory = Some(json!({
         "snapshot_id":inventory.snapshot_id,"captured_at":inventory.captured_at,
         "restore_target":inventory.restore_target,"selection":inventory.selection,
@@ -178,15 +192,16 @@ async fn execute(config: &Config, report: &mut Report) -> CheckResult<()> {
     }
     let url = std::env::var(&config.database_url_env)
         .map_err(|_| "explicit_drill_database_url_required")?;
-    db::scan(config, &url, &mut report.database).await?;
+    db::scan(config, &url, &mut report.database, deadline).await?;
     if db::observed_at(&report.database).is_none_or(|time| config.stale_before > time) {
         return Err("cutoff_after_database_observation");
     }
     report
         .findings
-        .extend(db::operational_findings(&report.database));
+        .extend(db::operational_findings(&report.database, deadline)?);
     if report.database.scans.values().any(|scan| !scan.complete) {
         report.failures.push("database_row_budget_exceeded");
     }
-    objects::scan(config, &inventory, report).await
+    deadline.check()?;
+    objects::scan(config, &inventory, report, deadline).await
 }

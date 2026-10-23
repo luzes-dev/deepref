@@ -7,7 +7,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::CheckResult;
+use super::{CheckResult, deadline::Deadline};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +36,7 @@ pub(super) struct Limits {
 
 impl Config {
     pub fn load(path: &Path) -> CheckResult<Self> {
-        let config: Self = read_json(path, 64 * 1024)?;
+        let config: Self = read_json(path, 64 * 1024, None)?;
         config.validate()?;
         Ok(config)
     }
@@ -60,7 +60,7 @@ impl Config {
         {
             return Err("unsafe_or_invalid_config");
         }
-        reject_symlinks(&self.quarantine_root)?;
+        reject_symlinks(&self.quarantine_root, None)?;
         if !self.quarantine_root.is_dir() {
             return Err("quarantine_root_not_directory");
         }
@@ -68,7 +68,12 @@ impl Config {
     }
 }
 
-pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> CheckResult<T> {
+pub(super) fn read_json<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    limit: u64,
+    deadline: Option<&Deadline>,
+) -> CheckResult<T> {
+    checkpoint(deadline)?;
     let metadata = std::fs::metadata(path).map_err(|_| "input_open_failed")?;
     if !metadata.is_file() {
         return Err("nonregular_input_refused");
@@ -76,15 +81,20 @@ pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64)
     if metadata.len() > limit {
         return Err("input_byte_limit");
     }
+    checkpoint(deadline)?;
     let file = File::open(path).map_err(|_| "input_open_failed")?;
+    checkpoint(deadline)?;
     let mut bytes = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "input_read_failed")?;
+    checkpoint(deadline)?;
     if bytes.len() as u64 > limit {
         return Err("input_byte_limit");
     }
-    serde_json::from_slice(&bytes).map_err(|_| "invalid_input_json")
+    let parsed = serde_json::from_slice(&bytes).map_err(|_| "invalid_input_json");
+    checkpoint(deadline)?;
+    parsed
 }
 
 /// Validate before passing to object_store, which normalizes some path spellings.
@@ -105,14 +115,17 @@ pub(super) fn validate_key(key: &str) -> CheckResult<()> {
 /// Refuse symlinks, even links pointing within the quarantine. The quarantine
 /// must remain immutable: this is validation, not protection from a local writer
 /// racing path lookup. Missing final materializations are handled by the scan.
-pub(super) fn reject_symlinks(path: &Path) -> CheckResult<()> {
+pub(super) fn reject_symlinks(path: &Path, deadline: Option<&Deadline>) -> CheckResult<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
+        checkpoint(deadline)?;
         if !matches!(component, Component::RootDir | Component::Normal(_)) {
             return Err("unsafe_local_path");
         }
         current.push(component);
-        match std::fs::symlink_metadata(&current) {
+        let metadata = std::fs::symlink_metadata(&current);
+        checkpoint(deadline)?;
+        match metadata {
             Ok(meta) if meta.file_type().is_symlink() => return Err("symlink_refused"),
             Ok(_) => (),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
@@ -120,4 +133,8 @@ pub(super) fn reject_symlinks(path: &Path) -> CheckResult<()> {
         }
     }
     Ok(())
+}
+
+fn checkpoint(deadline: Option<&Deadline>) -> CheckResult<()> {
+    deadline.map_or(Ok(()), Deadline::check)
 }

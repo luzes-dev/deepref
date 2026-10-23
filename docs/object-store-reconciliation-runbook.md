@@ -49,7 +49,7 @@ values; these limits are examples, not defaults:
 
 Accepted ceilings are 100,000 rows per table/inventory, 1,000 rows per page,
 16 MiB of inventory JSON, 1,000 hash samples, 64 MiB per sampled object,
-1 GiB of total hash bytes, 60 seconds per statement and 600 seconds overall.
+1 GiB of total hash bytes, 60 seconds per statement and 600 seconds for the cooperative execution deadline.
 Limits must be positive except `hash_samples`, which may be zero; size/existence
 checks still cover every inventory/reference when hashing is disabled.
 
@@ -105,8 +105,15 @@ Run the command and retain both JSON and its exit status:
 cargo xtask reconcile-storage --config /absolute/path/drill.json > /absolute/path/report.json
 ```
 
-The command uses one `REPEATABLE READ READ ONLY` snapshot with statement, lock,
-idle-transaction and overall timeouts. It reads bounded keyset pages, then rolls
+The command uses one `REPEATABLE READ READ ONLY` snapshot with statement, lock
+and idle-transaction timeouts. `overall_timeout_ms` sets an absolute monotonic
+cooperative execution deadline from inventory loading through the scans.
+The bounded config load (64 KiB), initial root validation and runtime setup
+occur before that deadline; final report encoding/output occur outside it.
+Deadline checks run between bounded local operations/phases and scan iterations,
+in addition to the asynchronous timeout and final elapsed check. They cannot
+interrupt an in-progress filesystem syscall or bounded synchronous parse. This
+is not a strict process wall-clock ceiling. It reads bounded keyset pages, then rolls
 back before reading object bodies. It never selects workflow file bodies from
 PostgreSQL. Reports include the database observation time/snapshot ID, target,
 cutoff, limits, counts and completeness of each scan. Errors use fixed public
@@ -201,7 +208,7 @@ nothing.
 ### Symptom
 
 The report contains expired-running-job candidates, missing leases,
-unknown-kind evidence, stale pending work or unprocessed inbox/outbox records.
+unknown-kind evidence, malformed running ownership, stale pending work or unprocessed inbox/outbox records.
 
 ### Query
 
@@ -226,6 +233,10 @@ WHERE delivery_state <> 'delivered';
 
 Distinguish lease expiry at the restore target from expiry at database
 observation. Job recovery uses strict `<`; inbox/outbox lease expiry uses `<=`.
+A running job with no lease owner is a structural anomaly even with a fresh,
+future lease. Owner presence is reported as a boolean. Recovery eligibility is
+separate: the current recovery predicate does not require an owner, so an
+ownerless expired known-kind job is still a recovery candidate.
 A known expired job below `max_attempts` is a retry candidate; at the limit it
 is a dead-letter candidate. Unknown kinds need inspection. None of these proves
 that a worker is unable to recover it. Validate capable worker/pool availability,

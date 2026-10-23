@@ -29,13 +29,23 @@ pub(super) struct Entry {
 }
 
 impl Inventory {
-    pub fn load(config: &Config) -> CheckResult<Self> {
-        let inventory: Self = read_json(&config.inventory, config.limits.inventory_bytes)?;
-        inventory.validate(config)?;
+    pub fn load(config: &Config, deadline: &super::deadline::Deadline) -> CheckResult<Self> {
+        deadline.check()?;
+        let inventory: Self = read_json(
+            &config.inventory,
+            config.limits.inventory_bytes,
+            Some(deadline),
+        )?;
+        inventory.validate(config, deadline)?;
         Ok(inventory)
     }
 
-    pub fn validate(&self, config: &Config) -> CheckResult<()> {
+    pub fn validate(
+        &self,
+        config: &Config,
+        deadline: &super::deadline::Deadline,
+    ) -> CheckResult<()> {
+        deadline.check()?;
         if self.schema_version != 1
             || self.selection != "materialized_as_of"
             || self.restore_target != config.restore_target
@@ -50,6 +60,7 @@ impl Inventory {
         }
         let mut seen = BTreeMap::new();
         for entry in &self.entries {
+            deadline.check()?;
             validate_key(&entry.key)?;
             if entry
                 .version_id
@@ -62,6 +73,6 @@ impl Inventory {
                 return Err("inventory_duplicate_key");
             }
         }
-        Ok(())
+        deadline.check()
     }
 }
