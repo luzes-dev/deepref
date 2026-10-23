@@ -1,254 +1,311 @@
 # Object store reconciliation runbook
 
-Operating procedures for reconciling PostgreSQL metadata against S3-compatible
-object storage, auditing blob integrity, and resolving orphan or missing data.
+`cargo xtask reconcile-storage --config /absolute/path/drill.json` collects
+read-only evidence from an isolated restored PostgreSQL database and an offline,
+materialized object inventory. It makes no cloud calls, restores no versions,
+changes no rows or objects, and starts no API or worker. This is one scoped part
+of [operations acceptance](saas-program/12_OPERATIONS_ACCEPTANCE.md), not a
+production restore drill or proof of RPO/RTO.
 
-## Storage and retention baseline
-
-- **Bucket versioning:** Bucket versioning must remain permanently enabled.
-- **Noncurrent version retention:** Noncurrent version retention in object
-  storage must be at least the PostgreSQL point-in-time recovery (PITR) window
-  (35 days) plus a safety margin. A restored database must never reference an
-  object version that object storage has expired.
-- **Application-driven deletions:** Deletions are executed exclusively through
-  cleanup jobs (after handoff 07 lands). Bucket lifecycle rules alone must never
-  delete application data.
-- **Tracked objects:** Object keys currently tracked in metadata include
-  `documents.object_key` and `workflow_files.content` (until handoff 07 moves
-  workflow files out of `bytea`).
-- **Reconciliation tool contract:** Reconciliation is executed as a read-only
-  command via `tools/xtask` or a documented standalone script. It reports all
-  anomalies and **never deletes data**.
-
----
-
-## 1. Missing object store blob for database metadata row
+## Inputs and isolation
 
 ### Symptom
 
-The reconciliation tool reports database rows referencing an `object_key` or
-version that does not exist in the object storage bucket, or an API client
-receives an object-not-found error when fetching a registered document.
+A restored copy needs comparison with objects selected for the same recovery
+timestamp, or an operator needs a bounded integrity/backlog report.
 
 ### Query
 
-Run the read-only reconciliation check for missing objects:
+Set `DEEPREF_RESTORE_DATABASE_URL` privately to the isolated drill database using
+your credential injection mechanism. Use a read-only role. There is no fallback
+to `DATABASE_URL`, `.env`, application settings, development storage or a cloud
+bucket. The command also enforces read-only transactions when the supplied role
+has more privileges. The operator must verify the endpoint is the drill copy;
+a URL name alone cannot establish this.
 
-```bash
-cargo xtask reconcile-storage --check-missing
+Create an explicit JSON config. Replace all paths and timestamps with the drill
+values; these limits are examples, not defaults:
+
+```json
+{
+  "database_url_env": "DEEPREF_RESTORE_DATABASE_URL",
+  "quarantine_root": "/absolute/path/drill/objects",
+  "inventory": "/absolute/path/drill/inventory.json",
+  "restore_target": "2026-10-22T12:00:00Z",
+  "stale_before": "2026-10-22T11:45:00Z",
+  "limits": {
+    "rows_per_table": 10000,
+    "page_rows": 200,
+    "inventory_bytes": 8388608,
+    "inventory_rows": 10000,
+    "hash_samples": 100,
+    "hash_object_bytes": 16777216,
+    "hash_total_bytes": 268435456,
+    "statement_timeout_ms": 10000,
+    "overall_timeout_ms": 120000
+  }
+}
 ```
 
-Or query the database for suspect document keys:
+Accepted ceilings are 100,000 rows per table/inventory, 1,000 rows per page,
+16 MiB of inventory JSON, 1,000 hash samples, 64 MiB per sampled object,
+1 GiB of total hash bytes, 60 seconds per statement and 600 seconds for the cooperative execution deadline.
+Limits must be positive except `hash_samples`, which may be zero; size/existence
+checks still cover every inventory/reference when hashing is disabled.
 
-```sql
-SELECT id, project_id, object_key, created_at
-FROM documents
-WHERE object_key = '<missing-key>';
+The inventory is a bounded JSON document, with one selected materialization per
+exact key. This empty inventory is valid only when the complete selected set
+really is empty:
+
+```json
+{
+  "schema_version": 1,
+  "snapshot_id": "drill-20261022",
+  "captured_at": "2026-10-22T12:10:00Z",
+  "restore_target": "2026-10-22T12:00:00Z",
+  "selection": "materialized_as_of",
+  "complete": true,
+  "entries": []
+}
 ```
 
-Verify version availability directly in object storage:
+Each entry has this shape:
 
-```bash
-aws s3api list-object-versions --bucket <bucket-name> --prefix <missing-key>
+```json
+{
+  "key": "documents/2f9f69b8-b809-4d36-a4bd-bdf2a55f7c41",
+  "byte_size": 1234,
+  "version_id": "optional-operator-selected-version-label"
+}
 ```
+
+The bytes must already exist at `quarantine_root/<key>`. `version_id` can be
+omitted or null. Duplicate keys, including identical duplicates, fail the scan.
+Absolute keys, empty/dot/dot-dot components, backslashes, percent encodings,
+colons, control characters and symlink traversal are refused. Every component
+of the existing root must be free of symlinks. Nonregular materializations are
+refused. Keep the quarantine immutable, read-only and inaccessible to untrusted
+writers for the entire scan; pathname checks do not prevent a local writer
+racing a file lookup. The tool creates no directories or files.
+
+`restore_target` must match between config and inventory. `captured_at` is the
+inventory export time, at or after the target. `complete` and
+`materialized_as_of` are **operator attestations**: the tool cannot verify the
+external snapshot's authenticity or the provider's historical version
+selection. The restored database's actual recovery point is also an operator
+attestation. Current database references have no version ID; version labels
+never prove historical version agreement. A key-only current-bucket listing
+must not be described as a point-in-time object snapshot.
 
 ### Action
 
-1. Determine if the missing object was caused by an incomplete upload where the
-   database transaction committed despite an S3 failure. (Handoff 12 requires
-   uploads to fail without committing metadata rows).
-2. Inspect the S3 version catalog. If a delete marker was mistakenly placed on
-   the object, remove the delete marker to restore the current version.
-3. If the noncurrent version was prematurely purged by an aggressive bucket
-   lifecycle rule, restore the object from external backup or request client
-   re-upload.
-4. Quarantine affected metadata rows if recovery is impossible. Do not delete
-   authoritative records manually.
+Run the command and retain both JSON and its exit status:
+
+```bash
+cargo xtask reconcile-storage --config /absolute/path/drill.json > /absolute/path/report.json
+```
+
+The command uses one `REPEATABLE READ READ ONLY` snapshot with statement, lock
+and idle-transaction timeouts. `overall_timeout_ms` sets an absolute monotonic
+cooperative execution deadline from inventory loading through the scans.
+The bounded config load (64 KiB), initial root validation and runtime setup
+occur before that deadline; final report encoding/output occur outside it.
+Deadline checks run between bounded local operations/phases and scan iterations,
+in addition to the asynchronous timeout and final elapsed check. They cannot
+interrupt an in-progress filesystem syscall or bounded synchronous parse. This
+is not a strict process wall-clock ceiling. It reads bounded keyset pages, then rolls
+back before reading object bodies. It never selects workflow file bodies from
+PostgreSQL. Reports include the database observation time/snapshot ID, target,
+cutoff, limits, counts and completeness of each scan. Errors use fixed public
+codes and omit connection strings, raw database errors and credentials.
 
 ### Evidence
 
-Reconciliation rerun confirms 0 missing blobs for all active database metadata
-rows.
+- Exit **0**: `no_anomalies_in_completed_checks`, within the declared scope.
+- Exit **1**: completed checks found anomalies requiring review.
+- Exit **2**: invalid config/inventory, refused path, failed read, timeout,
+  exhausted budget or incomplete scan, even if anomalies were also found.
 
----
+Always inspect `complete`, `failures`, per-table scans and object/hash coverage.
+`full_restore_verified` is always false. An incomplete metadata scan produces
+only unmatched inventory **candidates**, never confirmed orphans. A deliberately
+bounded hash sample is not a full integrity scan; a selected sample exceeding
+a byte budget causes exit 2 instead of silently choosing a smaller file.
 
-## 2. Orphaned object store blobs without database metadata
-
-### Symptom
-
-Object storage contains blobs with no corresponding pointer in `documents`
-(or `workflow_files` after handoff 07 lands).
-
-### Query
-
-Generate an inventory comparison report using the read-only reconciliation tool:
-
-```bash
-cargo xtask reconcile-storage --check-orphans --inventory-csv s3-inventory.csv
-```
-
-### Action
-
-1. Verify whether orphans stem from aborted multipart uploads or canceled user
-   creations where binary upload completed before database insertion.
-2. Ensure reconciliation does not delete the orphaned blobs.
-3. Pass the generated orphan manifest to the asynchronous cleanup worker pool
-   (after handoff 07 lands) to verify grace periods (minimum 24 hours) before
-   scheduling background removal.
-4. Verify S3 multipart upload lifecycle policies abort uncompleted uploads
-   older than 7 days.
-
-### Evidence
-
-Orphan count matches expected in-flight buffer. Scheduled cleanup runs process
-and clear unreferenced temporary uploads.
-
----
-
-## 3. Stored content hash mismatch on sampled objects (integrity failure)
+## Missing objects, versions, size or sampled hash mismatches
 
 ### Symptom
 
-Reconciliation integrity audit detects a mismatch between the stored SHA-256
-hash in the database metadata and the SHA-256 recomputed over the object payload
-(handoff 07 integrity).
+The report identifies a reference absent from inventory, a missing
+materialization (with a selected-version label where supplied), invalid
+metadata, a size mismatch, or `sampled_hash_mismatch`.
 
 ### Query
 
-Run the read-only hash audit over a representative sample:
-
-```bash
-cargo xtask reconcile-storage --audit-hashes --sample-rate 0.05
-```
-
-Fetch metadata and hash details for the damaged record:
+The tool scans all document statuses and every nonnull `documents.object_key`,
+including uploaded/failed rows. Object-key UUIDs need not equal document IDs.
+Inspect actual metadata on the drill copy:
 
 ```sql
-SELECT id, object_key, content_hash, byte_size, updated_at
+SELECT id, report_id, status, object_key, content_hash, byte_size, created_at
 FROM documents
 WHERE id = '<document-id>';
+
+SELECT id, project_id, run_id, storage_key, content_sha256, byte_size,
+       octet_length(content) AS inline_bytes
+FROM workflow_files
+WHERE id = '<workflow-file-id>';
 ```
+
+Pure inline-only workflow rows have all three reference columns null and
+existing inline bytes. They are compatibility content pending backfill, not
+missing objects. Partially null reference metadata is invalid. Migration 0084
+has a validated CHECK, but SQL null semantics permit some partial-null rows;
+the tool checks them explicitly. Inline fallback never hides an anomaly in an
+object-backed row. Every referenced/inventory materialization is checked for
+existence, regular-file type and size independently of hash sampling.
 
 ### Action
 
-1. Isolate the affected document immediately to prevent serving corrupted
-   evidence.
-2. Check S3 object version history to determine if an uncoordinated overwrite
-   (PUT) occurred under the same key without updating the database hash.
-3. Compare the current S3 object version timestamp against the database
-   `updated_at` timestamp.
-4. If corruption occurred at rest, restore the object from the preceding clean
-   version in object storage versioning.
-5. If the mismatch represents an unversioned overwrite, recompute the hash from
-   the authoritative source file or re-ingest evidence.
+Preserve evidence and verify inventory completeness, target alignment and the
+operator's selected version against the backup catalog. Recover bytes through
+a separately approved provider procedure, then regenerate the immutable
+quarantine and rerun. This command cannot remove delete markers or select a
+historical version. Do not alter metadata to make an integrity mismatch vanish.
 
 ### Evidence
 
-Recomputed hash matches the database metadata record. Re-audit across the
-document collection reports zero hash discrepancies.
+A completed comparison explains every discrepancy, and reports the exact hash
+sample checked. No claim of full-object integrity or historical version
+agreement follows from zero sampled mismatches.
 
----
-
-## 4. Unreclaimable running jobs with expired leases or unprocessed inbox rows
+## Inventory orphans
 
 ### Symptom
 
-Reconciliation reports jobs lingering in `running` status whose leases expired
-and active workers are unable to reclaim, or webhook inbox rows that have been
-received but never processed (after handoff 04a lands).
+`inventory_orphan` identifies an inventory key with no reference after both
+metadata scans complete.
 
 ### Query
 
-Check for stalled running jobs with expired leases:
+Use the report's exact key and snapshot information. Orphans can result from
+aborted uploads, normal deletion, or a post-target/current inventory compared
+with an older restored database. Confirm target/version alignment first.
+
+### Action
+
+Retain orphans in the drill. Never feed this report directly to a delete
+command. Durable cleanup/grace-period handling remains a separate handoff 07
+slice and must consider backups and in-flight work.
+
+### Evidence
+
+Each orphan is explained or retained for investigation. Reconciliation deletes
+nothing.
+
+## Expired job leases and integration backlogs
+
+### Symptom
+
+The report contains expired-running-job candidates, missing leases,
+unknown-kind evidence, malformed running ownership, stale pending work or unprocessed inbox/outbox records.
+
+### Query
+
+These are current schema names, not a quarantine/update procedure:
 
 ```sql
-SELECT id, kind, state, attempts, lease_expires_at, worker_id
+SELECT id, kind, state, attempts, max_attempts, claim_seq, leased_until
 FROM jobs
-WHERE state = 'running' AND lease_expires_at < now();
-```
+WHERE state = 'running' AND leased_until < transaction_timestamp();
 
-Check for unprocessed webhook inbox rows (after handoff 04a lands):
+SELECT id, processing_state, received_at, attempts, next_attempt_at,
+       lease_expires_at
+FROM integration_inbox_events
+WHERE processing_state <> 'processed';
 
-```sql
-SELECT id, source, event_type, received_at, attempts
-FROM webhook_inbox
-WHERE status = 'unprocessed' AND received_at < now() - INTERVAL '15 minutes';
+SELECT event_id, delivery_state, created_at, next_attempt_at, lease_expires_at
+FROM outbox_events
+WHERE delivery_state <> 'delivered';
 ```
 
 ### Action
 
-1. For expired jobs: verify if `recover_expired_jobs` is functioning in the
-   worker pool. If workers are stalled, restart worker replicas to resume the
-   requeue cycle.
-2. For jobs exceeding `max_attempts`: allow the worker lifecycle to transition
-   them to `dead`. Inspect failure payloads to identify poison pills.
-3. For unprocessed webhook inbox rows (after handoff 04a lands): inspect
-   webhook consumer logs for parser errors or database transaction deadlocks.
-   Trigger consumer reprocessing.
+Distinguish lease expiry at the restore target from expiry at database
+observation. Job recovery uses strict `<`; inbox/outbox lease expiry uses `<=`.
+A running job with no lease owner is a structural anomaly even with a fresh,
+future lease. Owner presence is reported as a boolean. Recovery eligibility is
+separate: the current recovery predicate does not require an owner, so an
+ownerless expired known-kind job is still a recovery candidate.
+A known expired job below `max_attempts` is a retry candidate; at the limit it
+is a dead-letter candidate. Unknown kinds need inspection. None of these proves
+that a worker is unable to recover it. Validate capable worker/pool availability,
+claim fencing and isolation in a separate controlled drill before promotion.
+Do not start workers on restored customer work merely to clear this report.
 
 ### Evidence
 
-Stalled running job count returns to 0. Unprocessed webhook inbox backlog clears
-to 0 (after handoff 04a lands).
+Record queue states, cutoff and recovery classification. The separate worker
+exercise must show actual reclaimability and controlled egress; this read-only
+command supplies no such runtime proof.
 
----
-
-## 5. Expired unsettled usage reservations
+## Stale nonterminal usage reservations
 
 ### Symptom
 
-Reconciliation detects usage reservations that remain in pending status past
-their expiration timestamp without settlement (after handoff 09 lands).
+Nonterminal reservations have `opened_at <= stale_before`.
 
 ### Query
 
-Query expired, unsettled usage reservations:
-
 ```sql
-SELECT id, customer_id, meter_type, amount, status, expires_at
-FROM usage_reservations
-WHERE status = 'pending' AND expires_at < now();
+SELECT r.id, r.state, r.opened_at, r.job_id, r.attempt_fence,
+       r.recognized_cost_micros, r.observed_input_tokens,
+       r.observed_output_tokens, r.observed_reasoning_tokens,
+       r.reasoning_micros_per_million_tokens,
+       j.claim_seq, j.state AS job_state, j.lease_owner, j.leased_until
+FROM ai_usage_reservations r
+LEFT JOIN jobs j ON j.id = r.job_id
+WHERE r.state IN ('open', 'observed', 'unresolved')
+  AND r.opened_at <= '<diagnostic-cutoff>'::timestamptz;
 ```
 
 ### Action
 
-1. Verify if the Polar billing exporter or background settlement task is running
-   (after handoff 09 lands).
-2. Trigger the reservation cleanup job to release reserved units back to customer
-   balances.
-3. If reservations failed to settle due to a Polar API outage, verify that usage
-   records are held with immutable identities until the provider recovers.
+There is **no reservation `expires_at`**. Age is diagnostic, never permission to
+void a hold or evidence of zero provider cost. The report separates complete
+persisted token observations (including reasoning tokens when priced),
+recognized liability, and the exact job fence evidence used by current
+reconciliation: missing job, superseded attempt, released job, unfenced active
+attempt, or request-owned reservation with no job fence. An expired lease alone
+does not fence the attempt for settlement. Known observations and ambiguous
+liabilities need the existing authorized recovery/operator process; this tool
+settles, exports and voids nothing. Billing-provider choice remains pending.
 
 ### Evidence
 
-Query returns zero reservations remaining in `pending` past `expires_at`.
+Every stale reservation has reviewed observation, liability and fence evidence.
+A nonterminal hold can legitimately remain while liability is unresolved.
 
----
-
-## 6. Object storage noncurrent retention window expiration breach
+## Version retention prerequisite
 
 ### Symptom
 
-Object storage bucket lifecycle configuration is discovered to have a noncurrent
-version retention duration shorter than the PostgreSQL PITR window (35 days plus
-margin).
+The backup catalog cannot supply object versions for the full recovery window.
 
 ### Query
 
-Fetch the active S3 bucket lifecycle configuration:
-
-```bash
-aws s3api get-bucket-lifecycle-configuration --bucket <bucket-name>
-```
+Ask the selected platform's owner for the versioning, noncurrent-version and
+backup lifecycle configuration and inventory coverage. No provider is selected
+by this runbook or command.
 
 ### Action
 
-1. Immediately update the bucket lifecycle rule governing `NoncurrentVersionExpiration`.
-2. Set `NoncurrentDays` to at least 45 days (35-day PostgreSQL PITR window plus
-   a 10-day operator margin).
-3. Ensure no rule automatically purges delete markers while underlying versions
-   are still retained.
+Maintain the decided 35-day PostgreSQL backup window and object noncurrent
+retention of at least that window plus an owner-approved margin. Application
+cleanup must account for recoverability. Provisioning and retention validation
+remain pending production work.
 
 ### Evidence
 
-The bucket lifecycle configuration reflects `NoncurrentDays >= 45`.
+An owner-approved catalog and later measured drill demonstrate coverage. A
+local reconciliation report does not validate cloud retention configuration.

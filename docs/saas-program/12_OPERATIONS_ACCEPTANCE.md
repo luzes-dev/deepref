@@ -151,7 +151,7 @@ Object storage:
 
 - Bucket versioning on. Noncurrent-version retention is at least the PostgreSQL PITR window plus a margin. A restored database must never reference a version the bucket has already expired.
 - Deletions go through the 07 cleanup jobs. Bucket lifecycle rules alone do not delete application data.
-- Objects a restore must resolve: `documents.object_key` (`crates/app/migrations/0006_evidence_workspace.sql`), and `workflow_files.content` until 07 moves it out of `bytea` (`crates/app/migrations/0028_workflow_engine.sql`).
+- Objects a restore must resolve: `documents.object_key` (`crates/app/migrations/0006_evidence_workspace.sql`), and `workflow_files.storage_key` with `content_sha256`/`byte_size`. Pure inline-only `workflow_files.content` remains compatible during the handoff 07 overlap (0084); partially null object metadata is invalid.
 
 Restore drill:
 
@@ -166,7 +166,9 @@ Restore drill:
 5  before any worker starts: point the restored copy at isolated provider credentials and endpoints
    (WorkOS, Polar, AI providers, every other outbound target) and at the quarantined bucket or prefix
    only; block production egress from the drill network; quarantine the restored `queued` and `running`
-   jobs after step 4 has read them, so no candidate worker can claim production work. Then start a
+   jobs after step 4 has read them, so no candidate worker can claim production work. This needs a
+   separately reviewed containment harness: no drill_quarantined state or quarantine command exists.
+   Keep workers stopped until all restored customer work (also capability_wait/inbox/outbox) is contained. Then start a
    candidate API and worker, enqueue controlled fixture jobs, and verify /health/ready and that the
    fixtures drain. Production jobs never drain in the drill
 6  record achieved RPO and RTO, mismatch counts and validation output; then delete the restored instance
@@ -176,28 +178,29 @@ Restore drill:
   - metadata rows whose object or version is missing;
   - objects with no metadata row (orphans, from the bucket inventory);
   - stored content hashes that do not match recomputed hashes on a sample (07 integrity);
-  - jobs `running` with expired leases that workers cannot reclaim, and inbox rows received but never processed;
-  - reservations pending settlement past their expiry (09).
-- Keep reconciliation as one read-only command. Record its home in the ADR: `tools/xtask` or a documented script. A fifth `deepref-server` subcommand changes ADR 0001 and needs its own ADR.
+  - expired running job lease/recovery candidates, observed separately at restore target and database snapshot; expiry alone is not evidence of unreclaimability;
+  - unprocessed integration inbox and pending outbox backlogs;
+  - stale nonterminal `ai_usage_reservations`, with job-fence, observation and recognized-liability evidence. These rows have no `expires_at`; age alone never authorizes voiding.
+- The implemented comparison slice is `cargo xtask reconcile-storage --config /absolute/path/drill.json` in `tools/xtask`, recorded in the ADR and [runbook](../object-store-reconciliation-runbook.md). It consumes an explicitly configured isolated DB and offline materialized inventory; snapshot completeness/target/version selection are operator attestations. It has no cloud version resolution, provider calls or mutations. All scan/budget/read failures exit 2; `full_restore_verified` is always false. Hash checks are explicitly sampled, DB version evidence is key-only, and privacy deletion replay plus runtime drill acceptance remain separate prerequisites. Keep reconciliation as one read-only command. A fifth `deepref-server` subcommand changes ADR 0001 and needs its own ADR.
 - Lease fencing inside the restored database fences only the workers that share it. It cannot fence workers on the live database, so the drill's isolation comes from credentials, endpoints and network, never from fencing. The drill network has no route to the live database.
 
 ## SLOs and alerts
 
 Owners set every target before launch. No row ships with `TBD`.
 
-| SLI                                                                            | Source today                                                                | Target            | Window | Owner          |
-| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------- | ------ | -------------- |
-| API availability (non-5xx ratio)                                               | none; needs a metric                                                        | TBD               | TBD    | API owner      |
-| API latency p95 by route class, excluding SSE streams                          | none; needs a metric                                                        | TBD               | TBD    | API owner      |
-| API replicas below the required schema version                                 | `/health/ready`                                                             | 0 after rollout   | TBD    | API owner      |
-| Job queue age per workload pool                                                | `worker.oldest_age_seconds`; workspace or one project; per pool after 05a   | TBD               | TBD    | Worker owner   |
-| Dead jobs                                                                      | `worker.recent_failed` (SQL `recent_dead`: dead jobs in a 30-minute window) | TBD               | TBD    | Worker owner   |
-| Live workers against expected                                                  | `worker.live_workers` (heartbeat every 15 s, 60 s window)                   | at least expected | TBD    | Worker owner   |
-| Outbox backlog age (04a and `ai_autonomy_outbox`)                              | SQL; no metric                                                              | TBD               | TBD    | Platform owner |
-| Inbox backlog age and webhook processing lag (WorkOS, Polar)                   | SQL after 04a                                                               | TBD               | TBD    | Billing owner  |
-| Usage settlement backlog (expired unsettled reservations, Polar usage backlog) | 09 observability; SQL                                                       | TBD               | TBD    | AI owner       |
-| Backup freshness and WAL archive lag                                           | none                                                                        | TBD               | TBD    | Platform owner |
-| Object-store error rate and reconciliation orphan count                        | none                                                                        | TBD               | TBD    | Platform owner |
+| SLI                                                                                       | Source today                                                                | Target            | Window | Owner          |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------- | ------ | -------------- |
+| API availability (non-5xx ratio)                                                          | none; needs a metric                                                        | TBD               | TBD    | API owner      |
+| API latency p95 by route class, excluding SSE streams                                     | none; needs a metric                                                        | TBD               | TBD    | API owner      |
+| API replicas below the required schema version                                            | `/health/ready`                                                             | 0 after rollout   | TBD    | API owner      |
+| Job queue age per workload pool                                                           | `worker.oldest_age_seconds`; workspace or one project; per pool after 05a   | TBD               | TBD    | Worker owner   |
+| Dead jobs                                                                                 | `worker.recent_failed` (SQL `recent_dead`: dead jobs in a 30-minute window) | TBD               | TBD    | Worker owner   |
+| Live workers against expected                                                             | `worker.live_workers` (heartbeat every 15 s, 60 s window)                   | at least expected | TBD    | Worker owner   |
+| Outbox backlog age (04a and `ai_autonomy_outbox`)                                         | SQL; no metric                                                              | TBD               | TBD    | Platform owner |
+| Inbox backlog age and webhook processing lag (WorkOS, Polar)                              | SQL after 04a                                                               | TBD               | TBD    | Billing owner  |
+| Usage settlement backlog (stale nonterminal reservations, provider-neutral usage backlog) | 09 observability; SQL                                                       | TBD               | TBD    | AI owner       |
+| Backup freshness and WAL archive lag                                                      | none                                                                        | TBD               | TBD    | Platform owner |
+| Object-store error rate and reconciliation orphan count                                   | none                                                                        | TBD               | TBD    | Platform owner |
 
 Rules:
 
