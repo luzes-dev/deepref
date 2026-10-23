@@ -8,7 +8,7 @@ The goal is to evolve DeepRef into a private multi-user SaaS without turning the
 
 ## Target architecture
 
-This is the full target. NATS JetStream and Valkey appear here because they are the selected technologies; they enter the system only when their triggers fire. The launch milestone runs on PostgreSQL and object storage alone.
+This is the full implementation target. On 2026-10-23 the product owner explicitly replaced the measurement and product-need gates and requested all handoffs now: 04b/05b NATS JetStream, 06 Valkey, 10 selective CQRS and 11 Part A API keys are required work. This schedules implementation; it does not waive rolling-deploy safety, infrastructure decisions, provider onboarding or measured operations acceptance. PostgreSQL remains the authoritative state store throughout each cutover.
 
 ```text
                          Load balancer
@@ -44,7 +44,7 @@ External providers:
 
 ```text
 WorkOS  -> authentication, sessions, organizations, SSO/SCIM
-Polar   -> Merchant of Record, checkout, subscriptions, commercial benefits,
+Dodo Payments   -> Merchant of Record, checkout, subscriptions, commercial benefits,
            credits, meters, invoices and tax handling
 AI/search/content providers -> accessed through integration boundaries
 ```
@@ -59,23 +59,23 @@ Treat these as requirements unless a later explicit product decision replaces th
 - Keep one modular Rust application and repository.
 - Do not split domain contexts into independently deployed microservices.
 - PostgreSQL remains authoritative for scientific, transactional, tenancy, authorization, billing-projection, usage-ledger and durable-run state.
-- NATS JetStream is the selected durable asynchronous transport, not authoritative state. Adopt it when `T-NATS` fires (see "Adoption triggers"). Until then PostgreSQL carries the work and the outbox/inbox contracts stay broker-independent.
-- Valkey is the selected store for disposable or reconstructable state. Adopt it when `T-VALKEY` fires. It never holds authoritative state.
+- NATS JetStream is the selected durable asynchronous transport, not authoritative state. Implement 04b/05b now under the owner decision. PostgreSQL carries work until the verified transport cutover, and the outbox/inbox contracts remain broker-independent.
+- Valkey is the selected store for disposable or reconstructable state. Implement handoff 06 now, with conservative PostgreSQL fallbacks. It never holds authoritative state.
 - S3-compatible object storage holds large blobs and artifacts.
 - Use a transactional outbox for database-to-message publication, and a PostgreSQL integration inbox for inbound provider events. Both are broker-independent.
 - Assume at-least-once delivery. Make consumers idempotent and retain database fencing for consequential work.
 - Keep `durable_runs`, `durable_steps` and `durable_attempts` authoritative in PostgreSQL.
-- Use selective CQRS. Commands keep normalized authoritative state. Add read models only for expensive, frequent, cross-context queries that tolerate bounded staleness, once `T-CQRS` fires.
+- Use selective CQRS. Commands keep normalized authoritative state. Add read models only for expensive, frequent, cross-context queries that tolerate bounded staleness, under handoff 10; inspect query fan-out and preserve explicit freshness and rebuildability.
 - WorkOS authenticates. DeepRef authorizes.
-- Polar owns commercial state. DeepRef keeps local operational entitlement projections.
+- Dodo Payments owns commercial state. DeepRef keeps local operational entitlement projections.
 - Workspace is the tenant and billing boundary.
 - DeepRef canonical IDs are internal strongly typed IDs.
-- Scientific roles and blinding policy are DeepRef domain rules, not WorkOS roles or Polar benefits.
+- Scientific roles and blinding policy are DeepRef domain rules, not WorkOS roles or Dodo Payments benefits.
 - Hard AI/financial limits are enforced locally with atomic reservation and settlement.
-- Polar usage is downstream of the DeepRef usage ledger.
+- Dodo Payments usage is downstream of the DeepRef usage ledger.
 - Do not pursue exactly-once messaging. Use idempotency, fencing and replay-safe state transitions.
 - Do not add Kafka, Redpanda, RabbitMQ, Elasticsearch/OpenSearch, ClickHouse, Cassandra, Temporal or a graph database without a measured requirement.
-- Do not adopt NATS, Valkey or asynchronous read models before their written trigger fires.
+- Implement the full selected target now. Keep adapters behind application-owned ports and prove each outage/rollback boundary before cutover.
 
 ## Existing architecture to preserve
 
@@ -115,25 +115,25 @@ Launch path (first paying workspace):
  v
 03c principal -> actor + scientific identity continuity       (03a+b+c ship as one release gate)
  |
- +---- business gate: Polar payout eligibility + LGPD policy ----+
+ +---- business gate: Dodo Payments payout eligibility + LGPD policy ----+
  |                                                               v
- |                                                         08 Polar billing
+ |                                                         08 Dodo Payments billing
  |                                                               |
  +-------------------------------------> 09 AI usage ------------+
- |                                       (needs 05a; Polar export needs 08)
+ |                                       (needs 05a; Dodo Payments export needs 08)
  +--> 11 Part B audit (starts in 02/03) and Part C docs
  |
  +--> 12 operations acceptance (starts with 01, closes last)
 ```
 
-Trigger-gated after launch:
+Required full-target dependencies:
 
 ```text
-04a --> 04b NATS adapter + relay      [T-NATS]
-05a + 04b --> 05b JetStream WorkTransport cutover   [T-NATS]
-03 --> 06 Valkey shared admission controls          [T-VALKEY]
-03 (+ 04a for async projections) --> 10 selective CQRS read models   [T-CQRS]
-03 --> 11 Part A API keys               (unless a product requirement pulls it into launch)
+04a --> 04b NATS adapter + relay
+05a + 04b --> 05b JetStream WorkTransport cutover
+03 --> 06 Valkey shared admission controls
+03 (+ 04a for async projections) --> 10 selective CQRS read models
+03 --> 11 Part A API keys and service principals
 ```
 
 Suggested implementation order:
@@ -142,17 +142,17 @@ Suggested implementation order:
 2. `02_WORKOS_IDENTITY.md`, with `04_NATS_OUTBOX_FOUNDATION.md` part 04a and `07_OBJECT_STORAGE_PRODUCTION.md` alongside
 3. `03_TENANCY_AUTHORIZATION.md`: 03a, then 03b, then 03c
 4. `05_WORKER_TRANSPORT_MIGRATION.md` phase 05a
-5. Business gate: Polar payout eligibility for the actual legal entity and the LGPD privacy/retention/export/deletion policy. Status: LGPD policy, retention and region decided; Polar is not eligible for the seller and the billing provider is undecided (`BUSINESS_DECISIONS.md`)
+5. Business decision: Dodo Payments selected on 2026-10-23 for the individual seller in Brazil. Rewrite 08 against current Dodo contracts before billing code. Published eligibility supports the individual-account path and Brazilian-issued identity documents; actual account/product/bank verification and payout compliance approval remain prerequisites for live activation (`BUSINESS_DECISIONS.md`).
 6. `08_POLAR_BILLING_ENTITLEMENTS.md`
 7. `09_AI_USAGE_RESERVATION_METERING.md`
 8. `11_API_KEYS_AUDIT_DOCS.md` Parts B and C
 9. `12_OPERATIONS_ACCEPTANCE.md`
 10. Launch milestone
-11. After launch, as triggers fire: 04b, 05b, 06, 10, 11 Part A
+11. Complete 04b, 05b, 06, 10 and 11 Part A as required full-target work, sequencing by the dependency graph and reviewing each cutover.
 
 Step 02 and step 04a proceed in parallel after 01; WorkOS webhook consumers wait for the 04a inbox. Step 07 proceeds independently after 01 and runs alongside 02 and 03. Step 12 starts with 01 (deployment ownership, CI services) and closes after everything else in the launch set. 11 Part B audit begins in 02 and 03 and 11 owns the remaining coverage and query/retention.
 
-The commercial readiness gate is a business decision, not a code task. Resolve it before 08 starts, not just before live billing: it can change the merchant of record, the plan structure and the data-handling design 08 builds on.
+The commercial provider decision is recorded: Dodo Payments replaces the original Polar choice. Handoff 08 defines its provider-specific contract before implementation. Test-mode implementation may proceed; do not infer live payment or payout approval from the provider choice or public eligibility documentation.
 
 ## Cross-cutting rules
 
@@ -214,7 +214,7 @@ Design for:
 - worker crash after DB commit but before message ACK;
 - NATS outage;
 - Valkey outage;
-- Polar outage;
+- Dodo Payments outage;
 - WorkOS outage;
 - provider timeout where success is ambiguous;
 - duplicate webhook;
@@ -233,7 +233,7 @@ Domain/application code must not depend directly on:
 async_nats
 Valkey/Redis clients
 WorkOS SDK DTOs
-Polar JSON DTOs
+Dodo Payments JSON DTOs
 object-store provider DTOs
 Axum
 SQLx
@@ -261,24 +261,17 @@ AI usage accounting must never warn and continue. A failed ledger write, a faile
 
 Normative docs must describe the architecture after each cutover. Historical review documents remain historical and should be marked non-normative rather than rewritten.
 
-## Adoption triggers
+## Adoption decision and measurement
 
-NATS, Valkey and asynchronous read models are selected but not scheduled. Each is adopted when its trigger fires. Handoffs reference triggers by name. The thresholds are proposals. The product owner confirms or replaces them before the launch milestone, and a trigger fires only on the confirmed values.
+Owner decision, 2026-10-23: “Replace gates; implement full target now.” This supersedes the original `T-NATS`, `T-VALKEY`, `T-CQRS` and API-key product-need gates wherever a handoff still references them. No fabricated production measurements are needed to authorize implementation.
 
-| Trigger    | Metric                                                                                                     | Proposed threshold                                                          | Measurement window          | Owner         |
-| ---------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------- | ------------- |
-| `T-NATS`   | Enqueue-to-claim p95 latency per workload pool, after 05a batch claiming                                   | > 2 s                                                                       | 7 consecutive days          | Product owner |
-| `T-NATS`   | Share of PostgreSQL CPU spent in claim, lease-renewal and recovery queries                                 | > 20 %                                                                      | 7-day p95 of hourly samples | Product owner |
-| `T-NATS`   | Worker replicas in any single pool needed to meet its queue-age SLO (12)                                   | > 8                                                                         | Sustained for 14 days       | Product owner |
-| `T-NATS`   | Event fan-out/replay: a second independent consumer of one event family that must replay history it missed | One accepted design doc showing the need and why an outbox dispatcher fails | Per design review           | Product owner |
-| `T-VALKEY` | Load on the 06 PostgreSQL limiter tables                                                                   | > 10 % of PostgreSQL CPU or p95 limiter check > 20 ms                       | 7-day p95                   | Product owner |
-| `T-CQRS`   | Profiled cost and frequency of one cross-context read                                                      | p95 > 500 ms at > 1 request/s, or > 10 % of PostgreSQL CPU                  | 7 days of production traces | Product owner |
+Continue measuring enqueue-to-claim latency, PostgreSQL claim/limiter load, worker scale and aggregate-query cost to evaluate the result. CQRS stays selective: inspect a concrete cross-context aggregate, prefer cheap same-transaction derivations, and add asynchronous projections only with a clear fan-out or write-path-cost rationale. Tenant scope, rebuildability and freshness remain release requirements.
 
-Any one `T-NATS` row firing is enough to start 04b and 05b. The same holds for `T-VALKEY` and 06. `T-CQRS` is per read model: each candidate query needs its own profile before 10 builds a projection for it.
+Implementation and operational acceptance are distinct. A source adapter or a local passing fixture does not prove a deployed backup, a paid provider account, an alert notification route, or an achieved RPO/RTO.
 
 ## Launch milestone
 
-Launch is the first paying workspace. It does not require the full target architecture.
+Launch is the first paying workspace. The owner now requests the full target implementation before this program is handed back as complete.
 
 Required handoffs:
 
@@ -289,15 +282,15 @@ Required handoffs:
 04a PostgreSQL outbox + integration inbox
 05a PostgreSQL-first execution/transport separation
 07  object storage productionization
-08  Polar billing + entitlements
+08  Dodo Payments billing + entitlements
 09  AI usage reservation + metering
 11  Part B (audit) and Part C (docs)
 12  operations acceptance
 ```
 
-Launch also requires the commercial readiness gate (Polar payout eligibility for the actual legal entity; LGPD privacy, retention, export and deletion policy) to be resolved before 08 starts. Decisions so far are in `BUSINESS_DECISIONS.md`.
+Dodo Payments is selected and LGPD/retention/region decisions are recorded in `BUSINESS_DECISIONS.md`. Live billing requires actual merchant, product, identity and payout approval; infrastructure and measured operations acceptance remain required.
 
-Not required for launch, adopted when a trigger fires or a product requirement pulls them in: 04b, 05b, 06, 10 and 11 Part A (API keys).
+Also required by the owner’s full-target instruction: 04b, 05b, 06, 10 and 11 Part A (API keys).
 
 ## Review history
 
@@ -305,6 +298,6 @@ Not required for launch, adopted when a trigger fires or a product requirement p
 
 ## Program completion criterion
 
-This is the full target architecture, reached after launch as triggers fire.
+This is the full target architecture requested now by the owner. Each handoff keeps its correctness and operational acceptance criteria.
 
-The program is complete when DeepRef can scale API and worker processes horizontally, isolate workload classes, lose NATS or Valkey without losing authoritative scientific or financial state, authenticate and authorize real users and workspaces, bill through Polar, enforce hard AI limits locally, and serve expensive dashboards from bounded-staleness projections where appropriate, all while remaining one coherent modular application.
+The program is complete when DeepRef can scale API and worker processes horizontally, isolate workload classes, lose NATS or Valkey without losing authoritative scientific or financial state, authenticate and authorize real users and workspaces, bill through Dodo Payments, enforce hard AI limits locally, and serve expensive dashboards from bounded-staleness projections where appropriate, all while remaining one coherent modular application.

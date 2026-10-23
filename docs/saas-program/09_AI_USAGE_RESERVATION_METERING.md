@@ -1,10 +1,11 @@
-# Handoff 09: AI usage reservation, settlement and Polar metering
+# Handoff 09: AI usage reservation, settlement and Dodo Payments metering
 
+> Owner decision (2026-10-23): implement the full target now. The adoption/product gates are superseded by `00_PROGRAM.md`; correctness, compatibility and operational acceptance requirements remain. Dodo Payments is the selected billing provider.
 ## Goal
 
-Make AI usage safe under concurrency, attributable to SaaS tenants and exportable to Polar without making Polar part of the execution hot path.
+Make AI usage safe under concurrency, attributable to SaaS tenants and exportable to Dodo Payments without making Dodo Payments part of the execution hot path.
 
-Read `00_PROGRAM.md`. Complete handoff 03, handoff 04a (the broker-independent PostgreSQL outbox), and handoff 05a: reservation recovery and reconciliation run as workspace-scoped durable jobs on the 05a execution store. The Polar export depends on 04a, not on the 04b broker relay. Complete handoff 08 before enabling commercial credit/meter synchronization. The billing provider is undecided (`BUSINESS_DECISIONS.md`): build the usage export behind a provider-neutral port and read "Polar" below as "the billing provider" until 08 picks one.
+Read `00_PROGRAM.md`. Complete handoff 03, handoff 04a (the broker-independent PostgreSQL outbox), and handoff 05a: reservation recovery and reconciliation run as workspace-scoped durable jobs on the 05a execution store. The Dodo Payments export depends on 04a, not on the 04b broker relay. Complete handoff 08 before enabling commercial credit/meter synchronization. The owner selected Dodo Payments (`BUSINESS_DECISIONS.md`); retain the provider-neutral export port and implement its adapter under the current handoff 08 contract.
 
 ## Scope
 
@@ -18,7 +19,7 @@ Implement:
 - stale reservation recovery;
 - local concurrency admission integration;
 - durable usage outbox;
-- Polar event delivery;
+- Dodo Payments event delivery;
 - meter-compatible factual usage events;
 - reconciliation and observability.
 
@@ -61,7 +62,7 @@ from:
 commercial usage units
 ```
 
-Do not encode today's Polar pricing in the AI provider abstraction.
+Do not encode today's Dodo Payments pricing in the AI provider abstraction.
 
 ## Reservation model
 
@@ -183,7 +184,7 @@ never let spent exceed limit silently
 
 The ledger keeps true numbers; enforcement state records the breach.
 
-## Polar event export
+## Dodo Payments event export
 
 After local settlement:
 
@@ -193,7 +194,7 @@ usage ledger commit
 transactional outbox record
 ```
 
-The integration worker sends the usage event to Polar.
+The integration worker sends the usage event to Dodo Payments.
 
 One settlement produces one local usage fact with one immutable identity. That identity is the commercial event identity; never reissue or rewrite it.
 
@@ -210,21 +211,21 @@ commercial_units
 
 Use `WorkspaceId` as external customer identity where supported.
 
-Use the current Polar event schema, not hard-coded example JSON from planning docs.
+Use the current Dodo Payments event schema, not hard-coded example JSON from planning docs.
 
 ## Idempotency
 
 A local usage fact must have a stable commercial event identity.
 
-Before enabling retries, determine the current Polar event-ingestion idempotency/deduplication semantics.
+Before enabling retries, determine the current Dodo Payments event-ingestion idempotency/deduplication semantics.
 
-Aggregation or batching of usage facts into Polar events is allowed only after verifying Polar ingestion, deduplication, correction and billing-period semantics. Until then, one event per immutable usage fact.
+Aggregation or batching of usage facts into Dodo Payments events is allowed only after verifying Dodo Payments ingestion, deduplication, correction and billing-period semantics. Until then, one event per immutable usage fact.
 
 Handle:
 
 ```text
 client timed out
-Polar may have accepted event
+Dodo Payments may have accepted event
 ```
 
 without double-charging.
@@ -235,7 +236,7 @@ Do not assume retrying a POST is safe merely because it failed locally.
 
 DeepRef emits facts.
 
-Polar meters define commercial interpretation.
+Dodo Payments meters define commercial interpretation.
 
 Do not rename instrumentation every time pricing changes.
 
@@ -243,20 +244,20 @@ If a new price can be represented using existing factual fields, no AI execution
 
 ## Credits
 
-If the product grants Polar commercial credits:
+If the product grants Dodo Payments commercial credits:
 
 ```text
-Polar = customer-facing commercial balance
+Dodo Payments = customer-facing commercial balance
 DeepRef = hard runtime enforcement
 ```
 
 Synchronize commercial allowance into the local entitlement/quota model.
 
-Do not perform a live Polar balance check before every AI call.
+Do not perform a live Dodo Payments balance check before every AI call.
 
 ## Concurrency admission
 
-Valkey admission control is optional and enters only when handoff 06 exists and `T-VALKEY` fires. Until then, and whenever Valkey is unavailable, use the PostgreSQL fallback: a real leased-slot table (workspace and provider/model slots with lease expiry, owner identity and fencing), not advisory locks. Advisory locks cannot be counted, expired or capacity-bounded and do not implement leased concurrency.
+Valkey admission control is required under handoff 06. Before its verified cutover, and whenever Valkey is unavailable, use the PostgreSQL fallback: a real leased-slot table (workspace and provider/model slots with lease expiry, owner identity and fencing), not advisory locks. Advisory locks cannot be counted, expired or capacity-bounded and do not implement leased concurrency.
 
 With Valkey, use it for operational concurrency such as:
 
@@ -286,9 +287,9 @@ At minimum:
 5. provider failure with proven zero provider liability releases the reservation; failure with possible liability does not;
 6. worker crash leaves recoverable reservation;
 7. stale reservation recovery;
-8. duplicate Polar outbox delivery;
-9. ambiguous Polar timeout;
-10. local usage remains correct while Polar is unavailable;
+8. duplicate Dodo Payments outbox delivery;
+9. ambiguous Dodo Payments timeout;
+10. local usage remains correct while Dodo Payments is unavailable;
 11. project sub-limit cannot exceed workspace cap;
 12. service and human usage attribution;
 13. top-up race: two streaming runs top up against the same remaining headroom and only one wins;
@@ -312,8 +313,8 @@ stale reservations
 recovery actions
 unsettled/potentially billable records
 overage records and blocks
-Polar usage backlog
-Polar delivery failures
+Dodo Payments usage backlog
+Dodo Payments delivery failures
 quota denials by level
 ```
 
@@ -321,4 +322,4 @@ Do not expose cost/customer identifiers as uncontrolled metric labels.
 
 ## Completion criterion
 
-Concurrent AI work cannot exceed DeepRef's hard configured allowance, reservations bound input plus output/reasoning cost at their separate price-table rates and top up before new liability, failure releases a reservation only when no provider liability remains, every AI charge ends in a settled or explicitly voided record carrying its price-table version and period — including charges whose accounting writes failed and were recovered — and Polar receives replay-safe downstream usage without participating in the request hot path.
+Concurrent AI work cannot exceed DeepRef's hard configured allowance, reservations bound input plus output/reasoning cost at their separate price-table rates and top up before new liability, failure releases a reservation only when no provider liability remains, every AI charge ends in a settled or explicitly voided record carrying its price-table version and period — including charges whose accounting writes failed and were recovered — and Dodo Payments receives replay-safe downstream usage without participating in the request hot path.
