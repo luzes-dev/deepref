@@ -1,249 +1,176 @@
 # Database restore runbook
 
-Operating procedures for PostgreSQL point-in-time recovery (PITR) drills,
-disaster recovery restores, and production egress containment.
+Restore operations require the deployment owner and platform procedure recorded
+in [ADR 0008](adr/0008-production-deployment-ownership-and-target.md). Owner,
+hosting target, secret infrastructure and metrics remain pending. This runbook
+does not select a provider or claim that backups/PITR have been provisioned.
 
-## Baseline parameters
+The decided backup retention is a rolling 35 days under
+[BUSINESS_DECISIONS](saas-program/BUSINESS_DECISIONS.md). Proposed RPO <= 5 minutes,
+RTO <= 60 minutes and quarterly drills still require owner confirmation and
+measurement. Never report achieved RPO/RTO from this document or a successful
+local reconciliation alone.
 
-- **Backup architecture:** Continuous PostgreSQL WAL archiving paired with
-  periodic base backups. Encrypted at rest, hosted on a private network only,
-  and protected against accidental deletion in production.
-- **Target metrics:** 35-day backup retention, Recovery Point Objective (RPO)
-  no more than 5 minutes, Recovery Time Objective (RTO) no more than 60 minutes.
-- **Compliance:** Backups constitute personal data. Retention windows must align
-  with the LGPD retention policy established in the handoff 00 business gate.
-- **Drill frequency:** Executed before production launch, at least quarterly,
-  and prior to applying any contract-phase schema migration.
-
----
-
-## 1. Routine restore drill execution
+## Isolated restore comparison
 
 ### Symptom
 
-Scheduled quarterly restore drill, launch readiness verification, or an upcoming
-contract migration requiring recovery validation.
+A launch rehearsal, quarterly drill, incident investigation or contract-phase
+migration needs evidence that restored metadata and retained objects agree.
 
 ### Query
 
-Capture the live production database's latest restorable timestamp:
+Obtain the latest restorable timestamp and backup identity from the platform's
+backup/WAL catalog. `pg_last_wal_replay_lsn()` on a primary is not a backup
+catalog; `pg_stat_archiver.last_archived_time` alone does not prove recoverable
+RPO. Record the approved recovery target, source event/commit reference,
+restored database identity and object inventory snapshot separately.
 
-```sql
-SELECT pg_last_wal_replay_lsn(), now() AS current_time;
-```
+Run the actual [read-only reconciliation command](object-store-reconciliation-runbook.md#inputs-and-isolation)
+with an explicitly configured drill URL and quarantined offline objects:
 
-Capture the corresponding object storage bucket inventory timestamp for the
-matching time window.
-
-### Action
-
-Execute the drill using the following mandatory six-step sequence:
-
-1. **Capture timestamps:** Record the source database's latest restorable time
-   and the object-store inventory time.
-2. **Restore PITR instance:** Restore PostgreSQL to a new, isolated database
-   instance at the approved timestamp. Never overwrite or restore into the
-   source production database.
-3. **Resolve object versions:** Resolve object store versions as of the exact
-   same timestamp into a quarantined, read-only bucket or prefix.
-4. **Execute reconciliation:** Run the read-only reconciliation command against
-   the restored database instance using a read-only PostgreSQL role.
-5. **Isolate and test candidate workers:**
-   - Configure the restored environment with isolated credentials and mock
-     endpoints for all third-party services (WorkOS, Polar, AI providers).
-   - Point object store configuration exclusively at the quarantined read-only
-     bucket or prefix.
-   - Enforce network-level egress filtering: block all outbound production
-     egress from the drill network.
-   - Quarantine all restored `queued` and `running` jobs in the database after
-     step 4 has finished reading them, ensuring candidate workers cannot claim
-     real customer work.
-   - Start a candidate API and worker replica.
-   - Enqueue controlled fixture test jobs and verify that `/health/ready` returns
-     ready and the fixture jobs complete cleanly. Production jobs must never drain
-     in the drill.
-6. **Record metrics and teardown:** Record the measured RPO, RTO, reconciliation
-   mismatch counts, and test output. Once documented, terminate and delete the
-   restored instance and quarantined storage prefix.
-
-### Evidence
-
-Documented drill report confirming:
-
-- Measured RPO <= 5 minutes.
-- Measured RTO <= 60 minutes.
-- Zero unexplained reconciliation mismatches between database rows and storage objects.
-- All candidate worker executions drained only synthetic fixture jobs.
-- The restored database and quarantined bucket resources were destroyed.
-
----
-
-## 2. Production point-in-time recovery (disaster recovery)
-
-### Symptom
-
-Catastrophic database corruption, data loss, or accidental truncation requires
-recovering production state to a point prior to the incident.
-
-### Query
-
-Identify the precise incident onset timestamp ($T_{incident}$):
-
-```sql
-SELECT query, query_start, state
-FROM pg_stat_activity
-WHERE state != 'idle';
-```
-
-Check the latest available base backup and continuous WAL archive segment:
-
-```sql
-SELECT last_archived_wal, last_archived_time
-FROM pg_stat_archiver;
+```bash
+cargo xtask reconcile-storage --config /absolute/path/drill.json > /absolute/path/report.json
 ```
 
 ### Action
 
-1. Establish the target recovery timestamp ($T_{target} = T_{incident} - 1\text{ minute}$).
-2. Stop all production API and worker replicas immediately to freeze incoming mutations.
-3. Provision a new production database instance from the base backup.
-4. Apply WAL replay up to the designated target timestamp.
-5. Run `deepref-server migrate` if the restored target requires schema alignment.
-6. Align object storage versioning by restoring noncurrent versions to match
-   the database snapshot timestamp.
-7. Run the read-only reconciliation check to audit state before resuming traffic.
-8. Repoint application API and worker pools to the restored database and launch
-   services.
+1. Restore to a **new isolated database** using the selected platform procedure.
+   Keep all application workers/API processes stopped. Never use the live
+   development or production database as the drill fixture.
+2. Independently resolve object versions for the same recovery timestamp and
+   materialize them in an immutable, read-only quarantine directory. Capture
+   inventory export time, selection method and completeness. Cloud PITR and
+   historical object-version resolution are prerequisites supplied by the
+   platform/operator; the local tool implements neither.
+3. Run reconciliation with a read-only database role. It also requests one
+   repeatable-read/read-only transaction, bounded reads and timeouts itself.
+   It never migrates or repairs the restored schema. Unsupported schema/read
+   failures return incomplete evidence, not success.
+4. Preserve JSON, exit code, target/cutoff, scan coverage and explanations for
+   every mismatch. Exit 2 (partial/failed/budget-limited) cannot be accepted as
+   a clean comparison. Exit 0 is only `no_anomalies_in_completed_checks`;
+   `full_restore_verified` remains false, including for key-only version evidence
+   and bounded content-hash samples.
+5. Before any separate candidate-worker test, establish the isolation and
+   customer-work containment prerequisites below. Do not start workers until
+   they are demonstrably satisfied. This slice provides no mutation/quarantine
+   command or worker-isolation harness.
+6. When a separately approved drill includes startup/fixture tests, record the
+   measured recovery point and elapsed time with their actual endpoints and
+   evidence. Record teardown of only the drill's resources under the platform's
+   approved procedure. Reconciliation performs no teardown or deletion.
 
 ### Evidence
 
-The restored database boots successfully. `/health/ready` returns HTTP 200 on all
-replicas. Queries confirm data integrity prior to the corruption timestamp.
+A report identifies the actual restore target, backup/catalog evidence,
+operator-attested inventory selection, database observation snapshot, scan
+limits/completeness, anomalies and sample coverage. A complete production
+acceptance additionally needs the measured, isolated runtime drill and all
+remaining [handoff 12 gates](saas-program/12_OPERATIONS_ACCEPTANCE.md).
 
----
-
-## 3. Candidate worker isolation and egress containment
+## Candidate worker isolation and production egress containment
 
 ### Symptom
 
-During a restore drill or disaster recovery dry run, candidate workers risk
-contacting external production APIs, charging customer accounts, or attempting
-to claim production work.
+A candidate worker could claim restored customer work or contact live identity,
+billing, AI or other external services.
 
 ### Query
 
-Inspect candidate worker environment variables for production secrets:
-
-```bash
-env | grep -E "WORKOS|POLAR|DOCUMENT_STORAGE|OPENAI|ANTHROPIC"
-```
-
-Check egress packet counters from the isolated drill subnet:
-
-```bash
-iptables -L OUTPUT -v -n
-```
-
-Query the restored jobs table for non-quarantined customer jobs:
+Inspect configuration **names/presence and approved endpoint identities** using
+the selected secret manager's redacted tooling. Do not print environment values
+or production secrets into drill logs. Review network-policy evidence and the
+current active work set on the restored database:
 
 ```sql
-SELECT count(*)
+SELECT state, kind, count(*)
 FROM jobs
-WHERE state IN ('queued', 'running') AND kind NOT LIKE 'fixture_%';
+WHERE state IN ('queued', 'capability_wait', 'running')
+GROUP BY state, kind
+ORDER BY state, kind;
 ```
 
 ### Action
 
-1. Ensure the drill network environment has no route to the live production
-   database or production network subnets.
-2. Note that database lease fencing fences only workers connected to that same
-   database instance; it cannot fence live production workers. Therefore,
-   isolation must be enforced at the credential, endpoint, and network layers.
-3. Apply egress firewall rules blocking all outbound public IP traffic except
-   approved local mock servers.
-4. Update worker configuration to supply isolated or dummy API keys for WorkOS,
-   Polar, and AI providers.
-5. Ensure step 5 quarantine updates all restored `queued` and `running` jobs to a
-   quarantined state (`state = 'drill_quarantined'`) before worker processes
-   launch.
+The drill network must have no route to the live database or production
+provider endpoints. Supply isolated credentials/mock endpoints for WorkOS,
+the eventual billing provider, AI providers and every other outbound target;
+point object reads exclusively at quarantined objects. Database lease fencing
+only applies within that database and cannot fence live production workers.
+
+A separately reviewed containment procedure/harness must prevent **all restored
+customer work**, including capability-wait, inbox/outbox and scheduled recovery,
+from being claimed before candidate processes start. No supported
+`drill_quarantined` job state exists. Do not invent one or run an ad-hoc state
+UPDATE. A safe fixture-only startup harness remains a prerequisite outside this
+read-only slice; while absent, keep workers stopped and report this part of the
+drill as pending.
 
 ### Evidence
 
-Firewall logs show zero egress traffic to production third-party IPs. Restored
-workers process only synthetic drill fixtures. Live production systems experience
-zero duplicate job claims or unauthorized external calls.
+The separate exercise proves zero customer claims and production egress, plus
+successful controlled fixtures. A reconciliation report cannot prove those
+properties.
 
----
-
-## 4. Recovery Point Objective (RPO) or Recovery Time Objective (RTO) breach
+## Disaster recovery promotion
 
 ### Symptom
 
-A restore drill or test recovery exceeds the 60-minute RTO ceiling or detects
-unarchived WAL lag exceeding the 5-minute RPO threshold.
+An approved incident response requires promoting a recovered copy to production.
 
 ### Query
 
-Compute the achieved RTO from drill execution timestamps:
-
-```text
-RTO = (Timestamp when /health/ready returned 200) - (Timestamp restore was initiated)
-```
-
-Compute the achieved RPO from WAL archive lag:
-
-```sql
-SELECT EXTRACT(EPOCH FROM (now() - last_archived_time)) AS wal_lag_seconds
-FROM pg_stat_archiver;
-```
+Use the incident timeline, authoritative backup/WAL catalog and object-version
+selection evidence to choose a recovery point. Reconcile the isolated copy
+first and resolve every unexplained anomaly or incomplete check.
 
 ### Action
 
-1. If RPO exceeds 5 minutes, inspect PostgreSQL WAL archiver configuration.
-   Decrease `archive_timeout` to force frequent WAL segment rotation. Verify
-   network throughput from the database to the WAL archive destination.
-2. If RTO exceeds 60 minutes, profile the restoration pipeline:
-   - Measure snapshot download and storage provisioning time.
-   - Measure WAL replay throughput. Enable parallel WAL replay if supported by
-     the PostgreSQL platform.
-3. Remediate platform bottlenecks and repeat the drill until target thresholds
-   are achieved.
+Follow the selected platform owner's approved cutover procedure, including
+stopping live mutations, schema/release compatibility checks, aligned object
+versions, application endpoints, credentials and readiness validation. Never
+run down-migrations. Any necessary schema migration is a separate reviewed
+operation, not part of reconciliation.
+
+Before reopening access, follow [Security: Restore step](security.md#restore-step):
+retain/re-import the protected `fulfilled_account_deletions` log, supply the
+original digest-key versions, and execute the authorized
+`deepref-server accounts complete-deletions` replay against the promotion
+candidate. This intentionally mutating privacy operation is separate from the
+read-only comparison. Restored sessions and user content must not become
+accessible before fulfilled deletions are reapplied.
 
 ### Evidence
 
-Subsequent restore drill log records achieved RTO <= 60 minutes and RPO <= 5
-minutes.
+The incident record contains approved cutover, privacy replay, readiness,
+integrity and runtime-isolation evidence, plus measured recovery values. The
+read-only report contributes comparison evidence only.
 
----
-
-## 5. LGPD backup data retention compliance
+## RPO/RTO breach and retention
 
 ### Symptom
 
-Personal data deleted by users in accordance with privacy requests remains in
-database backups beyond the approved retention period.
+Measured recovery exceeds the signed objectives, backup coverage is incomplete,
+or deleted personal data survives beyond the 35-day rolling backup window.
 
 ### Query
 
-Inspect backup snapshot catalog ages against the governing LGPD retention
-policy window:
-
-```bash
-aws s3 ls s3://<backup-bucket>/wal/ --human-readable
-```
+Compare actual source commit/event timestamps and the verified recovery point
+for RPO. Measure RTO from the recorded incident/drill start to the agreed service
+recovery condition. A WAL archive activity timestamp is only one diagnostic,
+not a substitute for either measure. Inspect the selected platform's backup and
+object-version catalogs against the agreed retention policy.
 
 ### Action
 
-1. Review the data retention period mandated by the LGPD policy from the 00
-   business gate.
-2. Configure automated backup lifecycle rules on the backup storage bucket to
-   expire base backups and WAL segments older than the approved retention window
-   (e.g., 35 days).
-3. Ensure deletion protection does not prevent automated expiration of backups
-   exceeding the retention schedule.
+Have the owner investigate backup coverage, replay/provisioning time, object
+selection and recovery validation bottlenecks. Confirm encrypted backups,
+private access, deletion protection and lifecycle expiration are compatible
+with the decided retention. Repeat the measured drill after remediation;
+provider-specific configuration commands remain pending platform selection.
 
 ### Evidence
 
-Backup storage bucket policies enforce lifecycle expiration. Backup inventory
-confirms zero retained WAL segments or snapshots older than the mandated policy
-window.
+Retained catalog/configuration records and a subsequent measured drill support
+the objectives. Record unmet or unmeasured objectives explicitly.

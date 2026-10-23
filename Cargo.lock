@@ -5556,8 +5556,17 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "deepref-app",
+ "deepref-domain",
+ "futures",
+ "object_store",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
+ "sqlx",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

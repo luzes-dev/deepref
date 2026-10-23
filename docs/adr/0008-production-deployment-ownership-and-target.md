@@ -120,8 +120,17 @@ down-migrations.
 ### Storage reconciliation command
 
 Object-store and database reconciliation is a read-only command that reports
-mismatches and never deletes data. It is implemented in `tools/xtask` or a
-documented standalone script. Adding a fifth subcommand to `deepref-server` is
+mismatches and never deletes data. Its home is `tools/xtask`:
+`cargo xtask reconcile-storage --config /absolute/path/drill.json`. The command
+uses an explicit drill DB URL environment variable, a bounded offline inventory
+and an existing immutable quarantine directory; see the
+[reconciliation runbook](../object-store-reconciliation-runbook.md). It uses a
+read-only database snapshot and does not boot the application. Inventory
+completeness, recovery target and historical version selection are operator
+attestations. Database references are key-only; the command does not resolve
+cloud versions, provision PITR, run workers, replay deletions or measure RPO/RTO.
+It always reports `full_restore_verified=false`, and incomplete/failed scans
+return exit 2. This implements only the provider-independent comparison slice. Adding a fifth subcommand to `deepref-server` is
 explicitly rejected to preserve the runtime role contract established in ADR 0001.
 
 ## Consequences
@@ -133,4 +142,4 @@ explicitly rejected to preserve the runtime role contract established in ADR 000
 - CI migration checks remain informative until production versioning begins with
   the first `v*` tag.
 - Final infrastructure provisioning remains blocked until pending ownership,
-  target, region, and secret decisions are resolved.
+  target and secret decisions are resolved.

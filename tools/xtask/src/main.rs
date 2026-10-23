@@ -4,16 +4,27 @@ mod doctor;
 mod generate;
 mod migrations;
 mod new_crate;
+mod restore;
 mod sqlx;
 mod workspace;
 
 use anyhow::{Result, bail};
 
-fn main() -> Result<()> {
+fn main() -> Result<std::process::ExitCode> {
     // Developer CLI dispatch only; no security decision depends on argv.
     // nosemgrep: rust.lang.security.args.args
     let args: Vec<_> = std::env::args().skip(1).collect();
-    match args.as_slice() {
+    if let [command, rest @ ..] = args.as_slice()
+        && command == "reconcile-storage"
+    {
+        return Ok(restore::run(rest));
+    }
+    dispatch(&args)?;
+    Ok(std::process::ExitCode::SUCCESS)
+}
+
+fn dispatch(args: &[String]) -> Result<()> {
+    match args {
         [command] if command == "boundaries" => boundaries::run(),
         [command] if command == "doctor" => doctor::run(),
         [command] if command == "authz-matrix" => {
@@ -44,6 +55,7 @@ fn main() -> Result<()> {
         _ => bail!(
             "unknown command; usage:\n  \
              cargo xtask boundaries\n  \
+             cargo xtask reconcile-storage --config <drill.json>\n  \
              cargo xtask doctor\n  \
              cargo xtask authz-matrix [--check|--write]\n  \
              cargo xtask generate\n  \
