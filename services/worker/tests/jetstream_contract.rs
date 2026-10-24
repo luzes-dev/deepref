@@ -1,4 +1,9 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::panic_in_result_fn
+)]
 //! Real broker + disposable PostgreSQL contracts; strict CI runner never skips.
 use anyhow::Result;
 use deepref_app::{
@@ -874,9 +879,11 @@ async fn slow_generic_consumer_does_not_block_relay_and_drains_on_shutdown() -> 
         broker,
         Arc::new(registry),
         "parallel-relay".into(),
-        config,
-        Duration::from_millis(600),
-        Duration::from_secs(3),
+        deepref_worker::jetstream_transport::PublicationConfig {
+            nats: config,
+            claim_lease: Duration::from_millis(600),
+            drain_deadline: Duration::from_secs(3),
+        },
         stopped,
     ));
     tokio::time::timeout(Duration::from_secs(3), started.notified()).await?;

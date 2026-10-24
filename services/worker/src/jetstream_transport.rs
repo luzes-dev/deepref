@@ -22,7 +22,7 @@ use tracing::Instrument;
 
 pub enum RuntimeTransport {
     Postgres(PostgresClaimTransport),
-    JetStream(JetStreamWorkTransport),
+    JetStream(Box<JetStreamWorkTransport>),
 }
 impl WorkTransport for RuntimeTransport {
     fn recover_before_poll(&self) -> bool {
@@ -216,6 +216,13 @@ async fn reject(
     delivery.terminate().await
 }
 
+/// Publication runtime settings, already validated at the config boundary.
+pub struct PublicationConfig {
+    pub nats: NatsConfig,
+    pub claim_lease: Duration,
+    pub drain_deadline: Duration,
+}
+
 /// Relay, due scheduling and generic typed-consumer shell. Work delivery is
 /// pulled by run_claim_loop and remains bounded by each pool's free capacity.
 pub async fn run_publication(
@@ -223,11 +230,14 @@ pub async fn run_publication(
     broker: JetStream,
     registry: Arc<deepref_application::outbox::OutboxRegistry>,
     owner: String,
-    config: NatsConfig,
-    lease: Duration,
-    drain_deadline: Duration,
+    settings: PublicationConfig,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<crate::outbox_dispatch::OutboxDispatchReport> {
+    let PublicationConfig {
+        nats: config,
+        claim_lease: lease,
+        drain_deadline,
+    } = settings;
     let consumer = broker.consumer("outbox-v1", None).await?;
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let mut repair = tokio::time::interval(Duration::from_secs(30));

@@ -1,4 +1,9 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::panic_in_result_fn
+)]
 //! Run after jetstream_contract: pause only the runner-owned broker, never a
 //! shared developer service. Container name AND ownership label are checked.
 use anyhow::{Context, Result};

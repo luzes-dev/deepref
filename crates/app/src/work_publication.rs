@@ -168,9 +168,9 @@ pub async fn resolve_work(
         }
     } else if state == "running" {
         let until: Option<DateTime<Utc>> = row.try_get("leased_until")?;
-        if until.is_some_and(|until| until > current_time) {
-            WorkResolution::Ack
-        } else if crate::jobs::recover_expired_job(&mut tx, wakeup.job_id).await? {
+        if until.is_some_and(|until| until > current_time)
+            || crate::jobs::recover_expired_job(&mut tx, wakeup.job_id).await?
+        {
             WorkResolution::Ack
         } else {
             WorkResolution::Retry
@@ -257,7 +257,7 @@ pub async fn claim_event_delivery(
     else {
         return Ok(None);
     };
-    let supported: Vec<_> = expected.into_iter().collect();
+    let supported: Vec<_> = expected.iter().collect();
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
         "UPDATE outbox_events SET lease_owner=$2,

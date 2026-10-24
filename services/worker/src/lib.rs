@@ -198,10 +198,10 @@ pub async fn run_with_shutdown(
         }
     };
     let transport = match &broker {
-        Some(broker) => jetstream_transport::RuntimeTransport::JetStream(
+        Some(broker) => jetstream_transport::RuntimeTransport::JetStream(Box::new(
             jetstream_transport::JetStreamWorkTransport::new(pool.clone(), broker.clone(), &pools)
                 .await?,
-        ),
+        )),
         None => jetstream_transport::RuntimeTransport::Postgres(PostgresClaimTransport {
             store: store.clone(),
         }),
@@ -270,7 +270,16 @@ pub async fn run_with_shutdown(
                 match (runtime_transport, broker) {
                     (deepref_config::WorkTransportConfig::JetStream(settings), Some(broker)) => {
                         jetstream_transport::run_publication(
-                            pool, broker, registry, owner, settings, lease, drain, signal,
+                            pool,
+                            broker,
+                            registry,
+                            owner,
+                            jetstream_transport::PublicationConfig {
+                                nats: settings,
+                                claim_lease: lease,
+                                drain_deadline: drain,
+                            },
+                            signal,
                         )
                         .await
                     }
