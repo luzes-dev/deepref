@@ -1,12 +1,13 @@
 # Handoff 10: selective CQRS, read models and projection workers
 
+> Owner decision (2026-10-23): implement the full target now. The adoption/product gates are superseded by `00_PROGRAM.md`; correctness, compatibility and operational acceptance requirements remain. Dodo Payments is the selected billing provider.
 ## Goal
 
 Separate expensive read concerns from command-side transactional models where profiling and product behavior justify it.
 
 Do not implement full CQRS or event sourcing.
 
-Read `00_PROGRAM.md`. This handoff is trigger-gated by `T-CQRS`: work starts only after a specific read has a measured profile, and after 03 for every projection. Complete handoff 04 (04a for asynchronous projections) before relying on transport. Handoff 05b should be available before production projection workloads are moved to JetStream.
+Read `00_PROGRAM.md`. The owner requires this handoff now. Inspect concrete query complexity/fan-out and preserve selectivity; every projection depends on 03 tenant isolation. Complete handoff 04 (04a for asynchronous projections) before relying on transport. Handoff 05b should be available before production projection workloads are moved to JetStream.
 
 ## Definition
 
@@ -81,7 +82,7 @@ transaction writes outbox event (04a)
 projection worker updates read model
 ```
 
-Until `T-NATS` fires, the 04a outbox dispatcher is the transport. Afterwards the same rows are relayed by 04b and delivered through JetStream (05b `WorkTransport`). The projection contract does not change across that cutover.
+Before the verified 04b/05b cutover, the 04a outbox dispatcher is the transport. Afterwards the same rows are relayed by 04b and delivered through JetStream (05b `WorkTransport`). The projection contract does not change across that cutover.
 
 Projection handlers are idempotent.
 
