@@ -275,3 +275,5 @@ pub use ai_first::{
     evaluate_ai_first_audit, finalize_ai_first_cohort, get_ai_first_overview,
     recover_ai_first_cohort, route_ai_first_result, start_ai_first_cohort, sweep_ai_first,
 };
+
+pub mod work_publication;

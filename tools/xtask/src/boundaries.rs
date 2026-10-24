@@ -279,9 +279,14 @@ fn validate_workspace_dependency(
     }
 }
 
-fn is_forbidden_external_dependency(layer: Layer, name: &str, is_normal: bool) -> bool {
+fn is_forbidden_external_dependency(
+    source: &str,
+    layer: Layer,
+    name: &str,
+    is_normal: bool,
+) -> bool {
     if name == "async-nats" {
-        return true;
+        return source != "deepref-integrations" || layer != Layer::Adapter;
     }
     if matches!(layer, Layer::Domain | Layer::Application | Layer::Review)
         && INFRASTRUCTURE.contains(&name)
@@ -304,9 +309,9 @@ fn validate_external_dependency(
     errors: &mut Vec<String>,
 ) {
     let normal = dependency.kind.is_none();
-    if is_forbidden_external_dependency(layer, &dependency.name, normal) {
+    if is_forbidden_external_dependency(&source.name, layer, &dependency.name, normal) {
         errors.push(format!(
-            "{} -> {}\nsource layer: {layer}\ntarget layer: external\ndependency violates the pure dependency contract or removed NATS guard",
+            "{} -> {}\nsource layer: {layer}\ntarget layer: external\ndependency violates the pure dependency contract or JetStream adapter boundary",
             source.name, dependency.name
         ));
     }
@@ -380,7 +385,29 @@ fn validate(metadata: &Metadata) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::reads_runtime_environment;
+    use super::{Layer, is_forbidden_external_dependency, reads_runtime_environment};
+
+    #[test]
+    fn nats_sdk_is_confined_to_the_transport_adapter_crate() {
+        assert!(!is_forbidden_external_dependency(
+            "deepref-integrations",
+            Layer::Adapter,
+            "async-nats",
+            true
+        ));
+        for (name, layer) in [
+            ("deepref-domain", Layer::Domain),
+            ("deepref-application", Layer::Application),
+            ("deepref-app", Layer::Persistence),
+            ("deepref-worker", Layer::Worker),
+            ("deepref-documents", Layer::Adapter),
+        ] {
+            assert!(
+                is_forbidden_external_dependency(name, layer, "async-nats", true),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn migrated_runtime_config_guard_rejects_direct_environment_reads() {

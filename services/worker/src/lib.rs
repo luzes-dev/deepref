@@ -27,6 +27,7 @@ pub mod delivery;
 pub mod enrichment;
 pub mod heartbeat;
 pub mod inbox_processor;
+pub mod jetstream_transport;
 pub mod limiter;
 pub mod metadata;
 pub mod outbox_dispatch;
@@ -187,6 +188,24 @@ pub async fn run_with_shutdown(
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     let document_store = Arc::new(DocumentStore::from_config(&config.documents)?);
     let ai_gateway = build_ai_gateway(&pool, &config.runtime.ai).await?;
+    // Select one primary transport. Startup verifies JetStream configuration
+    // before processors start; broker outages later retain DB obligations.
+    let store = PostgresDurableExecutionStore { pool: pool.clone() };
+    let broker = match &config.runtime.work_transport {
+        deepref_config::WorkTransportConfig::Postgres => None,
+        deepref_config::WorkTransportConfig::JetStream(settings) => {
+            Some(deepref_integrations::jetstream::JetStream::connect(settings.clone()).await?)
+        }
+    };
+    let transport = match &broker {
+        Some(broker) => jetstream_transport::RuntimeTransport::JetStream(
+            jetstream_transport::JetStreamWorkTransport::new(pool.clone(), broker.clone(), &pools)
+                .await?,
+        ),
+        None => jetstream_transport::RuntimeTransport::Postgres(PostgresClaimTransport {
+            store: store.clone(),
+        }),
+    };
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
     workflows::set_autonomy_gate(Arc::new(deepref_app::ProjectAutonomyGate::new(&pool)));
@@ -220,11 +239,6 @@ pub async fn run_with_shutdown(
         provider_reconcilers,
         config.runtime.usage_export.clone(),
     ));
-    // The in-process outbox dispatcher (04a) is the outbox recipient until the
-    // trigger-gated JetStream relay (04b) replaces it on the same rows. Usage
-    // export (09 slice B) registers the first production contract; while the
-    // export switch is off no consumer is registered, so nothing is claimed
-    // and no delivery attempt is spent waiting for a billing provider.
     let usage_export_registry = if config.runtime.usage_export.enabled {
         let sink: Arc<dyn deepref_application::usage_export::UsageExportSink> =
             // No billing provider is chosen yet (BUSINESS_DECISIONS.md). The
@@ -240,23 +254,46 @@ pub async fn run_with_shutdown(
         tracing::info!("AI usage export is disabled; retained usage facts wait for a later replay");
         deepref_application::outbox::OutboxRegistry::new()
     };
-    let outbox_task = tokio::spawn(supervise_processor(
-        "outbox dispatcher",
-        reconciler_shutdown.clone(),
-        outbox_dispatch::run(
-            pool.clone(),
-            Arc::new(usage_export_registry),
-            owner.clone(),
-            outbox_dispatch::OutboxDispatchConfig {
-                batch: 16,
-                concurrency: config.concurrency,
-                claim_lease: config.claim_lease,
-                poll_interval: Duration::from_millis(250),
-                drain_deadline: config.runtime.telemetry.shutdown_deadline,
+    let outbox_task = {
+        let pool = pool.clone();
+        let owner = owner.clone();
+        let signal = reconciler_signal.clone();
+        let runtime_transport = config.runtime.work_transport.clone();
+        let lease = config.claim_lease;
+        let concurrency = config.concurrency;
+        let drain = config.runtime.telemetry.shutdown_deadline;
+        tokio::spawn(supervise_processor(
+            "outbox publication/delivery",
+            reconciler_shutdown.clone(),
+            async move {
+                let registry = Arc::new(usage_export_registry);
+                match (runtime_transport, broker) {
+                    (deepref_config::WorkTransportConfig::JetStream(settings), Some(broker)) => {
+                        jetstream_transport::run_publication(
+                            pool, broker, registry, owner, settings, lease, drain, signal,
+                        )
+                        .await
+                    }
+                    _ => {
+                        outbox_dispatch::run(
+                            pool,
+                            registry,
+                            owner,
+                            outbox_dispatch::OutboxDispatchConfig {
+                                batch: 16,
+                                concurrency,
+                                claim_lease: lease,
+                                poll_interval: Duration::from_millis(250),
+                                drain_deadline: drain,
+                            },
+                            shutdown::on_signal(signal),
+                        )
+                        .await
+                    }
+                }
             },
-            shutdown::on_signal(reconciler_signal.clone()),
-        ),
-    ));
+        ))
+    };
     let inbox_task = tokio::spawn(supervise_processor(
         "inbox processor",
         reconciler_shutdown.clone(),
@@ -316,12 +353,6 @@ pub async fn run_with_shutdown(
             }
             reconciler_shutdown.send_replace(true);
         }
-    };
-    // The durable store owns lifecycle writes; the transport delivers work.
-    // Under 05a both are the PostgreSQL queue and the claim *is* the delivery.
-    let store = PostgresDurableExecutionStore { pool: pool.clone() };
-    let transport = PostgresClaimTransport {
-        store: store.clone(),
     };
     let loop_result =
         run_claim_loop(transport, store, owner, loop_config, handler, loop_shutdown).await;
@@ -432,9 +463,10 @@ pub async fn run_claim_loop<T, S>(
     shutdown: impl Future<Output = ()> + Send,
 ) -> anyhow::Result<()>
 where
-    T: WorkTransport + Send + Sync,
+    T: WorkTransport + Send + Sync + 'static,
     S: DurableExecutionStore + Clone + Send + Sync + 'static,
 {
+    let transport = Arc::new(transport);
     // One semaphore per served pool: its permits are the pool's in-flight
     // handlers, so free capacity is `available_permits` and a finished (or
     // panicked) task returns its capacity by dropping its permit.
@@ -493,7 +525,7 @@ where
                 // Crash recovery before selecting new work: a crashed worker's
                 // jobs requeue with backoff (or dead-letter at the attempt
                 // budget) instead of waiting for the reconciler.
-                if let Err(error) = store.recover_expired().await {
+                if transport.recover_before_poll() && let Err(error) = store.recover_expired().await {
                     loop_error = Some(error);
                     break;
                 }
@@ -600,6 +632,7 @@ where
                             }
                         };
                         let store = store.clone();
+                        let transport = Arc::clone(&transport);
                         let job = job.clone();
                         let lease = job.lease(owner.clone());
                         let handler = Arc::clone(&handler);
@@ -618,7 +651,8 @@ where
                         active.spawn(
                             async move {
                                 let _permit = permit;
-                                process_claimed_job(store, job, lease, duration, handler).await
+                                process_claimed_job(store, job, lease.clone(), duration, handler).await?;
+                                transport.settled(&lease).await
                             }
                             .instrument(span),
                         );

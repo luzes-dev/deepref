@@ -55,6 +55,7 @@ deepref-telemetry = { path = "crates/telemetry" }
 deepref-ai = { path = "crates/ai" }
 deepref-review = { path = "crates/review" }
 anyhow = "1.0.103"
+async-nats = "0.49"
 opentelemetry = "0.33.1"
 opentelemetry-otlp = { version = "0.33.1", features = ["trace", "grpc-tonic"] }
 opentelemetry_sdk = { version = "0.33.1", features = ["rt-tokio"] }

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+async-nats.workspace = true
+futures.workspace = true
 biblatex.workspace = true
 chrono.workspace = true
 csv.workspace = true

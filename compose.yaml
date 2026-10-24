@@ -23,6 +23,20 @@ services:
       retries: 20
       start_period: 5s
 
+  nats:
+    # Optional local JetStream transport: docker compose --profile messaging up -d nats
+    # Then select WORK_TRANSPORT=jetstream and NATS_URL=nats://127.0.0.1:4222.
+    image: nats@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541
+    profiles: ["messaging"]
+    command: ["-js", "-sd", "/data"]
+    mem_limit: 256m
+    ports:
+      - "127.0.0.1:${NATS_HOST_PORT:-4222}:4222"
+    volumes:
+      - nats-data:/data
+    # The pinned image is scratch-based; application readiness verifies the
+    # JetStream management API rather than relying on an absent shell/wget.
+
   grobid:
     # Optional enrichment for parsed PDFs (sections + references). Start with:
     #   docker compose --profile enrichment up -d grobid
@@ -39,13 +53,20 @@ services:
     ports:
       - "127.0.0.1:${GROBID_HOST_PORT:-8070}:8070"
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8070 && printf \"GET /api/isalive HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q true <&3'"]
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8070 && printf \"GET /api/isalive HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q true <&3'",
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
 
 volumes:
+  nats-data:
+    labels:
+      dev.deepref.disposable: "true"
   postgres-data:
     labels:
       dev.deepref.disposable: "true"

@@ -46,3 +46,5 @@ pub use pubmed::{
 };
 pub use unpaywall::{UnpaywallClient, UnpaywallError, pdf_url_from_response};
 pub use workos::WorkOsIdentityProvider;
+
+pub mod jetstream;

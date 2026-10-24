@@ -224,12 +224,23 @@ pub struct WorkRequest<'a> {
 /// workload pool. Delivery decides nothing about authoritative state; the
 /// [`DurableExecutionStore`] claim/fence remains the authority.
 ///
-/// Under the PostgreSQL transport (the first and, until 05b, only
-/// implementation) delivery *is* claiming: `next_work` claims and fences the
-/// work it returns, so the claim doubles as wakeup and authority. A broker
-/// transport would return wakeup hints only, resolved through
-/// [`DurableExecutionStore::claim`].
+/// PostgreSQL delivery *is* claiming: `next_work` claims and fences the
+/// work it returns. JetStream delivery resolves identifier hints through a
+/// targeted PostgreSQL claim before returning work. Neither transport grants
+/// authority independently of that claim; broker ACK follows settlement.
 pub trait WorkTransport: Send + Sync {
+    /// PostgreSQL delivery couples recovery to polling; broker delivery uses
+    /// the slower independent reconciler.
+    fn recover_before_poll(&self) -> bool {
+        true
+    }
+
+    /// Confirm transport delivery only after persisted lifecycle settlement.
+    /// PostgreSQL transport has no broker acknowledgement.
+    fn settled(&self, _lease: &JobLease) -> impl Future<Output = anyhow::Result<()>> + Send {
+        async { Ok(()) }
+    }
+
     /// The next eligible work for `request.pool`, at most `request.max_jobs`
     /// items, each claimed and fenced for `request.owner`. Never claims in an
     /// unbounded loop: the caller bounds the batch and re-checks capacity on
