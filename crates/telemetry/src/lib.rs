@@ -1,3 +1,5 @@
+pub mod metrics;
+
 use std::time::Duration;
 
 use deepref_config::TelemetryConfig;
@@ -5,8 +7,8 @@ use opentelemetry::{
     global,
     trace::{TraceContextExt, TracerProvider as _},
 };
-use opentelemetry_otlp::{SpanExporter, WithExportConfig};
-use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
+use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig};
+use opentelemetry_sdk::{Resource, metrics::SdkMeterProvider, trace::SdkTracerProvider};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -23,12 +25,12 @@ pub enum TelemetryError {
 pub struct TelemetryHandle {
     shutdown_deadline: Duration,
     provider: Option<SdkTracerProvider>,
+    meter_provider: Option<SdkMeterProvider>,
 }
 
 fn build_otlp_provider(
     endpoint: &str,
-    service_name: &str,
-    build_sha: &str,
+    resource: Resource,
 ) -> Result<SdkTracerProvider, TelemetryError> {
     let exporter = SpanExporter::builder()
         .with_tonic()
@@ -37,24 +39,44 @@ fn build_otlp_provider(
         .map_err(|error| TelemetryError::Otlp(error.to_string()))?;
     Ok(SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
-        .with_resource(
-            Resource::builder()
-                .with_service_name(service_name.to_owned())
-                .with_attributes([opentelemetry::KeyValue::new(
-                    "service.version",
-                    build_sha.to_owned(),
-                )])
-                .build(),
-        )
+        .with_resource(resource)
+        .build())
+}
+
+fn build_otlp_meter_provider(
+    endpoint: &str,
+    resource: Resource,
+) -> Result<SdkMeterProvider, TelemetryError> {
+    let exporter = MetricExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .with_timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|error| TelemetryError::Otlp(error.to_string()))?;
+    Ok(SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter)
+        .with_resource(resource)
         .build())
 }
 
 pub fn init(config: TelemetryConfig) -> Result<TelemetryHandle, TelemetryError> {
     let filter = EnvFilter::try_new(&config.log_filter)?;
+    let resource = Resource::builder()
+        .with_service_name(config.service_name.clone())
+        .with_attributes([
+            opentelemetry::KeyValue::new("service.version", config.build_sha.clone()),
+            opentelemetry::KeyValue::new("service.instance.id", uuid::Uuid::new_v4().to_string()),
+        ])
+        .build();
+    let meter_provider = config
+        .otlp_endpoint
+        .as_deref()
+        .map(|endpoint| build_otlp_meter_provider(endpoint, resource.clone()))
+        .transpose()?;
     let provider = config
         .otlp_endpoint
         .as_deref()
-        .map(|endpoint| build_otlp_provider(endpoint, &config.service_name, &config.build_sha))
+        .map(|endpoint| build_otlp_provider(endpoint, resource.clone()))
         .transpose()?;
     match provider.as_ref() {
         Some(provider) => {
@@ -83,10 +105,14 @@ pub fn init(config: TelemetryConfig) -> Result<TelemetryHandle, TelemetryError> 
                 .map_err(|error| TelemetryError::Subscriber(error.to_string()))?;
         }
     }
+    if let Some(provider) = meter_provider.as_ref() {
+        global::set_meter_provider(provider.clone());
+    }
     tracing::info!(service.name = %config.service_name, service.version = %config.build_sha, otlp.enabled = config.otlp_endpoint.is_some(), "telemetry initialized");
     Ok(TelemetryHandle {
         shutdown_deadline: config.shutdown_deadline,
         provider,
+        meter_provider,
     })
 }
 
@@ -101,9 +127,17 @@ pub fn current_trace_id() -> Option<String> {
 
 impl TelemetryHandle {
     pub async fn shutdown(self) {
+        let started = std::time::Instant::now();
+        if let Some(provider) = self.meter_provider
+            && let Err(error) = provider.shutdown_with_timeout(self.shutdown_deadline)
+        {
+            tracing::warn!(%error, "metric exporter shutdown failed");
+        }
         if let Some(provider) = self.provider {
-            let _ = provider.force_flush();
-            let _ = provider.shutdown_with_timeout(self.shutdown_deadline);
+            let remaining = self.shutdown_deadline.saturating_sub(started.elapsed());
+            if let Err(error) = provider.shutdown_with_timeout(remaining) {
+                tracing::warn!(%error, "trace exporter shutdown failed");
+            }
         }
         tracing::info!("telemetry shutdown complete");
     }
@@ -114,7 +148,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn invalid_metric_endpoint_is_rejected_during_construction() {
+        assert!(build_otlp_meter_provider("not a URI", Resource::builder().build()).is_err());
+    }
+
+    #[test]
     fn invalid_otlp_endpoint_is_rejected_during_construction() {
-        assert!(build_otlp_provider("not a URI", "deepref", "test-sha").is_err());
+        assert!(build_otlp_provider("not a URI", Resource::builder().build()).is_err());
     }
 }

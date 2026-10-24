@@ -36,6 +36,7 @@ utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true
 serde_urlencoded = "0.7"
+deepref-telemetry = { version = "0.1.0", path = "../telemetry" }
 
 [dev-dependencies]
 csv.workspace = true
@@ -44,6 +45,8 @@ deepref-worker = { version = "0.1.0", path = "../../services/worker" }
 rig-core = { workspace = true, features = ["test-utils"] }
 tower.workspace = true
 syn = { version = "2", default-features = false, features = ["full", "parsing", "visit", "derive", "printing"] }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+opentelemetry.workspace = true
 
 [lints]
 workspace = true

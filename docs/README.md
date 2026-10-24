@@ -17,6 +17,7 @@
 - [Provider outage runbook](provider-outage-runbook.md)
 - [Release and migration runbook](release-and-migration-runbook.md)
 - [SLO incident runbook](slo-incident-runbook.md)
+- [Metrics pipeline and alert preparation](metrics-and-alerts-runbook.md)
 
 ## Architecture Decision Records
 

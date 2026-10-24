@@ -1064,9 +1064,12 @@ dependencies = [
  "deepref-domain",
  "deepref-integrations",
  "deepref-review",
+ "deepref-telemetry",
  "deepref-worker",
  "futures",
  "garde",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rig-core",
  "serde",
  "serde_json",
@@ -1146,6 +1149,7 @@ name = "deepref-telemetry"
 version = "0.1.0"
 dependencies = [
  "deepref-config",
+ "deepref-domain",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1153,6 +1157,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1170,8 +1175,11 @@ dependencies = [
  "deepref-domain",
  "deepref-integrations",
  "deepref-review",
+ "deepref-telemetry",
  "futures",
  "lettre",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "reqwest 0.13.5",
  "rig-cassette",
  "rig-core",

@@ -348,6 +348,10 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
                 tracing::info!(parent: span, "request completed");
             }))
         .layer(from_fn(correlation))
+        .layer(axum::middleware::from_fn_with_state(
+            deepref_telemetry::metrics::HttpMetrics::global().clone(),
+            crate::metrics::observe,
+        ))
         .with_state(state)
 }
 

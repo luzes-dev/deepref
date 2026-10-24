@@ -180,6 +180,7 @@ pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessRespon
     .await
     .map_err(ApiError::Database)?;
     let required = required_schema_version();
+    deepref_telemetry::metrics::HttpMetrics::global().schema_version(schema_version, required);
     if schema_version < required {
         return Err(ApiError::Configuration(format!(
             "database schema {schema_version} is older than required version {required}"

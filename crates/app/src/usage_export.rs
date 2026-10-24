@@ -401,7 +401,10 @@ pub async fn replay_usage_facts(
 /// Current export backlog, including identity conflicts and facts no workspace
 /// resolves for. A fact is emitted only when its outbox event is its export
 /// event.
-pub async fn usage_export_backlog(pool: &PgPool) -> anyhow::Result<UsageExportBacklog> {
+pub async fn usage_export_backlog<'e, E>(executor: E) -> anyhow::Result<UsageExportBacklog>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let message_type = AiUsageFact::TYPE;
     let row = sqlx::query(
         r#"
@@ -450,7 +453,7 @@ pub async fn usage_export_backlog(pool: &PgPool) -> anyhow::Result<UsageExportBa
         "#,
     )
     .bind(message_type)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
     Ok(UsageExportBacklog {
         emitted_events: row.get("emitted_events"),
