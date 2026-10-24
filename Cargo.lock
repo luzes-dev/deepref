@@ -1154,6 +1154,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "thiserror",
+ "tokio",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

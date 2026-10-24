@@ -112,10 +112,19 @@ async fn current_schema_sample_includes_capability_wait_and_failed_reads_never_r
         .bind(future)
         .execute(&pool)
         .await?;
-    sqlx::query("UPDATE jobs SET state='dead',created_at=now()-interval '1 year' WHERE id=$1")
+    sqlx::query("UPDATE jobs SET state='dead',workload_class=NULL,created_at=now()-interval '1 year' WHERE id=$1")
         .bind(dead)
         .execute(&pool)
         .await?;
+    let historical_class: Option<String> =
+        sqlx::query_scalar("SELECT workload_class FROM jobs WHERE id=$1")
+            .bind(dead)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(
+        historical_class, None,
+        "fixture represents supported pre-pool terminal history"
+    );
     let state: String = sqlx::query_scalar("SELECT state FROM jobs WHERE id=$1")
         .bind(protected)
         .fetch_one(&pool)

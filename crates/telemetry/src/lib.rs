@@ -43,16 +43,23 @@ fn build_otlp_provider(
         .build())
 }
 
-fn build_otlp_meter_provider(
-    endpoint: &str,
-    resource: Resource,
-) -> Result<SdkMeterProvider, TelemetryError> {
-    let exporter = MetricExporter::builder()
+fn build_otlp_metric_exporter(endpoint: &str) -> Result<MetricExporter, TelemetryError> {
+    MetricExporter::builder()
+        // Last-good gauge retention must not depend on an ambient exporter
+        // preference: delta collection discards synchronous gauge samples.
+        .with_temporality(opentelemetry_sdk::metrics::Temporality::Cumulative)
         .with_tonic()
         .with_endpoint(endpoint)
         .with_timeout(Duration::from_secs(5))
         .build()
-        .map_err(|error| TelemetryError::Otlp(error.to_string()))?;
+        .map_err(|error| TelemetryError::Otlp(error.to_string()))
+}
+
+fn build_otlp_meter_provider(
+    endpoint: &str,
+    resource: Resource,
+) -> Result<SdkMeterProvider, TelemetryError> {
+    let exporter = build_otlp_metric_exporter(endpoint)?;
     Ok(SdkMeterProvider::builder()
         .with_periodic_exporter(exporter)
         .with_resource(resource)
@@ -146,6 +153,37 @@ impl TelemetryHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::expect_used, clippy::panic)]
+    fn delta_environment_cannot_discard_last_good_metric_samples() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--ignored",
+                "--exact",
+                "tests::retention_under_delta_environment",
+                "--nocapture",
+            ])
+            .env("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "delta")
+            .output()
+            .expect("run isolated temporality configuration test");
+        assert!(
+            output.status.success(),
+            "isolated retention test failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "executed by delta_environment_cannot_discard_last_good_metric_samples with an isolated environment"]
+    #[allow(clippy::expect_used)]
+    async fn retention_under_delta_environment() {
+        use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+        let exporter =
+            build_otlp_metric_exporter("http://127.0.0.1:4317").expect("construct exporter");
+        crate::metrics::tests::assert_last_good_retention(exporter.temporality());
+    }
 
     #[test]
     fn invalid_metric_endpoint_is_rejected_during_construction() {

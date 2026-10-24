@@ -273,17 +273,23 @@ impl WorkerMetrics {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use opentelemetry::metrics::MeterProvider;
     use opentelemetry_sdk::metrics::{
-        InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+        InMemoryMetricExporterBuilder, PeriodicReader, SdkMeterProvider, Temporality,
         data::{AggregatedMetrics, MetricData},
     };
 
     #[test]
     fn failed_samples_do_not_turn_backlog_into_zero_or_advance_success_time() {
-        let exporter = InMemoryMetricExporter::default();
+        assert_last_good_retention(Temporality::Cumulative);
+    }
+
+    pub(crate) fn assert_last_good_retention(temporality: Temporality) {
+        let exporter = InMemoryMetricExporterBuilder::new()
+            .with_temporality(temporality)
+            .build();
         let provider = SdkMeterProvider::builder()
             .with_reader(PeriodicReader::builder(exporter.clone()).build())
             .build();
@@ -291,6 +297,18 @@ mod tests {
         metrics.pool(WorkloadClass::Ai, 7, 120.0, 1, 2, 3);
         metrics.sample_succeeded(1000.0);
         provider.force_flush().unwrap();
+        exporter.reset();
+        // A collection with no new database sample must still carry the last
+        // good counts and snapshot timestamp, before a failure is recorded.
+        provider.force_flush().unwrap();
+        let idle = exporter.get_finished_metrics().unwrap();
+        assert!(
+            idle.iter()
+                .flat_map(|resource| resource.scope_metrics())
+                .flat_map(|scope| scope.metrics())
+                .any(|metric| metric.name() == "deepref.worker.queue.depth"),
+            "an idle collection must retain the last good depth"
+        );
         exporter.reset();
         metrics.sample_failed();
         provider.force_flush().unwrap();

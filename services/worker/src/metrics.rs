@@ -49,7 +49,7 @@ async fn snapshot(pool: &PgPool) -> anyhow::Result<Snapshot> {
            count(j.id) FILTER (WHERE j.state='running')::bigint AS running,
            count(j.id) FILTER (WHERE j.state='dead')::bigint AS dead,
            COALESCE(capacities.capacity,0)::bigint AS capacity
-         FROM classes LEFT JOIN jobs j ON j.workload_class=classes.class
+         FROM classes LEFT JOIN jobs j ON COALESCE(j.workload_class,jobs_workload_class_for_kind(j.kind))=classes.class
            AND (j.state IN ('queued','capability_wait','running') OR j.state='dead')
          LEFT JOIN capacities ON capacities.class=classes.class
          GROUP BY classes.class,capacities.capacity ORDER BY classes.class"
