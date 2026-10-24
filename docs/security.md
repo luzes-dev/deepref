@@ -452,3 +452,47 @@ checks, so the combined contract must follow them. Migration 0141 preserves
 0111–0117 install tables, triggers, functions and indexes without emitting
 audit events; they do not require the expanded checks to run first. Both a
 fresh install and a database already at main through 0140 use this ordering.
+
+## API keys and machine access
+
+API keys are now required by the 2026-10-23 product decision. A signed-in
+workspace owner or admin manages credentials at
+`/workspaces/{workspace_id}/api-keys` (list/create),
+`/workspaces/{workspace_id}/api-keys/{key_id}` (revoke), and
+`/workspaces/{workspace_id}/api-keys/{key_id}/rotate` (rotate). These routes
+require a human browser session and central `api_key:manage` authorization.
+Origin protection applies to browser writes. No machine key can create keys.
+
+Create and rotate return the full `dr_key_v1_<uuid>.<secret>` credential once
+with `Cache-Control: no-store`. Save it in a secret manager at that point;
+list responses contain metadata only. Failed/ambiguous create responses are
+not recoverable: revoke the listed credential and create another. Rotation
+revokes the previous key and creates its replacement atomically. A retry
+cannot recover a previously returned replacement secret.
+
+The 256-bit secret comes from operating-system randomness. PostgreSQL stores
+only HMAC-SHA256 keyed by that secret over a fixed versioned context;
+RustCrypto verifies the tag with constant-time comparison. Names, scopes,
+expiry, creation, revocation and minute-bounded last-use timestamps are stored
+separately. Keys have explicit `project:view` and/or `workspace:view` scopes;
+only the documented machine-safe routes are enabled. There are at most 100
+live keys per workspace. Revoke unused or compromised keys promptly.
+
+Send a key as `Authorization: Bearer <key>`. Duplicate Authorization headers
+and mixed browser/API-key credentials are rejected without cookie fallback.
+The central PDP re-reads the key's expiry/revocation, creator status and active
+workspace membership and intersects current role permissions with the key's
+scopes and workspace. A key never produces a human `UserId` or scientific
+actor. Initially only project metadata and the bibliographic report list
+(`GET /projects/{project_id}` and `GET /projects/{project_id}/reports`) accept
+machine principals; other protected routes reject them. New machine workflows
+require an explicit policy and honest machine provenance.
+
+Key lifecycle events share the administrative audit, with key UUID only in
+metadata. Invalid credentials and machine authorization denials use closed,
+globally minute-bounded rejection categories: random selectors cannot enlarge
+the audit key space. Tokens, hashes and Authorization headers must never be
+logged, traced, included in research exports or added to audit metadata. API
+key reads continue to work during identity-provider outages once runtime
+authentication is configured; human lifecycle operations still require a live
+browser session.

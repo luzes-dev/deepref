@@ -5,17 +5,22 @@ Source of truth: `crates/http-api/src/authz/policy.rs`. The Policy Enforcement P
 
 A foreign-workspace principal calling a `Require` row receives exactly the response for a nonexistent resource (`404 NOT_FOUND`).
 
+API keys are accepted only on these explicit machine-safe reads; all other routes require a human session or their documented open boundary:
+
+- `GET /projects/{project_id}` (central scope and live membership check)
+- `GET /projects/{project_id}/reports` (central scope and live membership check)
+
 ## Summary
 
 | Rule | Rows |
 | --- | --- |
 | Authenticated | 10 |
-| Handler | 3 |
+| Handler | 7 |
 | Open | 10 |
 | PlatformOperator | 1 |
 | Require | 143 |
 | RequireIfPresent | 1 |
-| **Total HTTP** | **168** |
+| **Total HTTP** | **172** |
 | **Non-HTTP paths** | **10** |
 
 ## HTTP routes
@@ -190,6 +195,10 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 | GET | `/projects/{project_id}/studies/{study_id}/history` | Require | `project:view` | project (`{project_id}`) | `authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one` | project-scoped read |
 | GET | `/settings` | Authenticated | - | user-scoped | `n/a` | deployment-wide defaults every user may read |
 | PATCH | `/settings` | PlatformOperator | - | platform | `authz_user_scoped::settings_update_is_reserved_for_operators` | deployment-wide settings are an operator concern; no user role may change them |
+| GET | `/workspaces/{workspace_id}/api-keys` | Handler | `api_key:manage` | workspace (request body) | `api_keys::lifecycle_is_human_only_and_tenant_scoped` | human key management; handler authorizes the named workspace |
+| POST | `/workspaces/{workspace_id}/api-keys` | Handler | `api_key:manage` | workspace (request body) | `api_keys::lifecycle_is_human_only_and_tenant_scoped` | human key creation; full secret returned once |
+| DELETE | `/workspaces/{workspace_id}/api-keys/{key_id}` | Handler | `api_key:manage` | workspace (request body) | `api_keys::lifecycle_is_human_only_and_tenant_scoped` | human revocation; handler authorizes the workspace and key pair |
+| POST | `/workspaces/{workspace_id}/api-keys/{key_id}/rotate` | Handler | `api_key:manage` | workspace (request body) | `api_keys::lifecycle_is_human_only_and_tenant_scoped` | human rotation; old key revoked atomically with replacement |
 
 ## Non-HTTP access paths
 
@@ -202,6 +211,6 @@ A foreign-workspace principal calling a `Require` row receives exactly the respo
 | Export | Generated project exports (`GET .../exports/{export_kind}`) | PEP requires `project:view`; the export is generated from the path's project only and is not stored. | authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one |
 | Object access | Document object-store keys | Keys are opaque, derived from a document id, and never returned by the API. The API issues no signed or pre-signed URL; every read goes through a project-scoped route above. `validate_object_key` rejects traversal. | deepref-documents unit test `object_keys_are_opaque_and_reject_traversal` |
 | Machine delivery | Workflow webhook and inbound e-mail (`POST /hooks/workflows/{token}`, `POST /hooks/email/{token}`) | Open at the PEP by design. The private address token is the capability; it resolves to one workflow and therefore one project, and the run starts as that workflow. Signature verification and a rate limit apply. | workflows hook tests in `tests/automations_postgres.rs` |
-| Machine principal | Worker and system principals | `Principal::System` is trusted and never reaches the store; no HTTP request can produce it (`x-actor-*` headers are ignored for authority and cannot name `system`). `Principal::Service` (API keys, handoff 11) holds no permission yet. | deepref-application `system_is_trusted_and_service_principals_hold_nothing` |
+| Machine principal | Worker, system and API-key principals | `Principal::System` is trusted and never reaches the store; no HTTP request can produce it (`x-actor-*` headers are ignored for authority and cannot name `system`). `Principal::Service` (API keys, handoff 11) holds no permission yet. | deepref-application `system_is_trusted_and_unknown_service_principals_hold_nothing` |
 | Job payload | Queue handlers that load a project, report or document from a job payload | Trusted after enqueue authorization. Every enqueue site in `http-api` runs inside a route the PEP authorized for that `project_id`; the remaining enqueue sites are the system (outbox dispatch, reconciler, workflow engine). The handlers run as System. | authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one (the enqueueing routes are Require rows) |
 | Notification inbox | Notifications and their unread count | Authenticated and user-scoped: lists, counts and mark-read include only rows of projects the caller can view now. | authz_user_scoped::notifications_include_only_viewable_projects |

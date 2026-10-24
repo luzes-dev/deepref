@@ -10,7 +10,7 @@
 use std::{collections::HashSet, sync::Mutex};
 
 use deepref_application::authorization::{
-    AuthorizationFuture, AuthorizationStore, AuthzError, ResourceAccess,
+    AuthorizationFuture, AuthorizationStore, AuthzError, ResourceAccess, ServiceAccess,
 };
 use deepref_domain::{
     ProjectId, ProjectRole, UserId, WorkspaceId, WorkspaceRole,
@@ -86,6 +86,66 @@ impl AuthorizationStore for PostgresAuthorizationStore {
                     membership,
                     project_role.as_deref(),
                 ),
+            })
+        })
+    }
+    fn service_access<'a>(
+        &'a self,
+        service: deepref_domain::ServicePrincipal,
+        resource: Resource,
+    ) -> AuthorizationFuture<'a, Result<ServiceAccess, AuthzError>> {
+        Box::pin(async move {
+            let (sql, id) = match resource {
+                Resource::Workspace(id) => (
+                    "SELECT w.id AS workspace_id, k.workspace_id AS key_workspace_id, k.scopes,
+                            u.status AS user_status, m.role, m.status AS membership_status
+                     FROM api_keys k
+                     JOIN users u ON u.id = k.created_by_user_id
+                     JOIN workspaces w ON w.id = $2
+                     LEFT JOIN workspace_memberships m ON m.workspace_id = w.id AND m.user_id = u.id
+                     WHERE k.id = $1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())",
+                    id.as_uuid()),
+                Resource::Project(id) => (
+                    "SELECT p.workspace_id, k.workspace_id AS key_workspace_id, k.scopes,
+                            u.status AS user_status, m.role, m.status AS membership_status
+                     FROM api_keys k
+                     JOIN users u ON u.id = k.created_by_user_id
+                     JOIN projects p ON p.id = $2
+                     LEFT JOIN workspace_memberships m ON m.workspace_id = p.workspace_id AND m.user_id = u.id
+                     WHERE k.id = $1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())",
+                    id.as_uuid()),
+            };
+            let read = |error: sqlx::Error| AuthzError::Store(error.to_string());
+            let row = sqlx::query(sql)
+                .bind(service.key_id.as_uuid())
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(read)?;
+            let Some(row) = row else {
+                return Ok(ServiceAccess::unresolved());
+            };
+            let key_workspace: Uuid = row.try_get("key_workspace_id").map_err(read)?;
+            let workspace: Option<Uuid> = row.try_get("workspace_id").map_err(read)?;
+            let status: String = row.try_get("user_status").map_err(read)?;
+            let role: Option<String> = row.try_get("role").map_err(read)?;
+            let membership_status: Option<String> =
+                row.try_get("membership_status").map_err(read)?;
+            let scopes: Vec<String> = row.try_get("scopes").map_err(read)?;
+            Ok(ServiceAccess {
+                key_workspace_id: Some(WorkspaceId::new(key_workspace)),
+                resource: ResourceAccess {
+                    workspace_id: workspace.map(WorkspaceId::new),
+                    grants: Grants::from_stored(
+                        Some(&status),
+                        role.as_deref().zip(membership_status.as_deref()),
+                        None,
+                    ),
+                },
+                scopes: scopes
+                    .iter()
+                    .filter_map(|scope| Permission::parse(scope))
+                    .collect(),
             })
         })
     }

@@ -101,6 +101,11 @@ impl Permission {
         Self::ApiKeyManage,
     ];
 
+    /// Permissions with machine workflows that do not attribute human review.
+    pub const fn machine_allowed(self) -> bool {
+        matches!(self, Self::WorkspaceView | Self::ProjectView)
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::WorkspaceView => "workspace:view",

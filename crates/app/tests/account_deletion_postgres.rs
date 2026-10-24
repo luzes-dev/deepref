@@ -602,6 +602,16 @@ async fn no_row_anywhere_holds_the_personal_data_after_completion() {
     let shared = make_workspace(&pool, Uuid::new_v4(), "shared-workspace").await;
     add_member(&pool, shared, user, "owner").await;
     add_member(&pool, shared, other, "member").await;
+    let spec = deepref_app::api_keys::KeySpec::parse(
+        "Erased Person Gone@Example.org".into(),
+        vec!["project:view".into()],
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let issued = deepref_app::api_keys::create(&pool, user, shared, spec, AUDIT)
+        .await
+        .unwrap();
     make_session(
         &pool,
         user,
@@ -642,6 +652,13 @@ async fn no_row_anywhere_holds_the_personal_data_after_completion() {
         .await
         .unwrap();
 
+    assert!(
+        deepref_app::api_keys::authenticate(&pool, issued.secret.expose())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(events(&pool, "api_key.revoked").await, 1);
     let leaks = personal_data_leaks(
         &pool,
         &[

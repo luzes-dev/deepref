@@ -958,6 +958,7 @@ dependencies = [
  "deepref-domain",
  "deepref-review",
  "futures",
+ "getrandom 0.4.3",
  "hmac 0.13.0",
  "pgvector",
  "serde",
