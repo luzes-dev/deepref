@@ -1293,8 +1293,8 @@ pub static NON_HTTP: &[NonHttpRow] = &[
     NonHttpRow {
         kind: "Machine principal",
         name: "Worker, system and API-key principals",
-        control: "`Principal::System` is trusted and never reaches the store; no HTTP request can produce it (`x-actor-*` headers are ignored for authority and cannot name `system`). `Principal::Service` (API keys, handoff 11) holds no permission yet.",
-        test: "deepref-application `system_is_trusted_and_unknown_service_principals_hold_nothing`",
+        control: "`Principal::System` is trusted and never reaches the store; no HTTP request can produce it (`x-actor-*` headers are ignored for authority and cannot name `system`). `Principal::Service` is authorized by the same central PDP: live credential expiry/revocation and creator status, active workspace membership/current role, explicit key scopes and resource tenant must intersect. The HTTP PEP also restricts services to the explicit machine-safe read allowlist; services cannot impersonate human scientific actors.",
+        test: "api_keys::lifecycle_is_human_only_and_tenant_scoped (positive service reads); deepref-application `system_is_trusted_and_unknown_service_principals_hold_nothing` (unknown-service denial)",
     },
     NonHttpRow {
         kind: "Job payload",

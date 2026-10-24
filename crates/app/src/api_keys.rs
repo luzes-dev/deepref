@@ -20,7 +20,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::{
-    authorization::PostgresAuthorizationStore,
+    authorization::TransactionAuthorizationStore,
     identity::{AuditPrincipal, AuditRequest, insert_admin_audit},
 };
 
@@ -228,7 +228,7 @@ async fn manager<'a>(
     if membership.is_none() {
         return Err(ApiKeyError::Denied);
     }
-    PolicyDecisionPoint::new(PostgresAuthorizationStore::new(pool.clone()))
+    PolicyDecisionPoint::new(TransactionAuthorizationStore::new(&mut tx))
         .require(
             &Principal::user(actor),
             Permission::ApiKeyManage,

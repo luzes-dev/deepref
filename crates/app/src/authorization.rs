@@ -16,7 +16,7 @@ use deepref_domain::{
     ProjectId, ProjectRole, UserId, WorkspaceId, WorkspaceRole,
     authorization::{Grants, Permission, Resource, project_role_grants, workspace_role_grants},
 };
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -52,42 +52,76 @@ const WORKSPACE_ACCESS_SQL: &str = "\
     LEFT JOIN workspace_memberships m ON m.workspace_id = w.id AND m.user_id = $2 \
     WHERE w.id = $1";
 
-impl AuthorizationStore for PostgresAuthorizationStore {
+/// One human-access fact query and parser for pool and transaction adapters.
+/// Permission/role decisions remain exclusively in the central PDP/domain.
+async fn read_access<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+    user: UserId,
+    resource: Resource,
+) -> Result<ResourceAccess, AuthzError> {
+    let (sql, id) = match resource {
+        Resource::Project(project) => (PROJECT_ACCESS_SQL, project.as_uuid()),
+        Resource::Workspace(workspace) => (WORKSPACE_ACCESS_SQL, workspace.as_uuid()),
+    };
+    let row = sqlx::query(sql)
+        .bind(id)
+        .bind(user.as_uuid())
+        .fetch_optional(executor)
+        .await
+        .map_err(|error| AuthzError::Store(error.to_string()))?;
+    let Some(row) = row else {
+        return Ok(ResourceAccess::unresolved());
+    };
+    let read = |error: sqlx::Error| AuthzError::Store(error.to_string());
+    let workspace: Option<Uuid> = row.try_get("workspace_id").map_err(read)?;
+    let user_status: Option<String> = row.try_get("user_status").map_err(read)?;
+    let role: Option<String> = row.try_get("membership_role").map_err(read)?;
+    let status: Option<String> = row.try_get("membership_status").map_err(read)?;
+    let project_role: Option<String> = row.try_get("project_role").map_err(read)?;
+    let membership = role.as_deref().zip(status.as_deref());
+    Ok(ResourceAccess {
+        workspace_id: workspace.map(WorkspaceId::new),
+        grants: Grants::from_stored(user_status.as_deref(), membership, project_role.as_deref()),
+    })
+}
+
+/// Human authorization through a borrowed, already-held transaction connection.
+/// The mutex adapts AuthorizationStore's shared-reference port to SQLx's mutable
+/// connection executor; it never acquires a pool connection. Borrowing prevents
+/// this adapter from outliving the transaction whose locks protect its facts.
+/// Machine authorization is not needed here and retains the port's deny default.
+pub(crate) struct TransactionAuthorizationStore<'connection> {
+    connection: tokio::sync::Mutex<&'connection mut PgConnection>,
+}
+
+impl<'connection> TransactionAuthorizationStore<'connection> {
+    pub(crate) fn new(connection: &'connection mut PgConnection) -> Self {
+        Self {
+            connection: tokio::sync::Mutex::new(connection),
+        }
+    }
+}
+
+impl AuthorizationStore for TransactionAuthorizationStore<'_> {
     fn access<'a>(
         &'a self,
         user: UserId,
         resource: Resource,
     ) -> AuthorizationFuture<'a, Result<ResourceAccess, AuthzError>> {
         Box::pin(async move {
-            let (sql, id) = match resource {
-                Resource::Project(project) => (PROJECT_ACCESS_SQL, project.as_uuid()),
-                Resource::Workspace(workspace) => (WORKSPACE_ACCESS_SQL, workspace.as_uuid()),
-            };
-            let row = sqlx::query(sql)
-                .bind(id)
-                .bind(user.as_uuid())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|error| AuthzError::Store(error.to_string()))?;
-            let Some(row) = row else {
-                return Ok(ResourceAccess::unresolved());
-            };
-            let read = |error: sqlx::Error| AuthzError::Store(error.to_string());
-            let workspace: Option<Uuid> = row.try_get("workspace_id").map_err(read)?;
-            let user_status: Option<String> = row.try_get("user_status").map_err(read)?;
-            let role: Option<String> = row.try_get("membership_role").map_err(read)?;
-            let status: Option<String> = row.try_get("membership_status").map_err(read)?;
-            let project_role: Option<String> = row.try_get("project_role").map_err(read)?;
-            let membership = role.as_deref().zip(status.as_deref());
-            Ok(ResourceAccess {
-                workspace_id: workspace.map(WorkspaceId::new),
-                grants: Grants::from_stored(
-                    user_status.as_deref(),
-                    membership,
-                    project_role.as_deref(),
-                ),
-            })
+            let mut connection = self.connection.lock().await;
+            read_access(&mut **connection, user, resource).await
         })
+    }
+}
+
+impl AuthorizationStore for PostgresAuthorizationStore {
+    fn access<'a>(
+        &'a self,
+        user: UserId,
+        resource: Resource,
+    ) -> AuthorizationFuture<'a, Result<ResourceAccess, AuthzError>> {
+        Box::pin(read_access(&self.pool, user, resource))
     }
     fn service_access<'a>(
         &'a self,
