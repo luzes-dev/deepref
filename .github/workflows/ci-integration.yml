@@ -123,6 +123,9 @@ jobs:
       - name: Probe SQLx metadata
         continue-on-error: true
         run: python3 scripts/ci/diagnose.py run-check integration.sqlx
+      - name: Probe filesystem and TLS S3-compatible contract
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.object-storage
       - name: Probe integration tests
         continue-on-error: true
         run: python3 scripts/ci/diagnose.py run-check integration.tests

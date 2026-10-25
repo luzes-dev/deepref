@@ -203,6 +203,12 @@ command = [
 ]
 depends_on = ["integration.migrations"]
 
+[[check]]
+id = "integration.object-storage"
+group = "integration"
+description = "Test filesystem and disposable TLS S3-compatible object storage."
+command = ["bash", "scripts/ci/test-object-storage.sh"]
+
 # ---------------------------------------------------------------------------
 # Browser end-to-end
 # ---------------------------------------------------------------------------

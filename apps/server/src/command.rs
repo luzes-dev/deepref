@@ -17,6 +17,16 @@ pub enum Command {
         pools: Vec<WorkloadClass>,
     },
     Migrate,
+    ActivateTenantObjectKeys {
+        drain_attestation: String,
+    },
+    ReconcileObjectOrphans {
+        drain_attestation: String,
+    },
+    WorkflowStorage {
+        contract: bool,
+        drain_attestation: String,
+    },
     BackfillProjectWorkspaces,
     LegacyActor(LegacyActorCommand),
     Audit(AuditCommand),
@@ -125,6 +135,34 @@ impl Command {
                 pools: Self::all_pools(),
             }),
             [command] if command == "migrate" => Ok(Self::Migrate),
+            [command, phase, flag, attestation]
+                if command == "workflow-storage"
+                    && flag == "--confirm-drained"
+                    && (phase == "object-only" || phase == "contract") =>
+            {
+                Ok(Self::WorkflowStorage {
+                    contract: phase == "contract",
+                    drain_attestation: attestation.clone(),
+                })
+            }
+            [command, phase, flag, attestation]
+                if command == "object-storage"
+                    && phase == "reconcile-orphans"
+                    && flag == "--confirm-drained" =>
+            {
+                Ok(Self::ReconcileObjectOrphans {
+                    drain_attestation: attestation.clone(),
+                })
+            }
+            [command, phase, flag, attestation]
+                if command == "object-storage"
+                    && phase == "activate-tenant-keys"
+                    && flag == "--confirm-drained" =>
+            {
+                Ok(Self::ActivateTenantObjectKeys {
+                    drain_attestation: attestation.clone(),
+                })
+            }
             [command] if command == "backfill-project-workspaces" => {
                 Ok(Self::BackfillProjectWorkspaces)
             }

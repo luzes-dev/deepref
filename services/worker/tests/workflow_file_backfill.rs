@@ -95,10 +95,13 @@ async fn the_worker_job_moves_scheduled_files_and_completes() {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(
-            key.unwrap(),
-            ObjectKey::workflow_file(project, run, file).as_str()
-        );
+        let key = key.unwrap();
+        assert!(key.starts_with("projects/"));
+        assert!(key.starts_with(&format!("projects/{project}/workflow-runs/{run}/files/")));
+        store
+            .get_object(&ObjectKey::parse(&key).unwrap(), 1024)
+            .await
+            .expect("verified object exists");
     }
     assert_eq!(
         schedule_workflow_file_backfills(&pool, 10).await.unwrap(),
@@ -110,7 +113,7 @@ async fn the_worker_job_moves_scheduled_files_and_completes() {
 async fn a_job_whose_worker_died_is_requeued_and_finishes_the_remaining_files() {
     let Some(pool) = database().await else { return };
     let store = Arc::new(DocumentStore::memory());
-    let (project, run, files) = legacy_files(&pool, 4).await;
+    let (project, _run, files) = legacy_files(&pool, 4).await;
 
     schedule_workflow_file_backfills(&pool, 10).await.unwrap();
     let job = claim_job(&pool, "doomed-worker", Duration::from_secs(30))
@@ -168,8 +171,13 @@ async fn a_job_whose_worker_died_is_requeued_and_finishes_the_remaining_files() 
     .unwrap();
     assert_eq!(pending, 0);
     for file in files {
+        let key: String = sqlx::query_scalar("SELECT storage_key FROM workflow_files WHERE id=$1")
+            .bind(file)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         store
-            .get_object(&ObjectKey::workflow_file(project, run, file), 1024)
+            .get_object(&ObjectKey::parse(&key).unwrap(), 1024)
             .await
             .expect("every file has its object");
     }

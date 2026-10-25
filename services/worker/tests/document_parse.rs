@@ -121,6 +121,12 @@ impl DocumentParser for FakeParser {
 #[tokio::test]
 async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() {
     let Some(pool) = database().await else { return };
+    deepref_app::object_lifecycle::activate_tenant_object_keys(
+        &pool,
+        deepref_app::object_lifecycle::TENANT_KEY_DRAIN_ATTESTATION,
+    )
+    .await
+    .unwrap();
     let project_id = Uuid::new_v4();
     let report_id = Uuid::new_v4();
     sqlx::query("INSERT INTO projects(id,name) VALUES($1,'retrieve worker test')")
@@ -331,6 +337,16 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
     let keys = stored_keys.lock().await.clone();
     assert_eq!(keys.len(), 2);
     assert!(keys.contains(&authoritative_key));
+    // The losing upload remains under durable intent until cleanup rechecks
+    // authoritative references; never eager-delete after an ambiguous commit.
+    sqlx::query("UPDATE object_lifecycle SET cleanup_after=now()-interval '1 second' WHERE deleted_at IS NULL")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        deepref_app::object_lifecycle::cleanup_objects(&pool, &store, 10)
+            .await
+            .unwrap(),
+        1
+    );
     for key in &keys {
         let exists = store.get(key).await.is_ok();
         assert_eq!(exists, key == &authoritative_key);

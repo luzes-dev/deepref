@@ -47,6 +47,30 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
 
+        Command::WorkflowStorage {
+            contract,
+            drain_attestation,
+        } => {
+            let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
+            let verified =
+                deepref_http_api::workflow_storage_cutover(&config, contract, &drain_attestation)
+                    .await?;
+            println!("verified {verified} workflow file objects; storage cutover committed");
+            Ok(())
+        }
+        Command::ReconcileObjectOrphans { drain_attestation } => {
+            let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
+            let registered =
+                deepref_http_api::reconcile_object_orphans(&config, &drain_attestation).await?;
+            println!("registered {registered} legacy orphan cleanup intents");
+            Ok(())
+        }
+        Command::ActivateTenantObjectKeys { drain_attestation } => {
+            let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
+            deepref_http_api::activate_tenant_object_keys(&config, &drain_attestation).await?;
+            println!("tenant object keys activated; parser rollback floor: tenant-object-keys-v1");
+            Ok(())
+        }
         Command::BackfillProjectWorkspaces => {
             let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
             with_telemetry(

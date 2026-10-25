@@ -8177,7 +8177,7 @@
         ],
         "responses": {
           "204": {
-            "description": "The document and its stored file were removed"
+            "description": "The document was removed and file cleanup scheduled"
           },
           "404": {
             "content": {

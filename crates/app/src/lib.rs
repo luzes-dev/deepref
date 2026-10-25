@@ -32,6 +32,7 @@ mod jobs;
 mod leased_handler;
 mod legacy_actors;
 mod notifications;
+pub mod object_lifecycle;
 pub mod outbox;
 mod persistence;
 mod pmid_import;
@@ -52,7 +53,9 @@ mod study;
 pub mod test_isolation;
 mod usage_export;
 mod worker_runtime;
+mod workflow_file_cutover;
 mod workflow_files;
+pub use workflow_file_cutover::{WorkflowFileCutover, cutover_workflow_file_storage};
 mod workflows;
 pub mod workspaces;
 
