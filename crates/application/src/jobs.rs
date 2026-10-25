@@ -220,6 +220,63 @@ pub struct WorkRequest<'a> {
     pub max_jobs: usize,
 }
 
+/// Shared intake cancellation. The owner joins intake after stopping it: a
+/// partial batch must return its accepted fences rather than disappear.
+#[derive(Default)]
+pub struct IntakeControl {
+    stopped: std::sync::atomic::AtomicBool,
+    wake: std::sync::Mutex<Vec<std::task::Waker>>,
+    deadline: std::sync::Mutex<Option<std::time::Instant>>,
+}
+impl IntakeControl {
+    pub fn stop_until(&self, deadline: std::time::Instant) {
+        *self
+            .deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(deadline);
+        self.stop();
+    }
+    pub fn shutdown_deadline(&self) -> Option<std::time::Instant> {
+        *self
+            .deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    pub fn stop(&self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
+        let waiters = std::mem::take(
+            &mut *self
+                .wake
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for wake in waiters {
+            wake.wake();
+        }
+    }
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub async fn cancelled(&self) {
+        futures::future::poll_fn(|context| {
+            let mut waiters = self
+                .wake
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !waiters.iter().any(|w| w.will_wake(context.waker())) {
+                waiters.push(context.waker().clone());
+            }
+            if self.is_stopped() {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+        .await
+    }
+}
+
 /// Delivery mechanics: wake eligible work and hand it to the worker for a
 /// workload pool. Delivery decides nothing about authoritative state; the
 /// [`DurableExecutionStore`] claim/fence remains the authority.
@@ -233,6 +290,18 @@ pub trait WorkTransport: Send + Sync {
     /// the slower independent reconciler.
     fn recover_before_poll(&self) -> bool {
         true
+    }
+
+    /// Cooperatively stop and return any earlier claims from a partial batch.
+    /// Broker implementations bound each external operation and retain the
+    /// exact prepared fence if a claim commit has an ambiguous outcome.
+    fn next_work_controlled(
+        &self,
+        request: WorkRequest<'_>,
+        _control: &IntakeControl,
+        _budget: Duration,
+    ) -> impl Future<Output = anyhow::Result<Vec<ClaimedJob>>> + Send {
+        self.next_work(request)
     }
 
     /// Confirm transport delivery only after persisted lifecycle settlement.

@@ -7,7 +7,9 @@ use deepref_app::{
     work_publication::{self, WorkResolution},
 };
 use deepref_application::{
-    jobs::{ClaimedJob, JobLease, WorkRequest, WorkTransport},
+    jobs::{
+        ClaimedJob, DurableExecutionStore, IntakeControl, JobLease, WorkRequest, WorkTransport,
+    },
     work_delivery::EventEnvelope,
 };
 use deepref_config::NatsConfig;
@@ -15,7 +17,9 @@ use deepref_domain::{
     WorkloadClass,
     events::{DELIVERY_BACKOFF_SECONDS, MAX_DELIVERIES},
 };
-use deepref_integrations::jetstream::{Consumer, Delivery, JetStream};
+use deepref_integrations::jetstream::{
+    ClaimOutcome, Consumer, Delivery, JetStream, TransportObservation,
+};
 use sqlx::PgPool;
 use tokio::sync::{Mutex, watch};
 use tracing::Instrument;
@@ -32,6 +36,17 @@ impl WorkTransport for RuntimeTransport {
         match self {
             Self::Postgres(t) => t.next_work(request).await,
             Self::JetStream(t) => t.next_work(request).await,
+        }
+    }
+    async fn next_work_controlled(
+        &self,
+        request: WorkRequest<'_>,
+        control: &IntakeControl,
+        budget: Duration,
+    ) -> Result<Vec<ClaimedJob>> {
+        match self {
+            Self::Postgres(t) => t.next_work_controlled(request, control, budget).await,
+            Self::JetStream(t) => t.next_work_controlled(request, control, budget).await,
         }
     }
     async fn settled(&self, lease: &JobLease) -> Result<()> {
@@ -72,45 +87,82 @@ impl WorkTransport for JetStreamWorkTransport {
         false
     }
     async fn next_work(&self, request: WorkRequest<'_>) -> Result<Vec<ClaimedJob>> {
+        self.next_work_controlled(request, &IntakeControl::default(), Duration::from_secs(1))
+            .await
+    }
+    async fn next_work_controlled(
+        &self,
+        request: WorkRequest<'_>,
+        control: &IntakeControl,
+        budget: Duration,
+    ) -> Result<Vec<ClaimedJob>> {
         let consumer = self
             .consumers
             .get(&request.pool)
             .context("unconfigured workload consumer")?;
-        let messages = match consumer.fetch(request.max_jobs).await {
-            Ok(messages) => messages,
-            Err(error) => {
-                tracing::warn!(%error,pool=%request.pool,"transport unavailable; DB work retained");
-                return Ok(Vec::new());
-            }
-        };
+        let deadline = tokio::time::Instant::now() + budget;
+        let messages =
+            match intake_boundary(control, deadline, consumer.fetch(request.max_jobs)).await {
+                Ok(messages) => messages,
+                Err(_) => return Ok(Vec::new()),
+            };
         let mut jobs = Vec::new();
         for message in messages {
+            if control.is_stopped() || tokio::time::Instant::now() >= deadline {
+                break;
+            }
             let envelope = match message.envelope() {
                 Ok(envelope) => envelope,
                 Err(error) => {
-                    reject(
-                        &self.pool,
-                        &self.broker,
-                        "durable-work",
-                        message,
-                        None,
-                        &error.to_string(),
+                    // This branch owns no DB claim. Cancellation drops only the
+                    // malformed broker delivery, never an earlier accepted job.
+                    let _ = intake_boundary(
+                        control,
+                        deadline,
+                        reject(
+                            &self.pool,
+                            &self.broker,
+                            "durable-work",
+                            message,
+                            None,
+                            &error.to_string(),
+                        ),
                     )
-                    .await?;
+                    .await;
                     continue;
                 }
             };
-            let span = tracing::info_span!("work_delivery",event_id=%envelope.event_id,trace_id=?envelope.trace_id,pool=%request.pool,epoch=envelope.publication_epoch);
-            match work_publication::resolve_work(
-                &self.pool,
-                &envelope,
-                request.owner,
-                request.lease,
-                request.pool,
+            self.broker.observe(TransportObservation::ConsumeLatency {
+                elapsed: (chrono::Utc::now() - envelope.occurred_at)
+                    .to_std()
+                    .unwrap_or_default(),
+            });
+            let claimed_at = std::time::Instant::now();
+            let mut prepared = None;
+            let resolution = intake_boundary(
+                control,
+                deadline,
+                work_publication::resolve_work_observed(
+                    &self.pool,
+                    &envelope,
+                    request.owner,
+                    request.lease,
+                    request.pool,
+                    |job| prepared = Some(job.clone()),
+                ),
             )
-            .instrument(span)
-            .await
-            {
+            .await;
+            self.broker.observe(TransportObservation::Claim {
+                pool: request.pool,
+                elapsed: claimed_at.elapsed(),
+                outcome: match &resolution {
+                    Ok(WorkResolution::Claimed(_)) => ClaimOutcome::Claimed,
+                    Ok(WorkResolution::Ack | WorkResolution::Terminate) => ClaimOutcome::Noop,
+                    Ok(WorkResolution::Retry) => ClaimOutcome::Retry,
+                    Err(_) => ClaimOutcome::Failed,
+                },
+            });
+            match resolution {
                 Ok(WorkResolution::Claimed(job)) => {
                     self.active
                         .lock()
@@ -118,35 +170,81 @@ impl WorkTransport for JetStreamWorkTransport {
                         .insert((job.id, job.claim_seq), (envelope, message));
                     jobs.push(job);
                 }
-                Ok(WorkResolution::Ack) => message.ack().await?,
-                Ok(WorkResolution::Terminate) => message.terminate().await?,
-                Ok(WorkResolution::Retry) => {
-                    retry_or_reject(
-                        &self.pool,
-                        &self.broker,
-                        "durable-work",
-                        message,
-                        Some(&envelope),
-                        "work not claimable by this delivery",
-                    )
-                    .await?
+                Ok(WorkResolution::Ack) => {
+                    let _ = intake_boundary(control, deadline, message.ack()).await;
                 }
-                Err(error) => {
-                    // DB/validation failures consume no business attempt. The
-                    // transport budget is separate and repair retains DB work.
-                    retry_or_reject(
-                        &self.pool,
-                        &self.broker,
-                        "durable-work",
-                        message,
-                        Some(&envelope),
-                        &format!("delivery resolution failed: {error}"),
+                Ok(WorkResolution::Terminate) => {
+                    let _ = intake_boundary(control, deadline, message.terminate()).await;
+                }
+                Ok(WorkResolution::Retry) => {
+                    let _ = intake_boundary(
+                        control,
+                        deadline,
+                        retry_or_reject(
+                            &self.pool,
+                            &self.broker,
+                            "durable-work",
+                            message,
+                            Some(&envelope),
+                            "work_not_claimable",
+                        ),
                     )
-                    .await?;
+                    .await;
+                }
+                Err(_) => {
+                    // A COMMIT response can be ambiguous. The prepared token is
+                    // retained until exact unstarted release has been attempted;
+                    // a failed release remains owned by its bounded DB lease.
+                    if let Some(job) = prepared {
+                        let store = deepref_app::PostgresDurableExecutionStore {
+                            pool: self.pool.clone(),
+                        };
+                        let fallback =
+                            tokio::time::Instant::now() + budget.min(Duration::from_millis(50));
+                        let release_deadline = control
+                            .shutdown_deadline()
+                            .map(tokio::time::Instant::from_std)
+                            .unwrap_or(fallback)
+                            .min(fallback);
+                        let result = tokio::time::timeout_at(
+                            release_deadline,
+                            store.release_until(
+                                &job.lease(request.owner),
+                                release_deadline.into_std(),
+                            ),
+                        )
+                        .await;
+                        if !matches!(result, Ok(Ok(true))) {
+                            tracing::warn!(job_id=%job.id,claim_seq=job.claim_seq,"unstarted claim release unconfirmed; any committed fence retains DB lease recovery");
+                        }
+                    }
+                    // Closed reason code: database decoder errors may include
+                    // private values too. Never persist their Display output.
+                    let _ = intake_boundary(
+                        control,
+                        deadline,
+                        retry_or_reject(
+                            &self.pool,
+                            &self.broker,
+                            "durable-work",
+                            message,
+                            Some(&envelope),
+                            "work_resolution_failed",
+                        ),
+                    )
+                    .await;
                 }
             }
         }
-        if let Ok((pending, in_flight, redeliveries)) = consumer.visibility().await {
+        if let Ok((pending, in_flight, redeliveries)) =
+            intake_boundary(control, deadline, consumer.visibility()).await
+        {
+            self.broker.observe(TransportObservation::Visibility {
+                pool: request.pool,
+                pending,
+                in_flight,
+                redeliveries,
+            });
             tracing::info!(pool=%request.pool,pending,in_flight,redeliveries,"JetStream pool visibility");
         }
         Ok(jobs)
@@ -170,6 +268,20 @@ impl WorkTransport for JetStreamWorkTransport {
             delivery.ack().await?;
         }
         Ok(())
+    }
+}
+
+/// Cancellation is scoped to a single boundary, not the whole batch. The
+/// caller retains its partial result and the prepared-claim callback above.
+async fn intake_boundary<T>(
+    control: &IntakeControl,
+    deadline: tokio::time::Instant,
+    operation: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::select! {
+        biased;
+        _=control.cancelled()=>anyhow::bail!("intake_stopped"),
+        result=tokio::time::timeout_at(deadline,operation)=>result.context("intake_deadline")?,
     }
 }
 
@@ -216,6 +328,44 @@ async fn reject(
     delivery.terminate().await
 }
 
+/// Explicit operator maintenance for an exhausted retained sequence. This is
+/// diagnostic recovery only; pending business events require separate reviewed
+/// publication replay. A failed step is safe to rerun with the same identity.
+pub async fn recover_terminal_sequence(
+    pool: &PgPool,
+    broker: &JetStream,
+    consumer: &str,
+    sequence: u64,
+) -> Result<()> {
+    let envelope = broker.retained_sequence(sequence).await?;
+    let identity = broker.sequence_identity(consumer, sequence);
+    work_publication::record_dead_letter(
+        pool,
+        &identity,
+        envelope.as_ref(),
+        consumer,
+        MAX_DELIVERIES,
+        "terminal_sequence_recovered",
+    )
+    .await?;
+    // Preserve the already-committed logical consumer/reason if normal
+    // terminalization reached DB evidence before its broker publish failed.
+    let (logical_consumer, reason, deliveries): (String, String, i64) = sqlx::query_as(
+        "SELECT consumer,reason,deliveries FROM transport_dead_letters WHERE delivery_id=$1",
+    )
+    .bind(&identity)
+    .fetch_one(pool)
+    .await?;
+    broker
+        .dead_letter_sequence(
+            &logical_consumer,
+            sequence,
+            u64::try_from(deliveries)?,
+            &reason,
+        )
+        .await
+}
+
 /// Publication runtime settings, already validated at the config boundary.
 pub struct PublicationConfig {
     pub nats: NatsConfig,
@@ -254,10 +404,21 @@ pub async fn run_publication(
                 }
             }
             _ = repair.tick() => {
-                match work_publication::repair_stranded_work(&pool,config.repair_after,64).await {
-                    Ok(republished) => tracing::info!(republished,"transport reconciliation repair"),
-                    Err(error) => tracing::warn!(%error,"transport repair failed"),
+                let ready=tokio::select! {
+                    _=shutdown.changed()=>break,
+                    result=tokio::time::timeout(config.request_timeout,broker.readiness())=>result,
+                };
+                if !matches!(ready,Ok(Ok(()))) {broker.observe(TransportObservation::Readiness{ready:false});}
+                let repaired=tokio::select! {
+                    _=shutdown.changed()=>break,
+                    result=tokio::time::timeout(config.request_timeout,work_publication::repair_stranded_work(&pool,config.repair_after,64))=>result,
+                };
+                match repaired {
+                    Ok(Ok(republished)) => tracing::info!(republished,"transport reconciliation repair"),
+                    Ok(Err(error)) => tracing::warn!(%error,"transport repair failed"),
+                    Err(_) => tracing::warn!("transport repair deadline exceeded"),
                 }
+
             }
             _ = tick.tick() => {
                 let batch = tokio::select! {
@@ -332,6 +493,11 @@ pub async fn consume_event(
             return reject(pool, broker, "outbox", delivery, None, &error.to_string()).await;
         }
     };
+    broker.observe(TransportObservation::ConsumeLatency {
+        elapsed: (chrono::Utc::now() - envelope.occurred_at)
+            .to_std()
+            .unwrap_or_default(),
+    });
     let span = tracing::info_span!("outbox_delivery",event_id=%envelope.event_id,trace_id=?envelope.trace_id,message_type=%envelope.message_type,message_version=envelope.message_version);
     consume_valid_event(pool, broker, registry, owner, lease, delivery, envelope)
         .instrument(span)

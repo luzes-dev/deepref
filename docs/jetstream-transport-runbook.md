@@ -2,7 +2,7 @@
 
 PostgreSQL is authoritative. The JetStream adapter lives in
 `deepref-integrations`; the existing worker loop still owns pool concurrency,
-database leases, durable execution and graceful drain. Migrations 0156–0159
+database leases, durable execution and graceful drain. Migrations 0156–0160
 expand the existing generic outbox and add compatible job wakeup triggers.
 The design decision is [ADR 0009](adr/0009-jetstream-work-delivery.md).
 
@@ -21,14 +21,17 @@ invented review class: durable review steps use workflow.
 | NATS_STREAM               | DEEPREF_WORK                | 1–64 ASCII letters, digits, underscores                               |
 | NATS_SUBJECT_PREFIX       | deepref                     | bounded literal subject tokens; isolate environments/accounts         |
 | NATS_REPLICAS             | 1 development, 3 production | 1/3/5; production requires at least 3                                 |
-| NATS_MAX_BYTES            | 1073741824                  | 1 MiB–1 TiB, applies to main and DLQ streams independently            |
+| NATS_MAX_BYTES            | 1073741824                  | 1 MiB–1 TiB, applies to each of the three streams independently       |
 | NATS_MAX_AGE_SECS         | 604800                      | 60–2592000 seconds                                                    |
 | NATS_ACK_WAIT_SECS        | 60                          | 3–3600 seconds; transport progress runs every ACK wait / 3            |
 | NATS_REQUEST_TIMEOUT_SECS | 5                           | 1–30 seconds; ambiguous publish outcomes retry the same identity      |
 | NATS_REPAIR_AFTER_SECS    | 900                         | at least five ACK waits, no more than stream age                      |
 
-Streams capture `<prefix>.jobs.*`, `<prefix>.events` and a separate
-`<prefix>.dead.>` DLQ. Both are file-backed, limits-retained, and reject new
+Streams capture `<prefix>.jobs.*`, `<prefix>.events`, a separate
+`<prefix>.dead.>` DLQ, and metadata-only MaxDeliver advisories in
+`<stream>_TERMINAL` on
+`$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.<stream>.*`.
+All three are file-backed, limits-retained, and reject new
 messages when byte capacity is full. Envelopes are capped at 64 KiB. Stable
 message IDs use `event_id:publication_epoch`; the 60-second broker dedupe window
 is only an optimization. Configure NATS account quotas and token permissions
@@ -72,10 +75,13 @@ Ordinary relay selection never republishes a row with `published_at` set.
 `deepref_app::work_publication::replay_publication` is the explicit operator
 persistence API for a pending published event. It preserves event identity and
 committed consumer receipts and advances the broker dedupe epoch. For a
-quarantined generic event, first use the existing `replay_outbox_event` API to
-reopen its missing recipients, then request publication replay. These APIs
-must be invoked through an approved operational maintenance context; no public
-API exposes them. Do not reset committed receipts or business attempts.
+quarantined generic event, ordinary transport replay is unavailable. The
+existing `replay_outbox_event` API is a separate business intervention after
+operational review: it resets the event/quarantined-recipient attempt budget
+and preserves delivered receipts. It must not be invoked merely to recover
+missing transport diagnostics. Publication replay itself never resets receipts
+or business attempts. These APIs require an approved maintenance context; no
+public API exposes them.
 
 When a current-generation notification arrives before available_at, the worker
 ACKs only after persisting its due-publication obligation. The due publisher
@@ -84,22 +90,76 @@ work ACKs; live claims ACK as no-ops; expired claims wait for existing lease
 recovery. Recovered/retried work gets a new persisted generation and due time.
 Consequential durable run/step checks and accepted attempt fences still apply.
 
-`transport_dead_letters` is durable diagnostic evidence. A consumer first
-commits this record, then publishes its bounded DLQ record, then terminates the
-original delivery. DB failure prevents terminal ACK; DLQ failure leaves the DB
-evidence and permits redelivery. Malformed wire data is identified by stream,
-consumer and sequence; raw payloads are not copied into logs/DLQ. NATS
-MaxDeliver after a process crash may leave the message in the retained stream;
-queued jobs are repaired by the slow scan, while generic events with missing
-receipts require explicit operational replay. The DLQ never authorizes business
-failure or deletes the queued job.
+`transport_dead_letters` is durable diagnostic evidence. Normal rejection
+commits this record, publishes a bounded DLQ record, then terminates delivery.
+DB failure prevents terminal ACK; DLQ failure retains any committed DB evidence.
+There are at most five deliveries. **An unacknowledged fifth delivery does not
+produce a sixth delivery.** No automatic DB/DLQ terminalization retry is promised
+after exhaustion. Malformed data has no authoritative business replay identity;
+its retained stream sequence is the recovery identity. Parser diagnostics use
+closed category/location codes and never copy offending values or field names.
+
+`<stream>_TERMINAL` retains MaxDeliver advisory metadata independently of the
+worker and PostgreSQL. Its byte/age limits and account quota still apply: this
+is bounded operational evidence, not an unlimited audit archive. Operators must
+recover before retention expires and monitor evidence-stream capacity. If both
+terminalization and advisory persistence fail or retention expires, inspect the
+consumer's sequence/delivery counters and authoritative backlog; automatic
+recovery of the missing diagnostic evidence is not guaranteed.
+
+### Recover an exhausted sequence
+
+1. Restore PostgreSQL/NATS availability and storage capacity. In the correct
+   scoped NATS account, inspect `nats stream view <stream>_TERMINAL` and identify
+   `stream`, `consumer`, `stream_seq` and `deliveries`. Inspect only metadata in
+   shared incident logs. `nats consumer info <stream> <consumer> --json` confirms
+   the exhausted durable; it does not authorize deleting it or resetting ACKs.
+2. Before retention expires, an approved maintenance process calls
+   `JetStream::retained_sequence(sequence)`. Retrieval failure is an actionable
+   missing/expired-evidence error. `Some(envelope)` is validated wire data;
+   `None` means malformed retained content. Inspection never logs the body.
+3. Call
+   `deepref_worker::jetstream_transport::recover_terminal_sequence(pool, broker,
+physical_consumer_name, sequence)` with that exact advisory identity. It
+   checks the retained sequence, idempotently commits DB evidence, then publishes
+   its DLQ metadata using the committed consumer/reason/count. Rerun the same
+   call after a failed step. It does not retry business handlers, reset budgets,
+   ACK an exhausted delivery, or remove a shared stream message. Malformed
+   sequences stop here; retain them under the controlled stream retention.
+4. For a valid envelope with missing business receipts, inspect its authoritative
+   outbox/job state and business budget. For a pending generic event, invoke
+   `replay_publication(event_id)` and let the ordinary relay publish the new epoch.
+   A quarantined/exhausted event stops here unless separate operational review
+   explicitly authorizes the existing business `replay_outbox_event` flow, which
+   resets only quarantined recipients' budgets and preserves delivered receipts.
+   Do not perform that business intervention for diagnostic recovery. Transport
+   publication replay never resets recipient budgets. Queued jobs use
+   `repair_stranded_work`/their
+   persisted generation; completed/cancelled work needs no invocation.
+5. Verify the DB diagnostic row, DLQ metadata and authoritative receipt/state.
+   Leave the original shared message to normal retention. Never reconstruct an
+   ACK subject, delete a durable, replay malformed bytes indefinitely, reset
+   attempts, or delete the shared original to clear an incident.
+
+The procedure requires a maintenance context linked against these explicit APIs;
+this slice adds no public/admin HTTP endpoint or credential-handling CLI. Real
+service tests cover fifth-delivery DB and full-DLQ failures, absence of a sixth
+delivery, retained advisory evidence and idempotent explicit diagnostic recovery.
 
 Transport progress heartbeats prevent healthy slow handlers from exhausting
 ACK wait. Database lease renewal remains independent and authoritative; a
 worker losing its database fence cannot accept a consequential result because
 it still has a transport heartbeat. Dropped/aborted deliveries stop progress
 without ACK. Shutdown drains the existing worker tasks within the configured
-telemetry shutdown deadline; abandoned claims recover through their DB leases.
+telemetry shutdown deadline. Pool intake runs independently and each external
+boundary has a 250 ms batch deadline and cooperative cancellation. Relevant DB
+transactions also use local 250 ms statement/lock deadlines, leaving PostgreSQL
+durability and unrelated pooled sessions unchanged. Stopping an intake returns earlier
+accepted partial-batch claims for exact unstarted release and attempt refund.
+A prepared claim fence is recorded before awaiting COMMIT; an ambiguous commit
+attempts exact unstarted release, and an unconfirmed release is explicitly left
+to its bounded authoritative DB lease. Handler execution never starts from an
+unconfirmed commit. The repair/readiness branches also race shutdown.
 
 ## Visibility and alerts
 
@@ -118,9 +178,27 @@ WHERE state IN ('queued','capability_wait') GROUP BY workload_class;
 SELECT consumer,count(*),max(recorded_at) FROM transport_dead_letters GROUP BY consumer;
 ```
 
-Alert on oldest eligible queued work exceeding the pool SLO, sustained publish
-errors, DLQ growth, repair growth, and stream capacity. Missing publication or
-consumer visibility must never be interpreted as successful execution.
+`JetStream::with_observer(Arc<dyn TransportObserver>)` is the explicit parent
+telemetry/health bridge. The adapter emits low-cardinality `Readiness`, per-pool
+`Visibility` (pending, in-flight, redeliveries), `Claim` outcomes/latency, and
+`ConsumeLatency` from outbox creation to intake. The publication supervisor
+samples management readiness every 30 seconds with a bounded shutdown-aware
+request; startup still validates provisioning and consumer policy.
+
+The default observer is a no-op. This slice does **not** implement a metrics
+exporter, an HTTP readiness bridge, time-series dashboards, or alert routes.
+The parent telemetry implementation (frozen separately at a711) must install a
+nonblocking observer, map these values into its instruments, and expose worker
+NATS degradation independently of API availability. PostgreSQL-backed API
+requests may remain available during NATS outage; worker JetStream readiness
+must become degraded, never claim successful delivery from missing samples.
+
+Parent operations acceptance must exercise failed/expired readiness, broker
+outage/recovery, consumer/stream drift and metric sampling. Configure and test
+alerts for oldest eligible queued work exceeding the pool SLO, sustained publish
+errors, DLQ/terminal-evidence growth, repair growth and stream/quorum capacity.
+These are required integration/operations obligations, not implemented alerts
+in this source freeze. Event IDs/error strings/payloads must not be metric labels.
 
 ## Local development service
 
@@ -147,3 +225,15 @@ The script is CI-safe without secrets, production data or external providers.
 This runner is not the full suite runner. Broad acceptance needs the parent’s
 resource-guarded 14 GiB fixture and full diagnostic gates after independent
 source review. No focused test result establishes full handoff/program acceptance.
+
+## Required CI lane
+
+`integration.nats` in `scripts/ci/diagnostics.toml` invokes the strict owned-fixture
+runner, and `.github/workflows/ci-integration.yml` invokes that probe before the
+integration gate. Both DATABASE_URL variables match the disposable PostgreSQL
+instance; `DEEPREF_REQUIRE_DATABASE=1` and `DEEPREF_REQUIRE_NATS=1` fail closed.
+PostgreSQL and JetStream have explicit bounded health waits. Pinned fixtures are
+removed on exit and PostgreSQL volume/clone capacity is captured before cleanup.
+The runner uses a 3 GiB PostgreSQL tmpfs with a 4 GiB memory ceiling and a 6 GiB
+available-memory guard for this focused service set. It is not the broad-suite
+runner; full database-suite capacity remains a separate parent gate.

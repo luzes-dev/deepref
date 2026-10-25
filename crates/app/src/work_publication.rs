@@ -12,6 +12,16 @@ use deepref_domain::{JobKind, WorkloadClass};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+// Cancellation bounds caller latency; the transaction-local server deadline
+// also frees blocked connections after a cancelled query. Durability settings
+// are unchanged. No global/session timeout leaks into unrelated pool users.
+async fn delivery_transaction(pool: &PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT set_config('statement_timeout','250ms',true),set_config('lock_timeout','250ms',true)")
+        .execute(&mut *tx).await?;
+    Ok(tx)
+}
+
 #[derive(Debug)]
 pub struct Publication {
     pub envelope: EventEnvelope,
@@ -101,7 +111,8 @@ pub async fn publish_due_work(pool: &PgPool, limit: usize) -> Result<u64> {
 /// Repair only: a published wakeup that failed to acquire authority for long
 /// enough is republished explicitly. Never reset attempts or business state.
 pub async fn repair_stranded_work(pool: &PgPool, age: Duration, limit: usize) -> Result<u64> {
-    Ok(sqlx::query("WITH stranded AS (
+    let mut tx = delivery_transaction(pool).await?;
+    let repaired=sqlx::query("WITH stranded AS (
         SELECT e.event_id FROM jobs j JOIN outbox_events e
           ON e.event_id=job_wakeup_event_id(j.id,j.wakeup_generation)
         WHERE j.state IN ('queued','capability_wait') AND j.available_at<=now() AND j.attempts<j.max_attempts
@@ -110,7 +121,9 @@ pub async fn repair_stranded_work(pool: &PgPool, age: Duration, limit: usize) ->
       ) UPDATE outbox_events e SET published_at=NULL,publication_epoch=publication_epoch+1,
         publication_next_at=now(),publication_error='repair: queued work without timely delivery',
         publication_owner=NULL,publication_until=NULL FROM stranded WHERE e.event_id=stranded.event_id")
-        .bind(age.as_millis() as f64).bind(i64::try_from(limit)?).execute(pool).await?.rows_affected())
+        .bind(age.as_millis() as f64).bind(i64::try_from(limit)?).execute(&mut *tx).await?.rows_affected();
+    tx.commit().await?;
+    Ok(repaired)
 }
 
 #[derive(Debug)]
@@ -131,12 +144,25 @@ pub async fn resolve_work(
     lease: Duration,
     class: WorkloadClass,
 ) -> Result<WorkResolution> {
+    resolve_work_observed(pool, envelope, owner, lease, class, |_| {}).await
+}
+
+/// Register a prepared fence before awaiting COMMIT. A cancelled caller can
+/// release this exact unstarted fence even when the commit response is lost.
+pub async fn resolve_work_observed(
+    pool: &PgPool,
+    envelope: &EventEnvelope,
+    owner: &str,
+    lease: Duration,
+    class: WorkloadClass,
+    mut prepared: impl FnMut(&ClaimedJob) + Send,
+) -> Result<WorkResolution> {
     let wakeup = envelope.work()?;
     anyhow::ensure!(
         wakeup.workload_class == class,
         "wakeup delivered to wrong workload pool"
     );
-    let mut tx = pool.begin().await?;
+    let mut tx = delivery_transaction(pool).await?;
     let stored = sqlx::query("SELECT payload,message_type,message_version,publication_epoch FROM outbox_events WHERE event_id=$1")
         .bind(envelope.event_id).fetch_optional(&mut *tx).await?.context("unknown outbox event")?;
     anyhow::ensure!(
@@ -222,6 +248,9 @@ pub async fn resolve_work(
             }
         }
     };
+    if let WorkResolution::Claimed(job) = &result {
+        prepared(job);
+    }
     tx.commit().await?;
     Ok(result)
 }
@@ -236,10 +265,12 @@ pub async fn record_dead_letter(
     deliveries: u64,
     reason: &str,
 ) -> Result<()> {
+    let mut tx = delivery_transaction(pool).await?;
     sqlx::query("INSERT INTO transport_dead_letters(delivery_id,event_id,consumer,publication_epoch,reason,deliveries)
         VALUES($1,(SELECT event_id FROM outbox_events WHERE event_id=$2),$3,$4,$5,$6) ON CONFLICT DO NOTHING")
         .bind(identity).bind(envelope.map(|e| e.event_id)).bind(consumer).bind(envelope.map(|e| e.publication_epoch))
-        .bind(reason.chars().take(1024).collect::<String>()).bind(i64::try_from(deliveries)?).execute(pool).await?;
+        .bind(reason.chars().take(1024).collect::<String>()).bind(i64::try_from(deliveries)?).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -258,7 +289,55 @@ pub async fn claim_event_delivery(
         return Ok(None);
     };
     let supported: Vec<_> = expected.iter().collect();
-    let mut tx = pool.begin().await?;
+    let mut tx = delivery_transaction(pool).await?;
+    // Serialize recovery and reservation for this event. A redelivery does not
+    // erase the reservation consumed by a crashed handler's last DB lease.
+    let expired = sqlx::query("SELECT claim_generation,max_attempts,lease_owner,lease_expires_at<=clock_timestamp() AS expired FROM outbox_events
+        WHERE event_id=$1 AND delivery_state='pending' AND expected_consumers <@ $2::text[]
+          AND (lease_owner IS NULL OR lease_expires_at<=clock_timestamp()) FOR UPDATE SKIP LOCKED")
+        .bind(envelope.event_id).bind(&supported).fetch_optional(&mut *tx).await?;
+    let Some(expired) = expired else {
+        return Ok(None);
+    };
+    let max_attempts: i32 = expired.try_get("max_attempts")?;
+    if expired.try_get::<Option<bool>, _>("expired")? == Some(true) {
+        let generation: i64 = expired.try_get("claim_generation")?;
+        let receipts = sqlx::query(
+            "SELECT consumer,attempts FROM outbox_receipts WHERE event_id=$1
+            AND attempt_generation=$2 AND settled_generation<>$2 AND state='retrying'",
+        )
+        .bind(envelope.event_id)
+        .bind(generation)
+        .fetch_all(&mut *tx)
+        .await?;
+        for receipt in receipts {
+            let attempts: i32 = receipt.try_get("attempts")?;
+            let delay = deepref_application::outbox::retry_backoff(attempts);
+            sqlx::query("UPDATE outbox_receipts SET state=CASE WHEN attempts >= $4 THEN 'quarantined' ELSE 'retrying' END,
+                settled_generation=$3,next_attempt_at=clock_timestamp()+($5::double precision*interval '1 millisecond'),
+                last_error='abandoned outbox claim after lease expiry'
+                WHERE event_id=$1 AND consumer=$2 AND attempt_generation=$3 AND settled_generation<>$3 AND state='retrying'")
+                .bind(envelope.event_id).bind(receipt.try_get::<String,_>("consumer")?).bind(generation)
+                .bind(max_attempts).bind(delay.as_millis() as f64).execute(&mut *tx).await?;
+        }
+        sqlx::query("UPDATE outbox_events e SET lease_owner=NULL,lease_expires_at=NULL,claim_generation=claim_generation+1,
+            next_attempt_at=coalesce((SELECT min(next_attempt_at) FROM outbox_receipts WHERE event_id=e.event_id AND consumer=ANY(e.expected_consumers) AND state='retrying'),clock_timestamp()),
+            last_error='abandoned outbox claim after lease expiry' WHERE event_id=$1")
+            .bind(envelope.event_id).execute(&mut *tx).await?;
+    }
+    // Also fence a malformed/legacy over-budget reservation before dispatch;
+    // committed recipients and retry deadlines are never reset by replay.
+    sqlx::query("UPDATE outbox_receipts SET state='quarantined',last_error='consumer attempt budget exhausted'
+        WHERE event_id=$1 AND state='retrying' AND attempts >= $2")
+        .bind(envelope.event_id).bind(max_attempts).execute(&mut *tx).await?;
+    let exhausted=sqlx::query("UPDATE outbox_events e SET delivery_state='quarantined',lease_owner=NULL,lease_expires_at=NULL,
+        last_error='consumer attempt budget exhausted' WHERE event_id=$1 AND EXISTS(SELECT 1 FROM outbox_receipts r
+          WHERE r.event_id=e.event_id AND r.consumer=ANY(e.expected_consumers) AND r.state='quarantined')")
+        .bind(envelope.event_id).execute(&mut *tx).await?.rows_affected()>0;
+    if exhausted {
+        tx.commit().await?;
+        return Ok(None);
+    }
     let row = sqlx::query(
         "UPDATE outbox_events SET lease_owner=$2,
         lease_expires_at=clock_timestamp()+($3::double precision * interval '1 millisecond'),
@@ -278,6 +357,7 @@ pub async fn claim_event_delivery(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {
+        tx.commit().await?;
         return Ok(None);
     };
     let generation: i64 = row.try_get("claim_generation")?;
@@ -285,8 +365,8 @@ pub async fn claim_event_delivery(
     sqlx::query("INSERT INTO outbox_receipts AS r(event_id,consumer,state,attempts,attempt_generation)
         SELECT $1,consumer,'retrying',1,$3 FROM unnest($2::text[]) AS expected(consumer)
         ON CONFLICT(event_id,consumer) DO UPDATE SET attempts=r.attempts+1,attempt_generation=$3
-        WHERE r.state='retrying' AND r.next_attempt_at<=clock_timestamp() AND r.attempt_generation<$3")
-        .bind(envelope.event_id).bind(&consumers).bind(generation).execute(&mut *tx).await?;
+        WHERE r.state='retrying' AND r.next_attempt_at<=clock_timestamp() AND r.attempt_generation<$3 AND r.attempts<$4")
+        .bind(envelope.event_id).bind(&consumers).bind(generation).bind(max_attempts).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Some(crate::outbox::ClaimedOutboxEvent {
         event_id: envelope.event_id,

@@ -13,10 +13,56 @@ use deepref_domain::{WorkloadClass, events::MAX_DELIVERIES};
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 
+/// Low-cardinality observations for the parent telemetry/health bridge.
+/// Implementations must be synchronous, nonblocking and must not attach event
+/// IDs, payloads or error text as metric labels. No exporter/alerts live here.
+#[derive(Debug, Clone)]
+pub enum TransportObservation {
+    Readiness {
+        ready: bool,
+    },
+    Visibility {
+        pool: WorkloadClass,
+        pending: u64,
+        in_flight: usize,
+        redeliveries: usize,
+    },
+    Claim {
+        pool: WorkloadClass,
+        outcome: ClaimOutcome,
+        elapsed: Duration,
+    },
+    ConsumeLatency {
+        elapsed: Duration,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    Claimed,
+    Noop,
+    Retry,
+    Failed,
+}
+pub trait TransportObserver: Send + Sync {
+    fn observe(&self, observation: TransportObservation);
+}
+struct NoopObserver;
+impl TransportObserver for NoopObserver {
+    fn observe(&self, _: TransportObservation) {}
+}
+
+#[derive(Clone, Copy)]
+enum StreamPurpose {
+    Work,
+    DeadLetter,
+    TerminalEvidence,
+}
+
 #[derive(Clone)]
 pub struct JetStream {
     context: jetstream::Context,
     config: NatsConfig,
+    observer: Arc<dyn TransportObserver>,
 }
 
 impl JetStream {
@@ -37,25 +83,43 @@ impl JetStream {
             .timeout(config.request_timeout)
             .ack_timeout(config.request_timeout)
             .build(client);
-        let adapter = Self { context, config };
+        let adapter = Self {
+            context,
+            config,
+            observer: Arc::new(NoopObserver),
+        };
         adapter.provision().await?;
         Ok(adapter)
     }
 
-    fn stream_config(&self, dead: bool) -> stream::Config {
+    pub fn with_observer(mut self, observer: Arc<dyn TransportObserver>) -> Self {
+        self.observer = observer;
+        self
+    }
+    pub fn observe(&self, observation: TransportObservation) {
+        self.observer.observe(observation);
+    }
+
+    fn stream_config(&self, kind: StreamPurpose) -> stream::Config {
         stream::Config {
-            name: if dead {
-                format!("{}_DLQ", self.config.stream)
-            } else {
-                self.config.stream.clone()
+            name: match kind {
+                StreamPurpose::DeadLetter => format!("{}_DLQ", self.config.stream),
+                StreamPurpose::TerminalEvidence => format!("{}_TERMINAL", self.config.stream),
+                StreamPurpose::Work => self.config.stream.clone(),
             },
-            subjects: if dead {
-                vec![format!("{}.dead.>", self.config.subject_prefix)]
-            } else {
-                vec![
+            subjects: match kind {
+                StreamPurpose::DeadLetter => vec![format!("{}.dead.>", self.config.subject_prefix)],
+                // MaxDeliver advisories contain stream/consumer/sequence, not
+                // the original payload. Retain bounded operator evidence even
+                // if the worker dies on its fifth delivery.
+                StreamPurpose::TerminalEvidence => vec![format!(
+                    "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.{}.*",
+                    self.config.stream
+                )],
+                StreamPurpose::Work => vec![
                     format!("{}.jobs.*", self.config.subject_prefix),
                     format!("{}.events", self.config.subject_prefix),
-                ]
+                ],
             },
             retention: stream::RetentionPolicy::Limits,
             storage: stream::StorageType::File,
@@ -70,8 +134,12 @@ impl JetStream {
     }
 
     async fn provision(&self) -> Result<()> {
-        for dead in [false, true] {
-            let expected = self.stream_config(dead);
+        for kind in [
+            StreamPurpose::Work,
+            StreamPurpose::DeadLetter,
+            StreamPurpose::TerminalEvidence,
+        ] {
+            let expected = self.stream_config(kind);
             let actual = self.context.get_or_create_stream(expected.clone()).await?;
             let config = &actual.cached_info().config;
             anyhow::ensure!(
@@ -105,10 +173,69 @@ impl JetStream {
         Ok(stream.cached_info().state.messages)
     }
 
+    /// Metadata-only terminal evidence survives exhaustion independently of
+    /// DB/DLQ availability. It is bounded by the configured byte/age limits.
+    pub async fn terminal_evidence_count(&self) -> Result<u64> {
+        let stream = self
+            .context
+            .get_stream(format!("{}_TERMINAL", self.config.stream))
+            .await?;
+        Ok(stream.cached_info().state.messages)
+    }
+
+    pub fn sequence_identity(&self, consumer: &str, sequence: u64) -> String {
+        format!("{}:{consumer}:{sequence}", self.config.stream)
+    }
+
+    /// Distinguish unavailable/expired retained evidence from a malformed body.
+    pub async fn retained_sequence(&self, sequence: u64) -> Result<Option<EventEnvelope>> {
+        let stream = self.context.get_stream(&self.config.stream).await?;
+        let message = stream.get_raw_message(sequence).await?;
+        Ok(EventEnvelope::decode(&message.payload).ok())
+    }
+
+    /// Maintenance recovery after final-delivery failure. The caller must
+    /// first commit matching DB evidence, as in normal rejection. No reset of
+    /// consumer delivery/business budgets and no deletion of a shared message.
+    pub async fn dead_letter_sequence(
+        &self,
+        consumer: &str,
+        sequence: u64,
+        deliveries: u64,
+        reason: &str,
+    ) -> Result<()> {
+        let stream = self.context.get_stream(&self.config.stream).await?;
+        let message = stream.get_raw_message(sequence).await?;
+        let envelope = EventEnvelope::decode(&message.payload).ok();
+        let record = serde_json::json!({"consumer":consumer,"event_id":envelope.as_ref().map(|e|e.event_id),
+            "publication_epoch":envelope.as_ref().map(|e|e.publication_epoch),"stream_sequence":sequence,
+            "reason":reason,"deliveries":deliveries,"recorded_at":chrono::Utc::now()});
+        self.publish_bytes(
+            format!("{}.dead.{consumer}", self.config.subject_prefix),
+            serde_json::to_vec(&record)?,
+            format!("dlq:{}:{consumer}:{sequence}", self.config.stream),
+        )
+        .await
+    }
+
     pub async fn readiness(&self) -> Result<()> {
-        // A management request verifies JetStream, not just the core TCP link.
-        self.context.get_stream(&self.config.stream).await?;
-        Ok(())
+        // Management requests verify all required JetStream resources, not
+        // merely the core TCP link. The supervisor bounds the combined sample.
+        let result = async {
+            for name in [
+                self.config.stream.clone(),
+                format!("{}_DLQ", self.config.stream),
+                format!("{}_TERMINAL", self.config.stream),
+            ] {
+                self.context.get_stream(name).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        self.observe(TransportObservation::Readiness {
+            ready: result.is_ok(),
+        });
+        result
     }
 
     pub async fn consumer(&self, name: &str, pool: Option<WorkloadClass>) -> Result<Consumer> {
@@ -149,7 +276,22 @@ impl JetStream {
                 && actual.max_waiting == config.max_waiting
                 && actual.max_expires == config.max_expires
                 && actual.backoff.is_empty()
-                && actual.num_replicas == config.num_replicas,
+                && actual.num_replicas == config.num_replicas
+                && !actual.headers_only
+                && actual.deliver_policy == consumer::DeliverPolicy::All
+                && actual.replay_policy == consumer::ReplayPolicy::Instant
+                && actual.inactive_threshold.is_zero()
+                && !actual.memory_storage
+                && actual.deliver_subject.is_none()
+                && actual.deliver_group.is_none()
+                && actual.filter_subjects.is_empty()
+                && actual.rate_limit == 0
+                && !actual.flow_control
+                && actual.idle_heartbeat.is_zero()
+                && actual.max_bytes == 0
+                && actual.pause_until.is_none()
+                && actual.priority_policy == consumer::PriorityPolicy::None
+                && actual.priority_groups.is_empty(),
             "JetStream consumer configuration mismatch: {name}"
         );
         Ok(Consumer {
@@ -281,15 +423,7 @@ impl Delivery {
         Self { message, progress }
     }
     pub fn envelope(&self) -> Result<EventEnvelope> {
-        let envelope: EventEnvelope = serde_json::from_slice(&self.message.payload)?;
-        anyhow::ensure!(
-            envelope.envelope_version == 1
-                && envelope.message_version > 0
-                && envelope.publication_epoch >= 0
-                && !envelope.message_type.is_empty(),
-            "unsupported envelope/version"
-        );
-        Ok(envelope)
+        Ok(EventEnvelope::decode(&self.message.payload)?)
     }
     pub fn identity(&self) -> Result<String> {
         let info = self

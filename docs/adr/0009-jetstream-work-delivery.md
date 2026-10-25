@@ -21,7 +21,7 @@ exclude already-published rows. Deliberate replay increments a publication
 epoch, keeping event identity and completed consumer receipts. JetStream's
 message-ID deduplication is an optimization, not a correctness boundary.
 
-Job writes create immediate wakeups in the same transaction, including N-1
+Successful job writes create immediate wakeups in the same transaction, including N-1
 writers. A bounded due publisher handles future available_at generations;
 concurrent publishers emit one event per generation. Lifecycle settlement
 records the durable-work receipt in that same database transaction. The worker
@@ -36,13 +36,20 @@ and deterministic configuration checks are mandatory. Stream capacity rejects
 new publications rather than evicting recent work to make room. A bounded DLQ
 stream is diagnostic; PostgreSQL records dead-letter evidence before DLQ
 publication and terminal acknowledgement. Exhaustion does not dead-letter the
-business job; queued work remains repairable.
+business job; queued work remains repairable. At the fifth delivery a failed
+DB/DLQ write has no automatic sixth-delivery retry owner. A separate bounded
+file stream retains metadata-only MaxDeliver advisories; explicit retained-
+sequence maintenance recovers diagnostic evidence. The runbook defines the
+manual recovery procedure and evidence-retention limits.
 
 Transport progress heartbeats run independently of database lease renewal.
 Neither renews the other. Dropping a delivery stops progress without ACKing;
 losing a DB fence still stops or rejects consequential work, even if broker
 progress continued. Shutdown stops intake and drains existing handlers within
-the existing deadline.
+the existing deadline. Independent pool intake returns earlier accepted claims
+from a cancelled partial batch for exact unstarted release. A prepared fence is
+registered before awaiting claim COMMIT so an ambiguous response remains tied
+to an exact release attempt or bounded authoritative lease recovery.
 
 WORK_TRANSPORT=jetstream is the target deployment setting. postgres remains a
 controlled development/rollback mode during rollout; no process runs both
@@ -54,3 +61,12 @@ workers retry publication, and resume delivery after recovery.
 See [the transport runbook](../jetstream-transport-runbook.md) for configuration,
 cutover, replay, repair, visibility and local/CI verification. No external
 deployment or full program acceptance is implied by this ADR.
+
+Review correction, 2026-10-25: migration 0160 separates BEFORE generation
+calculation from successful AFTER publication, including dedupe conflicts.
+Targeted generic claiming settles expired recipient reservations and enforces
+the existing per-recipient budget/backoff before invocation. Structural wire
+errors discard Serde source text. Consumer policy validation includes body,
+replay and durability settings. Required CI runs the strict `integration.nats`
+probe. Telemetry observer/readiness hooks are integration seams; parent metrics,
+HTTP readiness exposure and tested alert routing remain separate acceptance.

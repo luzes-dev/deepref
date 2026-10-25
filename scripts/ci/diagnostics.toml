@@ -203,6 +203,12 @@ command = [
 ]
 depends_on = ["integration.migrations"]
 
+[[check]]
+id = "integration.nats"
+group = "integration"
+description = "Require pinned, owned PostgreSQL and JetStream services and run transport contracts."
+command = ["bash", "scripts/ci/test-jetstream.sh"]
+
 # ---------------------------------------------------------------------------
 # Browser end-to-end
 # ---------------------------------------------------------------------------

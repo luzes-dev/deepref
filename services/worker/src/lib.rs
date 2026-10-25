@@ -9,7 +9,8 @@ use std::{
 use deepref_ai::{AiGateway, RoutedGateway};
 use deepref_app::{PostgresClaimTransport, PostgresDurableExecutionStore};
 use deepref_application::jobs::{
-    ClaimedJob, DurableExecutionStore, JobLease, JobRetry, WorkRequest, WorkTransport,
+    ClaimedJob, DurableExecutionStore, IntakeControl, JobLease, JobRetry, WorkRequest,
+    WorkTransport,
 };
 use deepref_documents::DocumentStore;
 use deepref_domain::WorkloadClass;
@@ -539,47 +540,53 @@ where
                     break;
                 }
                 let mut claimed_any = false;
+                let control=Arc::new(IntakeControl::default());
+                let mut intake=JoinSet::new();
+                // Independent pool intake: a blocked diagnostic/claim boundary
+                // cannot prevent a healthy sibling from receiving its work.
                 for pool in &config.pools {
-                    if shutdown_peek(&mut shutdown).await {
-                        establish_shutdown_deadline(&mut shutdown_deadline, config.drain_deadline);
-                        tracing::info!(active=active.len(), "worker drain started");
-                        draining = true;
-                        break;
-                    }
-                    let semaphore = &semaphores[pool];
-                    let free = semaphore.available_permits();
-                    let capacity = config.pool_concurrency.get(pool).copied().unwrap_or(1);
-                    let in_flight = capacity.saturating_sub(free);
-                    let saturation = (capacity > 0)
-                        .then(|| in_flight as f64 / capacity as f64);
-                    tracing::debug!(
-                        pool = pool.as_str(),
-                        in_flight,
-                        capacity,
-                        saturation = ?saturation,
-                        "pool capacity tick"
-                    );
-                    if free == 0 {
+                    let free=semaphores[pool].available_permits();
+                    let capacity=config.pool_concurrency.get(pool).copied().unwrap_or(1);
+                    let in_flight=capacity.saturating_sub(free);
+                    let saturation=(capacity>0).then(||in_flight as f64/capacity as f64);
+                    tracing::debug!(pool=pool.as_str(),in_flight,capacity,saturation=?saturation,"pool capacity tick");
+                    if free==0 {continue;}
+                    let batch=free.min(config.max_batch);
+                    let transport=Arc::clone(&transport); let control=Arc::clone(&control);
+                    let owner=owner.clone(); let pool=*pool; let lease=config.claim_lease;
+                    let budget=Duration::from_millis(250);
+                    intake.spawn(async move {
+                        let claimed_at=Instant::now();
+                        let jobs=transport.next_work_controlled(WorkRequest{owner:&owner,lease,pool,max_jobs:batch},&control,budget).await;
+                        (pool,free,batch,claimed_at,jobs)
+                    });
+                }
+                while !intake.is_empty() {
+                    let joined=tokio::select! {
+                        biased;
+                        _=&mut shutdown, if !draining => {
+                            let deadline=establish_shutdown_deadline(&mut shutdown_deadline,config.drain_deadline);
+                            control.stop_until(deadline.into_std()); draining=true; continue;
+                        }
+                        joined=intake.join_next()=>joined,
+                    };
+                    let Some(joined)=joined else {break;};
+                    let (pool,free,batch,claimed_at,jobs)=match joined {
+                        Ok(batch)=>batch,
+                        Err(error)=> {loop_error=Some(error.into());control.stop();draining=true;continue;}
+                    };
+                    let jobs=match jobs {
+                        Ok(jobs)=>jobs,
+                        Err(error)=> {loop_error=Some(error);control.stop();draining=true;continue;}
+                    };
+                    let pool=&pool;
+                    let semaphore=&semaphores[pool];
+                    let in_flight=config.pool_concurrency.get(pool).copied().unwrap_or(free).saturating_sub(free);
+                    if draining {
+                        let deadline=establish_shutdown_deadline(&mut shutdown_deadline,config.drain_deadline);
+                        release_unstarted(&store,&owner,&jobs,deadline).await;
                         continue;
                     }
-                    let batch = free.min(config.max_batch);
-                    let claimed_at = Instant::now();
-                    let jobs = transport
-                        .next_work(WorkRequest {
-                            owner: &owner,
-                            lease: config.claim_lease,
-                            pool: *pool,
-                            max_jobs: batch,
-                        })
-                        .await;
-                    let jobs = match jobs {
-                        Ok(jobs) => jobs,
-                        Err(error) => {
-                            loop_error = Some(error);
-                            draining = true;
-                            break;
-                        }
-                    };
                     let claimed_total = config
                         .pool_concurrency
                         .get(pool)
@@ -613,6 +620,7 @@ where
                                 active = active.len(),
                                 "shutdown during batch claim; unstarted claims released"
                             );
+                            control.stop_until(deadline.into_std());
                             draining = true;
                             break;
                         }
@@ -636,6 +644,7 @@ where
                                 loop_error = Some(anyhow::anyhow!(
                                     "pool capacity vanished after a batch claim ({error}); released {released} unstarted claims"
                                 ));
+                                control.stop_until(deadline.into_std());
                                 draining = true;
                                 break;
                             }

@@ -31,16 +31,61 @@ pub struct EventEnvelope {
     pub trace_id: Option<String>,
     pub payload: serde_json::Value,
 }
+/// Closed diagnostics: Serde's Display/source can contain private scalar values
+/// and field names. Discard it at the wire boundary, retaining only location.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("wire_{category} at {line}:{column}")]
+pub struct WireError {
+    pub category: &'static str,
+    pub line: usize,
+    pub column: usize,
+}
+impl WireError {
+    fn json(error: serde_json::Error) -> Self {
+        Self {
+            category: match error.classify() {
+                serde_json::error::Category::Io => "io",
+                serde_json::error::Category::Syntax => "syntax",
+                serde_json::error::Category::Data => "structure",
+                serde_json::error::Category::Eof => "incomplete",
+            },
+            line: error.line(),
+            column: error.column(),
+        }
+    }
+    fn policy() -> Self {
+        Self {
+            category: "policy",
+            line: 0,
+            column: 0,
+        }
+    }
+}
 impl EventEnvelope {
-    pub fn work(&self) -> anyhow::Result<WorkWakeup> {
-        anyhow::ensure!(
-            self.envelope_version == 1
-                && self.message_type == WorkWakeup::TYPE
-                && self.message_version == WorkWakeup::VERSION,
-            "unsupported work envelope/version"
-        );
-        let wakeup: WorkWakeup = serde_json::from_value(self.payload.clone())?;
-        anyhow::ensure!(wakeup.generation > 0, "invalid wakeup generation");
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let envelope: Self = serde_json::from_slice(bytes).map_err(WireError::json)?;
+        if envelope.envelope_version != 1
+            || envelope.message_version == 0
+            || envelope.publication_epoch < 0
+            || envelope.message_type.is_empty()
+        {
+            return Err(WireError::policy());
+        }
+        Ok(envelope)
+    }
+
+    pub fn work(&self) -> Result<WorkWakeup, WireError> {
+        if self.envelope_version != 1
+            || self.message_type != WorkWakeup::TYPE
+            || self.message_version != WorkWakeup::VERSION
+        {
+            return Err(WireError::policy());
+        }
+        let wakeup: WorkWakeup =
+            serde_json::from_value(self.payload.clone()).map_err(WireError::json)?;
+        if wakeup.generation <= 0 {
+            return Err(WireError::policy());
+        }
         Ok(wakeup)
     }
 }
