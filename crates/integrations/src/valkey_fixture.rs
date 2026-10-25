@@ -54,12 +54,64 @@ impl ValkeyFixtureControl {
         ValkeyRateAccelerator::from_config(&self.config)
     }
 
+    pub fn concurrency_mirror(
+        &self,
+    ) -> Result<
+        crate::valkey_concurrency::ValkeyConcurrencyMirror,
+        deepref_application::concurrency_mirror::MirrorUnavailable,
+    > {
+        crate::valkey_concurrency::ValkeyConcurrencyMirror::from_config(&self.config)
+    }
+
+    pub async fn clear_concurrency(
+        &mut self,
+        scope: deepref_application::concurrency_mirror::MirrorScope,
+    ) -> Result<(), RateLimitUnavailable> {
+        redis::cmd("DEL")
+            .arg(crate::valkey_concurrency::mirror_key(
+                &self.namespace,
+                scope,
+            ))
+            .query_async(&mut self.connection)
+            .await
+            .map_err(|_| RateLimitUnavailable)
+    }
+
+    pub async fn concurrency_count(
+        &mut self,
+        scope: deepref_application::concurrency_mirror::MirrorScope,
+    ) -> Result<i64, RateLimitUnavailable> {
+        redis::cmd("ZCARD")
+            .arg(crate::valkey_concurrency::mirror_key(
+                &self.namespace,
+                scope,
+            ))
+            .query_async(&mut self.connection)
+            .await
+            .map_err(|_| RateLimitUnavailable)
+    }
+
     pub fn lazy_accelerator(
         address: String,
         namespace: String,
         timeout: std::time::Duration,
     ) -> Result<ValkeyRateAccelerator, RateLimitUnavailable> {
         ValkeyRateAccelerator::from_config(&ValkeyConfig {
+            url: address.into(),
+            namespace,
+            timeout,
+        })
+    }
+
+    pub fn lazy_concurrency_mirror(
+        address: String,
+        namespace: String,
+        timeout: std::time::Duration,
+    ) -> Result<
+        crate::valkey_concurrency::ValkeyConcurrencyMirror,
+        deepref_application::concurrency_mirror::MirrorUnavailable,
+    > {
+        crate::valkey_concurrency::ValkeyConcurrencyMirror::from_config(&ValkeyConfig {
             url: address.into(),
             namespace,
             timeout,

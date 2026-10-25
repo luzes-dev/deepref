@@ -32,6 +32,7 @@ pub mod inbox;
 mod jobs;
 mod leased_handler;
 mod legacy_actors;
+pub mod mirrored_concurrency;
 mod notifications;
 pub mod object_lifecycle;
 pub mod outbox;

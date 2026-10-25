@@ -1,15 +1,11 @@
 //! Bounded Valkey acceleration. Use behind the canonical PostgreSQL limiter;
 //! this adapter alone is not a safe fallback/cutover protocol.
 
-use std::{sync::Arc, time::Duration};
-
 use deepref_application::rate_limits::{
     RateLimitDecision, RateLimitFuture, RateLimitPolicy, RateLimitSubject, RateLimitUnavailable,
     RateLimiter,
 };
-use deepref_config::{ExposeSecret, ValkeyConfig};
-use redis::aio::{ConnectionManager, ConnectionManagerConfig};
-use tokio::sync::OnceCell;
+use deepref_config::ValkeyConfig;
 
 // One hash per verified subject; expiry is anchored at the first attempt.
 // Lower ceilings persist even on refused attempts. No mutation is retried by
@@ -32,49 +28,20 @@ return 1
 
 #[derive(Clone)]
 pub struct ValkeyRateAccelerator {
-    client: redis::Client,
-    connection: Arc<OnceCell<ConnectionManager>>,
-    namespace: Arc<str>,
-    timeout: Duration,
+    client: crate::valkey_client::ValkeyClient,
 }
 
 impl ValkeyRateAccelerator {
-    /// No network side effect. A startup outage must not permanently disable
-    /// acceleration: a later request can initialize the bounded client.
     pub fn from_config(config: &ValkeyConfig) -> Result<Self, RateLimitUnavailable> {
-        let client =
-            redis::Client::open(config.url.expose_secret()).map_err(|_| RateLimitUnavailable)?;
         Ok(Self {
-            client,
-            connection: Arc::new(OnceCell::new()),
-            namespace: Arc::from(config.namespace.as_str()),
-            timeout: config.timeout,
+            client: crate::valkey_client::ValkeyClient::from_config(config)?,
         })
     }
 
     pub async fn connect(config: &ValkeyConfig) -> Result<Self, RateLimitUnavailable> {
         let adapter = Self::from_config(config)?;
-        adapter.connection().await?;
+        adapter.client.connection().await?;
         Ok(adapter)
-    }
-
-    async fn connection(&self) -> Result<ConnectionManager, RateLimitUnavailable> {
-        let options = ConnectionManagerConfig::new()
-            .set_connection_timeout(Some(self.timeout))
-            .set_response_timeout(Some(self.timeout))
-            .set_number_of_retries(0)
-            .set_concurrency_limit(64);
-        tokio::time::timeout(
-            self.timeout,
-            self.connection.get_or_try_init(|| async {
-                ConnectionManager::new_with_config(self.client.clone(), options)
-                    .await
-                    .map_err(|_| RateLimitUnavailable)
-            }),
-        )
-        .await
-        .map_err(|_| RateLimitUnavailable)?
-        .cloned()
     }
 }
 
@@ -83,13 +50,13 @@ impl RateLimiter for ValkeyRateAccelerator {
         Box::pin(async move {
             let key = format!(
                 "deepref:{}:rate:v1:{}:{}",
-                self.namespace,
+                self.client.namespace,
                 subject.kind(),
                 subject.id()
             );
-            let mut connection = self.connection().await?;
+            let mut connection = self.client.connection().await?;
             let value: i64 = tokio::time::timeout(
-                self.timeout,
+                self.client.timeout,
                 redis::Script::new(CONSUME)
                     .key(key)
                     .arg(policy.limit())
