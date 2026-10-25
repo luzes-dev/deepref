@@ -40,6 +40,7 @@ mod prisma;
 mod project_audit;
 mod project_deletion;
 mod protocol;
+pub mod rate_limits;
 mod review_calibration;
 mod review_completion;
 mod review_preparation;

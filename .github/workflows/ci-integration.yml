@@ -126,6 +126,9 @@ jobs:
       - name: Probe integration tests
         continue-on-error: true
         run: python3 scripts/ci/diagnose.py run-check integration.tests
+      - name: Require Valkey contracts
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.valkey
       - name: Gate integration
         if: always()
         run: python3 scripts/ci/diagnose.py gate integration

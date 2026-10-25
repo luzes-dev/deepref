@@ -490,3 +490,174 @@ async fn workspace_deletion_erases_credentials_and_keeps_revocation_audit() {
         .bind(json!({"key_id": key["key"]["id"], "secret": key["secret"]})).execute(&h.pool).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn verified_keys_share_rate_limits_and_never_bypass_live_authorization() {
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let owner = h.sign_in("limited_owner", "limits@example.org").await;
+    let project = h.create_project(&owner, "limited metadata").await;
+    let key = create(&h, &owner, &["project:view"]).await;
+    let secret = key["secret"].as_str().unwrap();
+    let id = Uuid::parse_str(key["key"]["id"].as_str().unwrap()).unwrap();
+    let path = format!("/projects/{project}");
+    assert_eq!(
+        bearer(&h, secret, Method::GET, &path).await.status(),
+        StatusCode::OK
+    );
+    sqlx::query("UPDATE operational_rate_limits SET used=ceiling WHERE api_key_id=$1")
+        .bind(id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let other = Harness::on(h.pool.clone());
+    let response = bearer(&other, secret, Method::GET, &path).await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()[header::RETRY_AFTER], "60");
+    assert_eq!(
+        bearer(&other, "dr_key_v1_invalid", Method::GET, &path)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operational_rate_limits")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "unverified secrets allocate no counter");
+    sqlx::query("UPDATE operational_rate_limits SET used=1")
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE workspace_memberships SET status='deactivated' WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(owner.workspace.as_uuid())
+    .bind(owner.user.as_uuid())
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        bearer(&other, secret, Method::GET, &path).await.status(),
+        StatusCode::UNAUTHORIZED,
+        "current authentication refuses a deactivated membership before limiter admission"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_limiter_is_503_but_invalid_or_revoked_keys_still_fail_authentication() {
+    struct Unavailable;
+    impl deepref_application::rate_limits::RateLimiter for Unavailable {
+        fn check(
+            &self,
+            _: deepref_application::rate_limits::RateLimitSubject,
+            _: deepref_application::rate_limits::RateLimitPolicy,
+        ) -> deepref_application::rate_limits::RateLimitFuture<'_> {
+            Box::pin(async { Err(deepref_application::rate_limits::RateLimitUnavailable) })
+        }
+    }
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let owner = h
+        .sign_in("unavailable_owner", "unavailable@example.org")
+        .await;
+    let project = h.create_project(&owner, "metadata").await;
+    let key = create(&h, &owner, &["project:view"]).await;
+    let secret = key["secret"].as_str().unwrap();
+    let path = format!("/projects/{project}");
+    let unavailable = Harness::with_state(h.pool.clone(), |state| {
+        state.with_rate_limiter(std::sync::Arc::new(Unavailable))
+    });
+    let response = bearer(&unavailable, secret, Method::GET, &path).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+    assert_eq!(body(response).await["code"], "RATE_LIMIT_UNAVAILABLE");
+    assert_eq!(
+        bearer(&unavailable, "invalid", Method::GET, &path)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let revoke = format!(
+        "/workspaces/{}/api-keys/{}",
+        owner.workspace.as_uuid(),
+        key["key"]["id"].as_str().unwrap()
+    );
+    assert_eq!(
+        h.send(&owner, Method::DELETE, &revoke, None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        bearer(&unavailable, secret, Method::GET, &path)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn private_workflow_hooks_share_counters_across_api_instances_by_resolved_identity() {
+    async fn post(h: &Harness, path: &str, body: &'static str) -> StatusCode {
+        h.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+    let Some(h) = Harness::new().await else {
+        return;
+    };
+    let owner = h.sign_in("hook_limiter", "hooks@example.org").await;
+    let project = h.create_project(&owner, "hook metadata").await;
+    let webhook = Uuid::new_v4().to_string();
+    let email = Uuid::new_v4().to_string();
+    let workflow: Uuid = sqlx::query_scalar("INSERT INTO workflows(project_id,name,webhook_token,webhook_secret,webhook_signature_required,email_token,created_by_kind,created_by_id) VALUES($1,'rate hooks',$2,'secret',false,$3,'system','hook-limit-test') RETURNING id")
+        .bind(project).bind(&webhook).bind(&email).fetch_one(&h.pool).await.unwrap();
+    let webhook = format!("/hooks/workflows/{webhook}");
+    let email = format!("/hooks/email/{email}");
+    let other = Harness::on(h.pool.clone());
+    assert_eq!(
+        post(&h, "/hooks/workflows/unknown", "{}").await,
+        StatusCode::NOT_FOUND
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operational_rate_limits")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "arbitrary unverified tokens cannot allocate keys");
+    // The deliberately disabled workflow reaches its business refusal after
+    // admission, without creating a workflow run or invoking external work.
+    assert_eq!(post(&h, &webhook, "{}").await, StatusCode::CONFLICT);
+    sqlx::query("UPDATE operational_rate_limits SET used=ceiling WHERE subject_id=$1 AND subject_kind='workflow_webhook'").bind(workflow).execute(&h.pool).await.unwrap();
+    assert_eq!(
+        post(&other, &webhook, "{}").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        post(
+            &other,
+            &email,
+            r#"{"from":"fixture@example.org","subject":"fixture","text":"test"}"#
+        )
+        .await,
+        StatusCode::CONFLICT,
+        "email owns a separate shared budget"
+    );
+    sqlx::query("UPDATE operational_rate_limits SET used=ceiling WHERE subject_id=$1 AND subject_kind='workflow_email'").bind(workflow).execute(&h.pool).await.unwrap();
+    assert_eq!(post(&h, &email, "{}").await, StatusCode::TOO_MANY_REQUESTS);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operational_rate_limits")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}

@@ -19,6 +19,9 @@ mod pubmed;
 #[cfg(test)]
 mod test_permit;
 mod unpaywall;
+pub mod valkey;
+#[cfg(feature = "valkey-test-support")]
+pub mod valkey_fixture;
 mod workos;
 
 pub use crossref::{
