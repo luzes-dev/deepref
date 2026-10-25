@@ -93,6 +93,17 @@ pub enum AiUsageCommand {
         limit_micros: i64,
         operator_user_id: Uuid,
     },
+    ListUnresolvedExports {
+        limit: Option<i64>,
+    },
+    ResolveExportHold {
+        fact_id: Uuid,
+        operator_user_id: Uuid,
+        resolution_id: Uuid,
+        action: String,
+        reason: String,
+        notes: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +197,48 @@ impl Command {
             [command, action] if command == "ai-usage" && action == "reconcile" => {
                 Ok(Self::AiUsage(AiUsageCommand::Reconcile {
                     workspace_id: None,
+                }))
+            }
+            [command, action] if command == "ai-usage" && action == "list-unresolved-exports" => {
+                Ok(Self::AiUsage(AiUsageCommand::ListUnresolvedExports {
+                    limit: None,
+                }))
+            }
+            [command, action, flag, limit]
+                if command == "ai-usage"
+                    && action == "list-unresolved-exports"
+                    && flag == "--limit" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::ListUnresolvedExports {
+                    limit: Some(parse_limit(limit)?),
+                }))
+            }
+            [
+                command,
+                action,
+                fact_id,
+                operator_flag,
+                operator_user_id,
+                evidence_flag,
+                evidence_id,
+                action_flag,
+                action_val,
+                reason_flag,
+                reason_val,
+            ] if command == "ai-usage"
+                && action == "resolve-export-hold"
+                && operator_flag == "--operator"
+                && evidence_flag == "--evidence"
+                && action_flag == "--action"
+                && reason_flag == "--reason" =>
+            {
+                Ok(Self::AiUsage(AiUsageCommand::ResolveExportHold {
+                    fact_id: parse_uuid(fact_id, "fact UUID")?,
+                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
+                    resolution_id: parse_uuid(evidence_id, "evidence resolution UUID")?,
+                    action: action_val.clone(),
+                    reason: reason_val.clone(),
+                    notes: None,
                 }))
             }
             [command, action, workspace_id] if command == "ai-usage" && action == "reconcile" => {

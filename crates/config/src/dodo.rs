@@ -45,12 +45,28 @@ pub struct DodoOffering {
     pub entitlements: Entitlements,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DodoMeterConfig {
+    pub enabled: bool,
+    pub event_name: String,
+}
+
+impl Default for DodoMeterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            event_name: "ai_commercial_units".to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DodoConfig {
     pub mode: DodoMode,
     pub business_id: String,
     pub offerings: Vec<DodoOffering>,
     pub public_origin: PublicOrigin,
+    pub meter: DodoMeterConfig,
     token: SecretString,
     webhook_keys: Vec<SecretString>,
 }
@@ -120,11 +136,28 @@ impl DodoConfig {
         if let Some(previous) = crate::optional(get, "DODO_WEBHOOK_KEY_PREVIOUS") {
             webhook_keys.push(SecretString::from(previous));
         }
+        let meter_enabled = crate::flag(get, "DODO_METERED_CHARGING_ENABLED")?;
+        let meter_event_name = crate::optional(get, "DODO_METER_EVENT_NAME")
+            .unwrap_or_else(|| "ai_commercial_units".to_owned());
+        if meter_enabled
+            && (meter_event_name.is_empty()
+                || meter_event_name.len() > 128
+                || !meter_event_name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+        {
+            return Err(invalid("DODO_METER_EVENT_NAME", "invalid meter event name"));
+        }
+        let meter = DodoMeterConfig {
+            enabled: meter_enabled,
+            event_name: meter_event_name,
+        };
         Ok(Some(Self {
             mode,
             business_id,
             offerings,
             public_origin,
+            meter,
             token: token.into(),
             webhook_keys,
         }))

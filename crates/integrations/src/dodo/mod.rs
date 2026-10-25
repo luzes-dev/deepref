@@ -48,6 +48,12 @@ impl DodoBilling {
         })
     }
 
+    pub fn with_base_url(config: DodoConfig, origin: String) -> Result<Self, BillingError> {
+        let mut dodo = Self::new(config)?;
+        dodo.origin = origin;
+        Ok(dodo)
+    }
+
     async fn request<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -117,6 +123,100 @@ impl DodoBilling {
                 BillingError::Contract
             }
         })
+    }
+
+    pub fn business_id(&self) -> &str {
+        &self.config.business_id
+    }
+
+    pub async fn ingest_usage_event(
+        &self,
+        event: DodoUsageEvent,
+    ) -> Result<DodoIngestOutcome, BillingError> {
+        self.ingest_usage_event_internal(event).await
+    }
+
+    pub async fn lookup_usage_event(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<DodoEventRecord>, BillingError> {
+        self.lookup_usage_event_internal(event_id).await
+    }
+
+    async fn ingest_usage_event_internal(
+        &self,
+        event: DodoUsageEvent,
+    ) -> Result<DodoIngestOutcome, BillingError> {
+        let path = "/events/ingest";
+        let req = self
+            .client
+            .request(Method::POST, format!("{}{path}", self.origin))
+            .bearer_auth(self.config.token())
+            .json(&serde_json::json!({
+                "events": [event]
+            }));
+        let response = match req.send().await {
+            Ok(res) => res,
+            Err(_) => return Ok(DodoIngestOutcome::Ambiguous),
+        };
+        let status = response.status();
+        if status.is_success() {
+            let bytes = match response.bytes().await {
+                Ok(b) => b,
+                Err(_) => return Ok(DodoIngestOutcome::Ambiguous),
+            };
+            #[derive(Deserialize)]
+            struct IngestResponse {
+                ingested_count: usize,
+            }
+            let ingest_res: IngestResponse = match serde_json::from_slice(&bytes) {
+                Ok(r) => r,
+                Err(_) => return Ok(DodoIngestOutcome::Ambiguous),
+            };
+            if ingest_res.ingested_count >= 1 {
+                return Ok(DodoIngestOutcome::Accepted);
+            }
+            return Ok(DodoIngestOutcome::Ambiguous);
+        }
+        if status.as_u16() == 409 {
+            return Ok(DodoIngestOutcome::Conflict);
+        }
+        if status.is_server_error() || status.as_u16() == 429 {
+            return Ok(DodoIngestOutcome::Ambiguous);
+        }
+        let bytes = response.bytes().await.unwrap_or_default();
+        let reason = String::from_utf8_lossy(&bytes).to_string();
+        Ok(DodoIngestOutcome::Refused(reason))
+    }
+
+    async fn lookup_usage_event_internal(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<DodoEventRecord>, BillingError> {
+        let path = format!("/events/{event_id}");
+        let req = self
+            .client
+            .request(Method::GET, format!("{}{path}", self.origin))
+            .bearer_auth(self.config.token());
+        let response = req.send().await.map_err(|_| BillingError::Unavailable)?;
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(
+                if response.status().is_server_error() || response.status().as_u16() == 429 {
+                    BillingError::Unavailable
+                } else {
+                    BillingError::Refused
+                },
+            );
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| BillingError::Unavailable)?;
+        let record = serde_json::from_slice(&bytes).map_err(|_| BillingError::Contract)?;
+        Ok(Some(record))
     }
 
     fn return_url(&self, path: &str) -> Result<String, BillingError> {
@@ -445,3 +545,27 @@ fn observation(
 
 #[cfg(test)]
 mod tests;
+
+impl BillingUsageProvider for DodoBilling {
+    fn usage_namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    fn business_id(&self) -> &str {
+        &self.config.business_id
+    }
+
+    fn ingest_usage_event<'a>(
+        &'a self,
+        event: DodoUsageEvent,
+    ) -> BillingFuture<'a, DodoIngestOutcome> {
+        Box::pin(self.ingest_usage_event_internal(event))
+    }
+
+    fn lookup_usage_event<'a>(
+        &'a self,
+        event_id: &'a str,
+    ) -> BillingFuture<'a, Option<DodoEventRecord>> {
+        Box::pin(self.lookup_usage_event_internal(event_id))
+    }
+}

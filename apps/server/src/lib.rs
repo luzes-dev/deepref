@@ -182,6 +182,28 @@ async fn run_ai_usage(action: AiUsageCommand) -> anyhow::Result<()> {
                 )
                 .await?
             }
+            AiUsageCommand::ListUnresolvedExports { limit } => {
+                deepref_http_api::ai_usage_list_unresolved_exports(&config, limit).await?
+            }
+            AiUsageCommand::ResolveExportHold {
+                fact_id,
+                operator_user_id,
+                resolution_id,
+                action,
+                reason,
+                notes,
+            } => {
+                deepref_http_api::ai_usage_resolve_export_hold(
+                    &config,
+                    fact_id,
+                    operator_user_id,
+                    resolution_id,
+                    &action,
+                    &reason,
+                    notes,
+                )
+                .await?
+            }
         };
         println!("{output}");
         Ok(())

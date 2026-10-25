@@ -346,6 +346,58 @@ pub async fn ai_usage_export_replay(
     }))?)
 }
 
+pub async fn ai_usage_list_unresolved_exports(
+    config: &ApiConfig,
+    limit: Option<i64>,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let limit = limit.unwrap_or(50).clamp(1, 1000);
+    let items = deepref_app::billing::list_unresolved_usage_exports(&pool, limit).await?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "unresolved_exports": items,
+        "count": items.len(),
+    }))?)
+}
+
+pub async fn ai_usage_resolve_export_hold(
+    config: &ApiConfig,
+    fact_id: Uuid,
+    operator_user_id: Uuid,
+    resolution_id: Uuid,
+    action: &str,
+    reason: &str,
+    notes: Option<String>,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let action_enum =
+        deepref_app::billing::UsageResolutionAction::parse(action).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid action '{action}'; allowed: manual_reconciliation, reopened_retry, refused"
+            )
+        })?;
+    let reason_enum = deepref_app::billing::UsageResolutionReason::parse(reason)
+        .ok_or_else(|| anyhow::anyhow!("invalid reason '{reason}'; allowed: external_adjustment_confirmed, provider_duplicate_verified, manual_credit_issued, rejected_unrecoverable"))?;
+
+    deepref_app::billing::resolve_usage_export_hold(
+        &pool,
+        fact_id,
+        deepref_domain::UserId::new(operator_user_id),
+        resolution_id,
+        action_enum,
+        reason_enum,
+        notes,
+    )
+    .await?;
+
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "fact_id": fact_id,
+        "resolution_id": resolution_id,
+        "action": action,
+        "reason": reason,
+        "resolved": true,
+    }))?)
+}
+
 /// Activate the usage export rollout gate after checking the live worker
 /// fleet decodes the replay job kind and the N-1 quiet window.
 pub async fn ai_usage_enable_export(
