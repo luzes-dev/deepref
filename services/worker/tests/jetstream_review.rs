@@ -873,3 +873,327 @@ async fn blocked_repair_branch_observes_short_supervisor_drain() -> Result<()> {
     assert_eq!(consumer.visibility().await?.1, 0);
     Ok(())
 }
+
+struct CommitProxy {
+    pool: PgPool,
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    withheld: Arc<std::sync::atomic::AtomicBool>,
+    release_held: Arc<tokio::sync::Notify>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+async fn spawn_commit_withholding_pg_proxy(upstream: &PgPool) -> Result<CommitProxy> {
+    use std::sync::atomic::AtomicBool;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let upstream_opts = (*upstream.connect_options()).clone();
+    let upstream_addr = format!("{}:{}", upstream_opts.get_host(), upstream_opts.get_port());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_port = listener.local_addr()?.port();
+    let armed = Arc::new(AtomicBool::new(false));
+    let withheld_once = Arc::new(AtomicBool::new(false));
+    let release_held = Arc::new(tokio::sync::Notify::new());
+
+    let armed_loop = Arc::clone(&armed);
+    let withheld_loop = Arc::clone(&withheld_once);
+    let release_loop = Arc::clone(&release_held);
+    let proxy_task = tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let Ok(server) = tokio::net::TcpStream::connect(&upstream_addr).await else {
+                break;
+            };
+            let _ = client.set_nodelay(true);
+            let _ = server.set_nodelay(true);
+            let (mut client_read, mut client_write) = client.into_split();
+            let (mut server_read, mut server_write) = server.into_split();
+            let hold_replies = Arc::new(AtomicBool::new(false));
+            let hold_replies_c2s = Arc::clone(&hold_replies);
+            let armed_c2s = Arc::clone(&armed_loop);
+            let withheld_c2s = Arc::clone(&withheld_loop);
+            let release_s2c = Arc::clone(&release_loop);
+
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let mut pending = Vec::new();
+                let mut startup = true;
+                while let Ok(n) = client_read.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    pending.extend_from_slice(&buf[..n]);
+                    loop {
+                        let header = if startup { 4 } else { 5 };
+                        if pending.len() < header {
+                            break;
+                        }
+                        let offset = usize::from(!startup);
+                        let length =
+                            u32::from_be_bytes(pending[offset..offset + 4].try_into().unwrap())
+                                as usize;
+                        if !(4..=1_048_576).contains(&length) {
+                            return;
+                        }
+                        let total = length + offset;
+                        if pending.len() < total {
+                            break;
+                        }
+                        let frame: Vec<u8> = pending.drain(..total).collect();
+                        // Match the actual simple-query COMMIT frame, not a
+                        // bind value such as the fixture owner 'commit-proxy'.
+                        let commit = !startup
+                            && frame[0] == b'Q'
+                            && frame[5..].eq_ignore_ascii_case(b"COMMIT\0");
+                        if commit
+                            && armed_c2s.load(Ordering::SeqCst)
+                            && withheld_c2s
+                                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                                .is_ok()
+                        {
+                            hold_replies_c2s.store(true, Ordering::SeqCst);
+                        }
+                        if server_write.write_all(&frame).await.is_err() {
+                            return;
+                        }
+                        startup = false;
+                    }
+                    if server_write.flush().await.is_err() {
+                        return;
+                    }
+                }
+            });
+
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = server_read.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    if hold_replies.load(Ordering::SeqCst) {
+                        release_s2c.notified().await;
+                        hold_replies.store(false, Ordering::SeqCst);
+                    }
+                    if client_write.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                    let _ = client_write.flush().await;
+                }
+            });
+        }
+    });
+
+    let proxy_opts = (*upstream.connect_options())
+        .clone()
+        .host("127.0.0.1")
+        .port(proxy_port)
+        .ssl_mode(sqlx::postgres::PgSslMode::Disable);
+    let proxied_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect_with(proxy_opts)
+        .await?;
+    Ok(CommitProxy {
+        pool: proxied_pool,
+        armed,
+        withheld: withheld_once,
+        release_held,
+        task: proxy_task,
+    })
+}
+
+#[tokio::test]
+async fn withheld_commit_response_after_accepted_claim_refunds_single_attempt_job_before_drain()
+-> Result<()> {
+    let Some((pool, broker, _)) = fixture().await else {
+        return Ok(());
+    };
+    let job_id = enqueue(&pool, JobKind::RetrieveDocument).await?;
+    sqlx::query("UPDATE jobs SET max_attempts = 1 WHERE id = $1")
+        .bind(job_id)
+        .execute(&pool)
+        .await?;
+    publish(&pool, &broker).await?;
+
+    let CommitProxy {
+        pool: proxied_pool,
+        armed,
+        withheld,
+        release_held,
+        task: proxy_task,
+    } = spawn_commit_withholding_pg_proxy(&pool).await?;
+    let transport = JetStreamWorkTransport::new(
+        proxied_pool.clone(),
+        broker.clone(),
+        &[WorkloadClass::Documents],
+    )
+    .await?;
+    let handled = Arc::new(AtomicUsize::new(0));
+    let handled_clone = Arc::clone(&handled);
+    let (stop, stopped) = oneshot::channel::<()>();
+
+    armed.store(true, Ordering::SeqCst);
+    let worker = tokio::spawn(run_claim_loop(
+        transport,
+        PostgresDurableExecutionStore {
+            pool: proxied_pool.clone(),
+        },
+        "commit-proxy".into(),
+        ClaimLoopConfig {
+            pools: vec![WorkloadClass::Documents],
+            pool_concurrency: HashMap::from([(WorkloadClass::Documents, 1)]),
+            max_batch: 1,
+            claim_lease: Duration::from_secs(2),
+            drain_deadline: Duration::from_millis(350),
+        },
+        Arc::new(move |_, _| {
+            let handled_clone = Arc::clone(&handled_clone);
+            Box::pin(async move {
+                handled_clone.fetch_add(1, Ordering::SeqCst);
+                Ok(DeliveryAction::Ack)
+            })
+        }),
+        async move {
+            let _ = stopped.await;
+        },
+    ));
+
+    let mut committed_on_server = false;
+    for _ in 0..200 {
+        committed_on_server = sqlx::query_scalar(
+            "SELECT state = 'running' AND attempts = 1 AND max_attempts = 1 AND lease_owner = 'commit-proxy' FROM jobs WHERE id = $1",
+        )
+        .bind(job_id)
+        .fetch_one(&pool)
+        .await?;
+        if committed_on_server {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    if !committed_on_server {
+        let snapshot: (String, i32, Option<String>, i64) =
+            sqlx::query_as("SELECT state,attempts,lease_owner,claim_seq FROM jobs WHERE id=$1")
+                .bind(job_id)
+                .fetch_one(&pool)
+                .await?;
+        panic!(
+            "expected committed claim; actual={snapshot:?}, commit_withheld={}, handler_calls={}",
+            withheld.load(Ordering::SeqCst),
+            handled.load(Ordering::SeqCst)
+        );
+    }
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_millis(500), worker).await???;
+    assert_eq!(
+        handled.load(Ordering::SeqCst),
+        0,
+        "withheld COMMIT claim must never start a handler"
+    );
+
+    let (state, attempt_count, lease_owner): (String, i32, Option<String>) =
+        sqlx::query_as("SELECT state, attempts, lease_owner FROM jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(
+        (state.as_str(), attempt_count, lease_owner),
+        ("queued", 0, None),
+        "ambiguous COMMIT cleanup must refund the unstarted max_attempts=1 claim back to queued with attempts=0"
+    );
+
+    release_held.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), proxied_pool.close())
+        .await
+        .expect("released COMMIT proxy connections close within the fixture budget");
+    proxy_task.abort();
+    let _ = proxy_task.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stream_subject_transform_and_routing_drift_fails_closed_before_startup() -> Result<()> {
+    let Some((_pool, _broker, config)) = fixture().await else {
+        return Ok(());
+    };
+    let info = nats_request(
+        &config,
+        &format!("$JS.API.STREAM.INFO.{}", config.stream),
+        serde_json::json!({}),
+    )
+    .await?;
+    let base_config = info["config"].clone();
+
+    let mut transform_drift = base_config.clone();
+    transform_drift["subject_transform"] = serde_json::json!({
+        "src": format!("{}.events", config.subject_prefix),
+        "dest": format!("{}.jobs.documents", config.subject_prefix),
+    });
+
+    let mut republish_drift = base_config.clone();
+    republish_drift["republish"] = serde_json::json!({
+        "src": format!("{}.events", config.subject_prefix),
+        "dest": format!("{}.republished.events", config.subject_prefix),
+    });
+
+    let mut deny_delete_drift = base_config.clone();
+    deny_delete_drift["deny_delete"] = serde_json::json!(true);
+
+    let mut deny_purge_drift = base_config.clone();
+    deny_purge_drift["deny_purge"] = serde_json::json!(true);
+
+    let mut rollup_drift = base_config.clone();
+    rollup_drift["allow_rollup_hdrs"] = serde_json::json!(true);
+
+    let mut max_msgs_drift = base_config.clone();
+    max_msgs_drift["max_msgs"] = serde_json::json!(10);
+
+    let mut max_msgs_per_sub_drift = base_config.clone();
+    max_msgs_per_sub_drift["max_msgs_per_subject"] = serde_json::json!(1);
+
+    for (label, drift) in [
+        ("subject_transform", transform_drift),
+        ("republish", republish_drift),
+        ("deny_delete", deny_delete_drift),
+        ("deny_purge", deny_purge_drift),
+        ("allow_rollup_hdrs", rollup_drift),
+        ("max_msgs", max_msgs_drift),
+        ("max_msgs_per_subject", max_msgs_per_sub_drift),
+    ] {
+        let deleted = nats_request(
+            &config,
+            &format!("$JS.API.STREAM.DELETE.{}", config.stream),
+            serde_json::json!({}),
+        )
+        .await?;
+        assert_eq!(deleted["success"], serde_json::json!(true), "{label}");
+        let created = nats_request(
+            &config,
+            &format!("$JS.API.STREAM.CREATE.{}", config.stream),
+            drift,
+        )
+        .await?;
+        assert!(
+            created.get("error").is_none(),
+            "NATS server must accept precreated stream drift case {label}: {created}"
+        );
+        assert!(
+            JetStream::connect(config.clone()).await.is_err(),
+            "JetStream::connect must fail closed on stream drift case {label}"
+        );
+    }
+
+    let _ = nats_request(
+        &config,
+        &format!("$JS.API.STREAM.DELETE.{}", config.stream),
+        serde_json::json!({}),
+    )
+    .await?;
+    let restored = nats_request(
+        &config,
+        &format!("$JS.API.STREAM.CREATE.{}", config.stream),
+        base_config,
+    )
+    .await?;
+    assert!(restored.get("error").is_none());
+    assert!(JetStream::connect(config).await.is_ok());
+    Ok(())
+}

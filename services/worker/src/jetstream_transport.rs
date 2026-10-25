@@ -24,6 +24,10 @@ use sqlx::PgPool;
 use tokio::sync::{Mutex, watch};
 use tracing::Instrument;
 
+// Separate from the spent intake budget. The store reserves its own 50 ms
+// commit margin, so cleanup must receive positive usable statement time.
+const UNCONFIRMED_CLAIM_RELEASE_BUDGET: Duration = Duration::from_millis(250);
+
 pub enum RuntimeTransport {
     Postgres(PostgresClaimTransport),
     JetStream(Box<JetStreamWorkTransport>),
@@ -200,7 +204,7 @@ impl WorkTransport for JetStreamWorkTransport {
                             pool: self.pool.clone(),
                         };
                         let fallback =
-                            tokio::time::Instant::now() + budget.min(Duration::from_millis(50));
+                            tokio::time::Instant::now() + UNCONFIRMED_CLAIM_RELEASE_BUDGET;
                         let release_deadline = control
                             .shutdown_deadline()
                             .map(tokio::time::Instant::from_std)

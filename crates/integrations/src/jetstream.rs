@@ -143,7 +143,8 @@ impl JetStream {
             let actual = self.context.get_or_create_stream(expected.clone()).await?;
             let config = &actual.cached_info().config;
             anyhow::ensure!(
-                config.subjects == expected.subjects
+                config.name == expected.name
+                    && config.subjects == expected.subjects
                     && config.retention == expected.retention
                     && config.storage == expected.storage
                     && config.discard == expected.discard
@@ -153,6 +154,28 @@ impl JetStream {
                     && config.max_message_size == expected.max_message_size
                     && !config.no_ack
                     && !config.sealed
+                    && !config.discard_new_per_subject
+                    && config.max_messages <= 0
+                    && config.max_messages_per_subject <= 0
+                    && config.max_consumers <= 0
+                    && config.template_owner.is_empty()
+                    && config.subject_transform.is_none()
+                    && config.republish.is_none()
+                    && config.mirror.is_none()
+                    && config.sources.as_ref().is_none_or(Vec::is_empty)
+                    && !config.mirror_direct
+                    && !config.allow_direct
+                    && !config.allow_rollup
+                    && !config.deny_delete
+                    && !config.deny_purge
+                    && config.consumer_limits.is_none()
+                    && config.pause_until.is_none()
+                    && !config.allow_message_ttl
+                    && config.subject_delete_marker_ttl.is_none()
+                    && !config.allow_message_schedules
+                    && !config.allow_message_counter
+                    && !config.allow_atomic_publish
+                    && !config.allow_batch_publish
                     && config.duplicate_window == expected.duplicate_window,
                 "JetStream stream configuration mismatch: {}",
                 expected.name

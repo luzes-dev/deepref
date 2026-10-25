@@ -43,7 +43,7 @@ They have explicit ACKs, five deliveries, 1024 pending ACKs, at most 256 waiting
 pulls and a maximum pull batch of 256. The worker requests only available pool
 capacity, up to its existing batch cap. `outbox-v1` consumes generic typed
 contracts. Existing resource configurations must match the expected durable
-policy; startup refuses drift instead of mutating live resources.
+policy; startup refuses drift instead of mutating live resources. Incoming subject transforms, republish/mirror/source routing, rollups, message-specific TTL/scheduling/counters and extra message/consumer limits are outside this policy and are refused. This prevents an acknowledged generic event from being redirected away from its filtered consumer.
 
 ## Cutover and rollback
 
@@ -237,3 +237,5 @@ removed on exit and PostgreSQL volume/clone capacity is captured before cleanup.
 The runner uses a 3 GiB PostgreSQL tmpfs with a 4 GiB memory ceiling and a 6 GiB
 available-memory guard for this focused service set. It is not the broad-suite
 runner; full database-suite capacity remains a separate parent gate.
+
+An unconfirmed claim commit never starts a handler. Cleanup attempts the exact unstarted fence with a separate 250 ms budget, capped by the existing absolute shutdown deadline. This leaves positive statement time beyond the store's 50 ms commit margin. If the remaining drain time or database availability cannot confirm release, lease recovery remains the explicit fallback; refund is not guaranteed under every network ambiguity.
