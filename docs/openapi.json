@@ -325,6 +325,39 @@
         }
       }
     },
+    "/hooks/billing/dodo": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "receiveDodoWebhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
     "/hooks/email/{token}": {
       "post": {
         "tags": [
@@ -11466,6 +11499,182 @@
           }
         }
       }
+    },
+    "/workspaces/{workspace_id}/billing/checkout": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "createBillingCheckout",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedBillingLink"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/billing/customer": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "createBillingCustomer",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingContactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/billing/portal": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "operationId": "createBillingPortal",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostedBillingLink"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15578,6 +15787,29 @@
           }
         }
       },
+      "BillingContactRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BillingOffering": {
+        "type": "string",
+        "enum": [
+          "primary",
+          "secondary"
+        ]
+      },
       "BinaryAttachment": {
         "type": "string",
         "format": "binary"
@@ -15617,6 +15849,24 @@
             "description": "The block whose fields are being filled in."
           }
         }
+      },
+      "CheckoutRequest": {
+        "type": "object",
+        "required": [
+          "offering",
+          "return_path"
+        ],
+        "properties": {
+          "offering": {
+            "$ref": "#/components/schemas/BillingOffering",
+            "description": "Closed application offering, configured server-side. No provider product ID."
+          },
+          "return_path": {
+            "type": "string",
+            "description": "Only /settings/billing or /settings."
+          }
+        },
+        "additionalProperties": false
       },
       "CompleteAppraisalRequest": {
         "type": "object",
@@ -17615,6 +17865,17 @@
           }
         }
       },
+      "HostedBillingLink": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "ImportRecords": {
         "type": "object",
         "required": [
@@ -19096,6 +19357,18 @@
             "description": "`trigger`, `records`, `record`, `report`, `study`, `document`, `text` or `json`."
           }
         }
+      },
+      "PortalRequest": {
+        "type": "object",
+        "required": [
+          "return_path"
+        ],
+        "properties": {
+          "return_path": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "PositionDto": {
         "type": "object",
