@@ -213,32 +213,63 @@ impl Command {
                     limit: Some(parse_limit(limit)?),
                 }))
             }
-            [
-                command,
-                action,
-                fact_id,
-                operator_flag,
-                operator_user_id,
-                evidence_flag,
-                evidence_id,
-                action_flag,
-                action_val,
-                reason_flag,
-                reason_val,
-            ] if command == "ai-usage"
-                && action == "resolve-export-hold"
-                && operator_flag == "--operator"
-                && evidence_flag == "--evidence"
-                && action_flag == "--action"
-                && reason_flag == "--reason" =>
+            [command, action, fact_id, rest @ ..]
+                if command == "ai-usage" && action == "resolve-export-hold" =>
             {
+                let fact_uuid = parse_uuid(fact_id, "fact UUID")?;
+                let mut operator = None;
+                let mut evidence = None;
+                let mut act = None;
+                let mut reason = None;
+                let mut notes = None;
+
+                let mut chunks = rest.chunks_exact(2);
+                for chunk in &mut chunks {
+                    match chunk[0].as_str() {
+                        "--operator" => {
+                            operator = Some(parse_uuid(&chunk[1], "operator UUID")?);
+                        }
+                        "--evidence" => {
+                            evidence = Some(parse_uuid(&chunk[1], "evidence resolution UUID")?);
+                        }
+                        "--action" => {
+                            act = Some(chunk[1].clone());
+                        }
+                        "--reason" => {
+                            reason = Some(chunk[1].clone());
+                        }
+                        "--notes" => {
+                            let note = chunk[1].trim();
+                            anyhow::ensure!(!note.is_empty(), "--notes cannot be empty");
+                            anyhow::ensure!(
+                                note.len() <= 500,
+                                "--notes must be at most 500 characters"
+                            );
+                            notes = Some(note.to_string());
+                        }
+                        flag => anyhow::bail!("unknown flag for resolve-export-hold: {flag}"),
+                    }
+                }
+                anyhow::ensure!(
+                    chunks.remainder().is_empty(),
+                    "unmatched trailing argument for resolve-export-hold"
+                );
+                let operator_user_id =
+                    operator.ok_or_else(|| anyhow::anyhow!("missing required --operator flag"))?;
+                let resolution_id =
+                    evidence.ok_or_else(|| anyhow::anyhow!("missing required --evidence flag"))?;
+                let action =
+                    act.ok_or_else(|| anyhow::anyhow!("missing required --action flag"))?;
+                let reason =
+                    reason.ok_or_else(|| anyhow::anyhow!("missing required --reason flag"))?;
+
                 Ok(Self::AiUsage(AiUsageCommand::ResolveExportHold {
-                    fact_id: parse_uuid(fact_id, "fact UUID")?,
-                    operator_user_id: parse_uuid(operator_user_id, "operator UUID")?,
-                    resolution_id: parse_uuid(evidence_id, "evidence resolution UUID")?,
-                    action: action_val.clone(),
-                    reason: reason_val.clone(),
-                    notes: None,
+                    fact_id: fact_uuid,
+                    operator_user_id,
+                    resolution_id,
+                    action,
+                    reason,
+                    notes,
                 }))
             }
             [command, action, workspace_id] if command == "ai-usage" && action == "reconcile" => {
@@ -495,7 +526,7 @@ impl Command {
                 Ok(Self::Audit(AuditCommand::Query(params)))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
             ),
         }
     }
@@ -951,6 +982,128 @@ mod tests {
                 "export-replay".into(),
                 "--limit".into(),
                 "0".into(),
+            ])
+            .is_err()
+        );
+    }
+    #[test]
+    fn ai_usage_list_unresolved_exports_command_parses() {
+        assert_eq!(
+            Command::parse(["ai-usage".into(), "list-unresolved-exports".into(),]).unwrap(),
+            Command::AiUsage(AiUsageCommand::ListUnresolvedExports { limit: None })
+        );
+        assert_eq!(
+            Command::parse([
+                "ai-usage".into(),
+                "list-unresolved-exports".into(),
+                "--limit".into(),
+                "25".into(),
+            ])
+            .unwrap(),
+            Command::AiUsage(AiUsageCommand::ListUnresolvedExports { limit: Some(25) })
+        );
+        assert!(
+            Command::parse([
+                "ai-usage".into(),
+                "list-unresolved-exports".into(),
+                "--limit".into(),
+                "0".into(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn ai_usage_resolve_export_hold_command_parses() {
+        let fact_id = Uuid::new_v4();
+        let operator_id = Uuid::new_v4();
+        let evidence_id = Uuid::new_v4();
+
+        let cmd = Command::parse([
+            "ai-usage".into(),
+            "resolve-export-hold".into(),
+            fact_id.to_string(),
+            "--operator".into(),
+            operator_id.to_string(),
+            "--evidence".into(),
+            evidence_id.to_string(),
+            "--action".into(),
+            "reopened_retry".into(),
+            "--reason".into(),
+            "external_adjustment_confirmed".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::AiUsage(AiUsageCommand::ResolveExportHold {
+                fact_id,
+                operator_user_id: operator_id,
+                resolution_id: evidence_id,
+                action: "reopened_retry".into(),
+                reason: "external_adjustment_confirmed".into(),
+                notes: None,
+            })
+        );
+
+        let cmd2 = Command::parse([
+            "ai-usage".into(),
+            "resolve-export-hold".into(),
+            fact_id.to_string(),
+            "--reason".into(),
+            "manual_credit_issued".into(),
+            "--notes".into(),
+            "verified credit memo #12345".into(),
+            "--action".into(),
+            "manual_reconciliation".into(),
+            "--evidence".into(),
+            evidence_id.to_string(),
+            "--operator".into(),
+            operator_id.to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cmd2,
+            Command::AiUsage(AiUsageCommand::ResolveExportHold {
+                fact_id,
+                operator_user_id: operator_id,
+                resolution_id: evidence_id,
+                action: "manual_reconciliation".into(),
+                reason: "manual_credit_issued".into(),
+                notes: Some("verified credit memo #12345".into()),
+            })
+        );
+
+        assert!(
+            Command::parse([
+                "ai-usage".into(),
+                "resolve-export-hold".into(),
+                fact_id.to_string(),
+                "--operator".into(),
+                operator_id.to_string(),
+                "--evidence".into(),
+                evidence_id.to_string(),
+                "--action".into(),
+                "manual_reconciliation".into(),
+            ])
+            .is_err()
+        );
+
+        let long_notes = "a".repeat(501);
+        assert!(
+            Command::parse([
+                "ai-usage".into(),
+                "resolve-export-hold".into(),
+                fact_id.to_string(),
+                "--operator".into(),
+                operator_id.to_string(),
+                "--evidence".into(),
+                evidence_id.to_string(),
+                "--action".into(),
+                "manual_reconciliation".into(),
+                "--reason".into(),
+                "manual_credit_issued".into(),
+                "--notes".into(),
+                long_notes,
             ])
             .is_err()
         );

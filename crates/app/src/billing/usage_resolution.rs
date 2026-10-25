@@ -61,7 +61,7 @@ impl UsageResolutionReason {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UnresolvedUsageExport {
+pub struct UsageExportHoldStatus {
     pub fact_id: Uuid,
     pub workspace_id: Option<Uuid>,
     pub settled_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -74,6 +74,9 @@ pub struct UnresolvedUsageExport {
     pub resolution_reason: Option<String>,
     pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+/// Backward compatibility alias for `UsageExportHoldStatus`.
+pub type UnresolvedUsageExport = UsageExportHoldStatus;
 
 #[derive(Debug, Error)]
 pub enum UsageResolutionError {
@@ -89,10 +92,10 @@ pub enum UsageResolutionError {
     Database(#[from] sqlx::Error),
 }
 
-pub async fn list_unresolved_usage_exports(
+pub async fn list_usage_export_holds(
     pool: &PgPool,
     limit: i64,
-) -> Result<Vec<UnresolvedUsageExport>, sqlx::Error> {
+) -> Result<Vec<UsageExportHoldStatus>, sqlx::Error> {
     let rows = sqlx::query(
         r#"SELECT e.event_id AS fact_id,
                   (e.payload->>'workspace_id')::uuid AS workspace_id,
@@ -118,7 +121,7 @@ pub async fn list_unresolved_usage_exports(
 
     let items = rows
         .into_iter()
-        .map(|row| UnresolvedUsageExport {
+        .map(|row| UsageExportHoldStatus {
             fact_id: row.get("fact_id"),
             workspace_id: row.get("workspace_id"),
             settled_at: row.get("settled_at"),
@@ -136,6 +139,13 @@ pub async fn list_unresolved_usage_exports(
     Ok(items)
 }
 
+pub async fn list_unresolved_usage_exports(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<UsageExportHoldStatus>, sqlx::Error> {
+    list_usage_export_holds(pool, limit).await
+}
+
 pub async fn resolve_usage_export_hold(
     pool: &PgPool,
     fact_id: Uuid,
@@ -145,6 +155,12 @@ pub async fn resolve_usage_export_hold(
     reason: UsageResolutionReason,
     notes: Option<String>,
 ) -> Result<(), UsageResolutionError> {
+    if notes.as_ref().is_some_and(|n| n.len() > 500) {
+        return Err(UsageResolutionError::InvalidArgument(
+            "notes must not exceed 500 characters",
+        ));
+    }
+
     let mut tx = pool.begin().await?;
 
     // 1. Lock and inspect outbox_events row
@@ -215,15 +231,36 @@ pub async fn resolve_usage_export_hold(
     // 5. Update outbox according to action
     match action {
         UsageResolutionAction::ReopenedRetry => {
+            // Monotonic fence invariant: advance claim_generation so any stale worker
+            // pre-resolution attempt is rejected when completing or failing.
             sqlx::query(
-                "UPDATE outbox_events SET delivery_state = 'pending', attempts = 0, next_attempt_at = now(), lease_owner = NULL, lease_expires_at = NULL, last_error = NULL WHERE event_id = $1",
+                "UPDATE outbox_events
+                 SET delivery_state = 'pending', attempts = 0, next_attempt_at = now(),
+                     lease_owner = NULL, lease_expires_at = NULL, last_error = NULL,
+                     claim_generation = claim_generation + 1
+                 WHERE event_id = $1",
             )
             .bind(fact_id)
             .execute(&mut *tx)
             .await?;
 
+            // Targeted consumer reset: ONLY reset authorized consumer receipt ('ai_usage_export').
+            // Do NOT touch other consumers or reset monotonic fences (attempt_generation / settled_generation).
             sqlx::query(
-                "UPDATE outbox_receipts SET state = 'retrying', attempts = 0, next_attempt_at = now(), last_error = NULL, attempt_generation = 0, settled_generation = 0 WHERE event_id = $1 AND state = 'quarantined'",
+                "UPDATE outbox_receipts
+                 SET state = 'retrying', attempts = 0, next_attempt_at = now(), last_error = NULL
+                 WHERE event_id = $1 AND consumer = 'ai_usage_export' AND state = 'quarantined'",
+            )
+            .bind(fact_id)
+            .execute(&mut *tx)
+            .await?;
+
+            // Reset dispatch intent in billing_usage_fact_targets so this resolution authorizes
+            // a single fresh dispatch attempt.
+            sqlx::query(
+                "UPDATE billing_usage_fact_targets
+                 SET dispatch_claimed_at = NULL, dispatch_state = 'bound'
+                 WHERE fact_id = $1",
             )
             .bind(fact_id)
             .execute(&mut *tx)
