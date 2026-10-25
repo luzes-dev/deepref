@@ -386,3 +386,11 @@ id = "security.compose-config"
 group = "security-configuration"
 description = "Validate the compose configuration."
 command = ["docker", "compose", "-f", "compose.yaml", "config", "--quiet"]
+
+[[check]]
+id = "integration.valkey"
+group = "integration"
+description = "Require real Valkey/PostgreSQL shared-limit and HTTP authorization contracts."
+command = ["bash", "scripts/ci/test-valkey.sh"]
+depends_on = ["integration.migrations"]
+env = { SQLX_OFFLINE = "true" }

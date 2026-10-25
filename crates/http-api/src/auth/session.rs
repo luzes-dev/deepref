@@ -228,6 +228,16 @@ pub(crate) async fn authenticate_requests(
         };
         return match resolution {
             Ok(Some(principal)) => {
+                if let Principal::Service(service) = principal
+                    && let Some(response) = crate::rate_limits::refusal(
+                        &gate.state,
+                        deepref_application::rate_limits::RateLimitSubject::ApiKey(service.key_id),
+                        deepref_application::rate_limits::RateLimitPolicy::API_KEY,
+                    )
+                    .await
+                {
+                    return response;
+                }
                 request.extensions_mut().insert(principal);
                 next.run(request).await
             }

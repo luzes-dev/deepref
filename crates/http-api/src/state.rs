@@ -23,6 +23,7 @@ pub struct AiRuntimeInfo {
 pub struct AppState {
     pub pool: PgPool,
     pub billing: Option<deepref_app::billing::BillingService>,
+    pub rate_limiter: Arc<dyn deepref_application::rate_limits::RateLimiter>,
     pub started_at: Instant,
     pub document_store: Option<DocumentStore>,
     pub ai_gateway: Arc<dyn AiGateway>,
@@ -54,6 +55,9 @@ impl AppState {
             denials: Arc::new(DenialAuditor::new(pool.clone())),
             auth_rejections: Arc::new(RejectionAuditor::new(pool.clone())),
             stream_recheck: DEFAULT_STREAM_RECHECK,
+            rate_limiter: Arc::new(deepref_app::rate_limits::PostgresRateLimiter::new(
+                pool.clone(),
+            )),
             pool,
             billing: None,
             started_at: Instant::now(),
@@ -67,6 +71,14 @@ impl AppState {
             integrations: deepref_config::IntegrationsConfig::default(),
             auth: None,
         }
+    }
+
+    pub fn with_rate_limiter(
+        mut self,
+        limiter: Arc<dyn deepref_application::rate_limits::RateLimiter>,
+    ) -> Self {
+        self.rate_limiter = limiter;
+        self
     }
 
     /// Replaces the policy decision point. Tests use it to count decisions.

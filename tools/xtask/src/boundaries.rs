@@ -279,7 +279,15 @@ fn validate_workspace_dependency(
     }
 }
 
-fn is_forbidden_external_dependency(layer: Layer, name: &str, is_normal: bool) -> bool {
+fn is_forbidden_external_dependency(
+    source: &str,
+    layer: Layer,
+    name: &str,
+    is_normal: bool,
+) -> bool {
+    if matches!(name, "redis" | "fred") {
+        return source != "deepref-integrations" || layer != Layer::Adapter;
+    }
     if name == "async-nats" {
         return true;
     }
@@ -304,7 +312,7 @@ fn validate_external_dependency(
     errors: &mut Vec<String>,
 ) {
     let normal = dependency.kind.is_none();
-    if is_forbidden_external_dependency(layer, &dependency.name, normal) {
+    if is_forbidden_external_dependency(&source.name, layer, &dependency.name, normal) {
         errors.push(format!(
             "{} -> {}\nsource layer: {layer}\ntarget layer: external\ndependency violates the pure dependency contract or removed NATS guard",
             source.name, dependency.name
@@ -380,7 +388,36 @@ fn validate(metadata: &Metadata) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::reads_runtime_environment;
+    use super::{Layer, is_forbidden_external_dependency, reads_runtime_environment};
+
+    #[test]
+    fn valkey_sdks_are_confined_to_the_integration_adapter_even_in_tests() {
+        for sdk in ["redis", "fred"] {
+            for normal in [true, false] {
+                assert!(!is_forbidden_external_dependency(
+                    "deepref-integrations",
+                    Layer::Adapter,
+                    sdk,
+                    normal
+                ));
+                for (package, layer) in [
+                    ("deepref-domain", Layer::Domain),
+                    ("deepref-application", Layer::Application),
+                    ("deepref-app", Layer::Persistence),
+                    ("deepref-http-api", Layer::Http),
+                    ("deepref-worker", Layer::Worker),
+                    ("deepref-documents", Layer::Adapter),
+                    ("xtask", Layer::Tooling),
+                    ("deepref-integrations", Layer::Domain),
+                ] {
+                    assert!(
+                        is_forbidden_external_dependency(package, layer, sdk, normal),
+                        "{package} must use the port"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn migrated_runtime_config_guard_rejects_direct_environment_reads() {

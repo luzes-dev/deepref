@@ -34,6 +34,7 @@ test-support = []
 
 [dev-dependencies]
 deepref-app = { workspace = true, features = ["test-support"] }
+deepref-integrations = { workspace = true, features = ["valkey-test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
