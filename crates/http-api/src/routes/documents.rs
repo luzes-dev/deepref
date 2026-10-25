@@ -718,7 +718,7 @@ pub(crate) async fn upload_document(
         ProjectId::new(project_id),
     )
     .await?;
-    let upload_tx = deepref_app::object_lifecycle::begin_object_upload(
+    let mut upload_tx = deepref_app::object_lifecycle::begin_object_upload(
         &state.pool,
         deepref_app::object_lifecycle::ObjectOwner::Project(ProjectId::new(project_id)),
         &key,
@@ -729,7 +729,7 @@ pub(crate) async fn upload_document(
     // Re-uploading identical content for a document whose processing failed
     // retries that document instead of colliding with the unique content hash.
     if let Some(existing) = deepref_app::find_failed_document_by_hash(
-        &state.pool,
+        &mut *upload_tx,
         project_id,
         report_id,
         &stored.sha256,

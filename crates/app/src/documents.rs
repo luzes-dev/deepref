@@ -449,8 +449,8 @@ pub async fn enqueue_retrieve(
 
 /// Returns the failed document of a report with identical content, if any, so
 /// a repeated upload can retry it instead of colliding with the unique hash.
-pub async fn find_failed_document_by_hash(
-    pool: &PgPool,
+pub async fn find_failed_document_by_hash<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
     project_id: Uuid,
     report_id: Uuid,
     content_hash: &str,
@@ -462,7 +462,7 @@ pub async fn find_failed_document_by_hash(
     .bind(project_id)
     .bind(report_id)
     .bind(content_hash)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
 }
 
