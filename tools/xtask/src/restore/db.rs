@@ -135,8 +135,12 @@ fn query(table: &str) -> &'static str {
           'already_marked_blob_missing',parser_error='document_blob_missing') AS data
           FROM documents WHERE ($1::text IS NULL OR id > $1::uuid) ORDER BY id LIMIT $2",
         "workflow_files" => "SELECT id::text AS cursor, jsonb_build_object('id',id,'key',storage_key,
-          'sha256',content_sha256,'byte_size',byte_size,'inline_bytes',octet_length(content),
-          'expected_key','projects/' || project_id::text || '/workflow-runs/' || run_id::text || '/files/' || id::text) AS data
+          'sha256',content_sha256,'byte_size',byte_size,'inline_bytes',octet_length((to_jsonb(workflow_files)->>'content')::bytea),
+          'expected_key',CASE WHEN storage_key LIKE 'workspaces/%' THEN
+            'workspaces/' || (SELECT workspace_id::text FROM projects WHERE projects.id=workflow_files.project_id)
+            || '/projects/' || project_id::text || '/workflow-runs/' || run_id::text || '/files/'
+            || coalesce(substring(storage_key from '/files/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$'),'<invalid>')
+            ELSE 'projects/' || project_id::text || '/workflow-runs/' || run_id::text || '/files/' || coalesce(substring(storage_key from '/files/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$'),'<invalid>') END) AS data
           FROM workflow_files WHERE ($1::text IS NULL OR id > $1::uuid) ORDER BY id LIMIT $2",
         "jobs" => "SELECT id::text AS cursor, jsonb_build_object('id',id,'kind',kind,'state',state,
           'attempts',attempts,'max_attempts',max_attempts,'claim_seq',claim_seq,

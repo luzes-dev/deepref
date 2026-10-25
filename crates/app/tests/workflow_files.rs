@@ -111,8 +111,11 @@ async fn reference(pool: &PgPool, file: Uuid) -> (Option<String>, Option<String>
     )
 }
 
-fn key_of(fixture: &Fixture, file: Uuid) -> ObjectKey {
-    ObjectKey::workflow_file(fixture.project, fixture.run, file)
+async fn key_of(pool: &PgPool, fixture: &Fixture, file: Uuid) -> ObjectKey {
+    match reference(pool, file).await.0 {
+        Some(key) => ObjectKey::parse(&key).unwrap(),
+        None => ObjectKey::workflow_file(fixture.project, fixture.run, file),
+    }
 }
 
 fn local_store() -> (DocumentStore, PathBuf) {
@@ -146,7 +149,7 @@ async fn dual_write_populates_the_object_the_reference_and_the_database_copy() {
 
     let (key, sha256, size) = reference(&pool, file).await;
     let key = key.expect("storage key is recorded");
-    assert_eq!(key, key_of(&fixture, file).as_str());
+    assert_eq!(key, key_of(&pool, &fixture, file).await.as_str());
     assert_eq!(sha256.unwrap(), content_sha256(b"id,title\n1,A\n"));
     assert_eq!(size, Some(13));
     let object = store
@@ -211,7 +214,7 @@ async fn an_object_that_fails_hash_verification_is_reported_and_replaced_by_the_
     // Same length, different bytes: only the hash can tell.
     store
         .put_object(
-            &key_of(&fixture, file),
+            &key_of(&pool, &fixture, file).await,
             b"tampered bytes".as_slice().into(),
             1024,
         )
@@ -229,7 +232,7 @@ async fn an_object_that_fails_hash_verification_is_reported_and_replaced_by_the_
     // A different length is caught before the object is downloaded.
     store
         .put_object(
-            &key_of(&fixture, file),
+            &key_of(&pool, &fixture, file).await,
             b"truncated".as_slice().into(),
             1024,
         )
@@ -251,7 +254,10 @@ async fn a_missing_object_falls_back_to_the_database_copy() {
     let store = DocumentStore::memory();
     let fixture = fixture(&pool).await;
     let file = create(&pool, &store, &fixture, b"still in the database").await;
-    store.delete_object(&key_of(&fixture, file)).await.unwrap();
+    store
+        .delete_object(&key_of(&pool, &fixture, file).await)
+        .await
+        .unwrap();
 
     let read = get_workflow_file(&pool, &store, fixture.project_id(), file)
         .await
@@ -300,10 +306,8 @@ async fn object_keys_come_from_identifiers_and_never_from_the_file_name() {
     let key = key.unwrap();
     assert_eq!(
         key,
-        format!(
-            "projects/{}/workflow-runs/{}/files/{file}",
-            fixture.project, fixture.run
-        )
+        ObjectKey::workflow_file(fixture.project, fixture.run, file).as_str(),
+        "overlap remains readable by legacy key parsers"
     );
     assert!(!key.contains("passwd") && !key.contains("csv") && !key.contains('.'));
     let written = files_under(&root);
@@ -318,7 +322,7 @@ async fn object_keys_come_from_identifiers_and_never_from_the_file_name() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_failed_upload_stores_no_row_and_a_failed_insert_removes_the_object() {
+async fn a_failed_upload_stores_no_row_and_a_failed_insert_retains_durable_cleanup_intent() {
     use std::os::unix::fs::PermissionsExt;
 
     let Some(pool) = database().await else { return };
@@ -336,10 +340,22 @@ async fn a_failed_upload_stores_no_row_and_a_failed_insert_removes_the_object() 
         result,
         Err(deepref_app::WorkflowError::Database(_))
     ));
-    assert!(
-        files_under(&root).is_empty(),
-        "the object of the row that was not stored is removed"
+    assert_eq!(
+        files_under(&root).len(),
+        1,
+        "failed insert keeps a recoverable pending object"
     );
+    sqlx::query("UPDATE object_lifecycle SET cleanup_after=now()-interval '1 second'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        deepref_app::object_lifecycle::cleanup_objects(&pool, &store, 10)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(files_under(&root).is_empty());
 
     std::fs::remove_dir_all(&root).unwrap();
 
@@ -400,7 +416,7 @@ async fn backfill_moves_older_rows_verifies_them_and_can_be_repeated() {
     assert_eq!((first.migrated, first.failed, first.remaining), (3, 0, 0));
     for (file, content) in files.iter().zip(contents) {
         let (key, sha256, size) = reference(&pool, *file).await;
-        assert_eq!(key.unwrap(), key_of(&fixture, *file).as_str());
+        assert_eq!(key.unwrap(), key_of(&pool, &fixture, *file).await.as_str());
         assert_eq!(sha256.unwrap(), content_sha256(content));
         assert_eq!(size, Some(content.len() as i64));
         let read = get_workflow_file(&pool, &store, fixture.project_id(), *file)
@@ -443,7 +459,7 @@ async fn backfill_resumes_where_an_interrupted_run_stopped() {
     assert_eq!(pending.len(), 3);
     store
         .put_object(
-            &key_of(&fixture, pending[0]),
+            &key_of(&pool, &fixture, pending[0]).await,
             b"half-written".as_slice().into(),
             1024,
         )

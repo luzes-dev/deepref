@@ -268,6 +268,40 @@ pub async fn ai_usage_set_cap(
     }))?)
 }
 
+pub async fn activate_tenant_object_keys(
+    config: &ApiConfig,
+    attestation: &str,
+) -> anyhow::Result<()> {
+    let pool = database_pool(config).await?;
+    deepref_app::object_lifecycle::activate_tenant_object_keys(&pool, attestation).await
+}
+
+pub async fn reconcile_object_orphans(
+    config: &ApiConfig,
+    attestation: &str,
+) -> anyhow::Result<u64> {
+    let pool = database_pool(config).await?;
+    let store = deepref_documents::DocumentStore::from_config(&config.documents)?;
+    deepref_app::object_lifecycle::reconcile_legacy_orphans(&pool, &store, 10_000, attestation)
+        .await
+}
+
+/// Explicit object-storage maintenance cutover; never run by migration startup.
+pub async fn workflow_storage_cutover(
+    config: &ApiConfig,
+    contract: bool,
+    attestation: &str,
+) -> anyhow::Result<u64> {
+    let pool = database_pool(config).await?;
+    let store = deepref_documents::DocumentStore::from_config(&config.documents)?;
+    let target = if contract {
+        deepref_app::WorkflowFileCutover::Contract
+    } else {
+        deepref_app::WorkflowFileCutover::ObjectOnly
+    };
+    deepref_app::cutover_workflow_file_storage(&pool, &store, target, attestation).await
+}
+
 pub async fn ai_usage_backfill(config: &ApiConfig, batch_size: usize) -> anyhow::Result<String> {
     let pool = database_pool(config).await?;
     let summary = deepref_app::backfill_ai_usage_legacy(&pool, batch_size).await?;

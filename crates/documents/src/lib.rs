@@ -99,6 +99,7 @@ impl StoreConfig {
 pub struct DocumentStore {
     inner: Arc<dyn ObjectStoreTrait>,
     max_bytes: usize,
+    upload_key: Option<ObjectKey>,
 }
 
 impl std::fmt::Debug for DocumentStore {
@@ -134,6 +135,7 @@ impl DocumentStore {
         Self {
             inner: store,
             max_bytes: DEFAULT_MAX_DOCUMENT_BYTES,
+            upload_key: None,
         }
     }
 
@@ -141,7 +143,43 @@ impl DocumentStore {
         Self {
             inner: config.inner,
             max_bytes: max_bytes.max(1),
+            upload_key: None,
         }
+    }
+
+    /// Bind one upload attempt to a key whose durable intent the caller holds.
+    /// Never share this facade between attempts; existing object reads keep using
+    /// their persisted keys, including legacy keys.
+    pub fn for_upload(&self, key: ObjectKey) -> Self {
+        Self {
+            upload_key: Some(key),
+            ..self.clone()
+        }
+    }
+
+    /// Complete bounded inventory for explicit legacy-orphan reconciliation.
+    /// Refuse a truncated inventory, rather than treating missing pages as proof
+    /// of absence. Unknown provider keys are preserved and never returned.
+    pub async fn inventory(
+        &self,
+        maximum: usize,
+    ) -> Result<Vec<(ObjectKey, i64)>, DocumentStoreError> {
+        let mut stream = self.inner.list(None);
+        let mut keys = Vec::new();
+        let mut seen = 0usize;
+        while let Some(meta) = stream.next().await {
+            let meta = meta?;
+            seen += 1;
+            if seen > maximum {
+                return Err(DocumentStoreError::Stream(
+                    "object inventory exceeds configured complete-scan limit".to_owned(),
+                ));
+            }
+            if let Ok(key) = ObjectKey::parse(meta.location.as_ref()) {
+                keys.push((key, meta.last_modified.timestamp()));
+            }
+        }
+        Ok(keys)
     }
 
     pub fn max_bytes(&self) -> usize {
@@ -227,7 +265,11 @@ impl DocumentStore {
         S: Stream<Item = Result<Bytes, E>>,
         E: std::fmt::Display,
     {
-        let key = format!("documents/{}", Uuid::new_v4());
+        let key = self
+            .upload_key
+            .clone()
+            .unwrap_or_else(|| ObjectKey::document(Uuid::new_v4()))
+            .0;
         let mut upload = self.inner.put_multipart(&Path::from(key.as_str())).await?;
         const PART_BYTES: usize = 5 * 1024 * 1024;
         let mut pending = BytesMut::with_capacity(PART_BYTES.min(self.max_bytes));
@@ -361,6 +403,22 @@ impl DocumentStore {
 pub struct ObjectKey(String);
 
 impl ObjectKey {
+    pub fn tenant_document(workspace: Uuid, project: Uuid, object: Uuid) -> Self {
+        Self(format!(
+            "workspaces/{workspace}/projects/{project}/documents/{object}"
+        ))
+    }
+
+    pub fn tenant_workflow_file(workspace: Uuid, project: Uuid, run: Uuid, file: Uuid) -> Self {
+        Self(format!(
+            "workspaces/{workspace}/projects/{project}/workflow-runs/{run}/files/{file}"
+        ))
+    }
+
+    pub fn account_export(user: Uuid, export: Uuid) -> Self {
+        Self(format!("account-exports/{user}/{export}"))
+    }
+
     pub fn document(id: Uuid) -> Self {
         Self(format!("documents/{id}"))
     }
@@ -379,6 +437,25 @@ impl ObjectKey {
         };
         let valid = match segments.as_slice() {
             ["documents", id] => is_uuid(id),
+            ["account-exports", user, export] => is_uuid(user) && is_uuid(export),
+            [
+                "workspaces",
+                workspace,
+                "projects",
+                project,
+                "documents",
+                object,
+            ] => is_uuid(workspace) && is_uuid(project) && is_uuid(object),
+            [
+                "workspaces",
+                workspace,
+                "projects",
+                project,
+                "workflow-runs",
+                run,
+                "files",
+                file,
+            ] => is_uuid(workspace) && is_uuid(project) && is_uuid(run) && is_uuid(file),
             ["projects", project, "workflow-runs", run, "files", file] => {
                 is_uuid(project) && is_uuid(run) && is_uuid(file)
             }

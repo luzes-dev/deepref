@@ -11,7 +11,7 @@ use deepref_documents::{
     RemoteDocumentFetcher,
 };
 use deepref_domain::events::{EventEnvelope, WorkFetchRequested};
-use deepref_domain::{IngestionItemStatus, normalize_doi};
+use deepref_domain::{IngestionItemStatus, ProjectId, normalize_doi};
 use deepref_review::worker::{
     CompiledReview, ReviewExecutionPlan, ReviewModelIdentity, ReviewNode, ScreeningReviewPlan,
     StandardReviewPlan,
@@ -384,6 +384,18 @@ async fn handle_retrieve_document_job(
     }
     let fetcher: Arc<dyn RemoteDocumentFetcher> =
         remote_fetcher.unwrap_or_else(|| Arc::new(HttpsPdfFetcher::default()));
+    let key = deepref_app::object_lifecycle::project_document_key(
+        pool,
+        ProjectId::new(document.project_id),
+    )
+    .await?;
+    let mut transaction = deepref_app::object_lifecycle::begin_object_upload(
+        pool,
+        deepref_app::object_lifecycle::ObjectOwner::Project(ProjectId::new(document.project_id)),
+        &key,
+    )
+    .await?;
+    let store = store.for_upload(key.clone());
     let (stored, _) = match fetcher.fetch(external_url, &store).await {
         Ok(result) => result,
         Err(error) => {
@@ -407,7 +419,6 @@ async fn handle_retrieve_document_job(
     let byte_size = match i64::try_from(stored.byte_size) {
         Ok(value) => value,
         Err(error) => {
-            let _ = store.delete(&stored.opaque_id).await;
             deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
@@ -417,7 +428,10 @@ async fn handle_retrieve_document_job(
             return Err(error.into());
         }
     };
-    let mut transaction = pool.begin().await?;
+    anyhow::ensure!(
+        stored.opaque_id == key.as_str(),
+        "fetcher did not use the reserved upload key"
+    );
     let completion = match deepref_app::complete_document_retrieval(
         &mut transaction,
         deepref_domain::ProjectId::new(document.project_id),
@@ -431,7 +445,6 @@ async fn handle_retrieve_document_job(
         Ok(outcome) => outcome,
         Err(error) => {
             let _ = transaction.rollback().await;
-            let _ = store.delete(&stored.opaque_id).await;
             deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
@@ -442,7 +455,6 @@ async fn handle_retrieve_document_job(
         }
     };
     if let Err(error) = transaction.commit().await {
-        let _ = store.delete(&stored.opaque_id).await;
         if matches!(
             completion,
             deepref_app::CompleteDocumentRetrievalOutcome::Applied
@@ -459,7 +471,7 @@ async fn handle_retrieve_document_job(
     match completion {
         deepref_app::CompleteDocumentRetrievalOutcome::Applied => {}
         deepref_app::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
-            store.delete(&stored.opaque_id).await?;
+            // Unattached pending intent is collected durably.
         }
     }
     Ok(DeliveryAction::Ack)
@@ -823,6 +835,18 @@ async fn handle_job_with_document_services_inner(
         }
         deepref_domain::JobKind::ParseDocument => {
             handle_parse_document_job(&pool, job, document_store, document_parser, config).await
+        }
+        deepref_domain::JobKind::CleanupObjects => {
+            anyhow::ensure!(
+                job.scope == deepref_application::jobs::JobScope::Platform,
+                "cleanup requires platform scope"
+            );
+            let store = match document_store {
+                Some(store) => store,
+                None => Arc::new(DocumentStore::from_config(&config.documents)?),
+            };
+            deepref_app::object_lifecycle::cleanup_objects(&pool, &store, 100).await?;
+            Ok(DeliveryAction::Ack)
         }
         deepref_domain::JobKind::BackfillWorkflowFiles => {
             handle_backfill_workflow_files_job(&pool, job, document_store, config).await

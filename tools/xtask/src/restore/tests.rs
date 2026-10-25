@@ -600,3 +600,59 @@ async fn cooperative_deadline_stops_local_scan_after_clock_expires() {
     r.failures.push(result.unwrap_err());
     assert_eq!(r.finish(), 2);
 }
+
+#[tokio::test]
+async fn tenant_workflow_objects_remain_reconcilable_after_explicit_content_contract() {
+    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await else {
+        return;
+    };
+    let pool = PgPool::connect(&url).await.unwrap();
+    deepref_app::object_lifecycle::activate_tenant_object_keys(
+        &pool,
+        deepref_app::object_lifecycle::TENANT_KEY_DRAIN_ATTESTATION,
+    )
+    .await
+    .unwrap();
+    let mut f = Fixture::new();
+    let project = Uuid::new_v4();
+    let run = Uuid::new_v4();
+    let file = Uuid::new_v4();
+    let attempt = Uuid::new_v4();
+    let workspace: Uuid = sqlx::query_scalar(
+        "INSERT INTO projects(id,name) VALUES($1,'contracted restore') RETURNING workspace_id",
+    )
+    .bind(project)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO durable_runs(id,project_id,kind,actor_kind,actor_id,idempotency_key,status) VALUES($1,$2,'workflow','user','fixture',$1::text,'queued')")
+        .bind(run).bind(project).execute(&pool).await.unwrap();
+    let key =
+        format!("workspaces/{workspace}/projects/{project}/workflow-runs/{run}/files/{attempt}");
+    f.object(&key, Some(b"verified"));
+    sqlx::query("INSERT INTO workflow_files(id,project_id,run_id,node_id,name,content_type,content,storage_key,content_sha256,byte_size)
+        VALUES($1,$2,$3,'export','result','text/plain',$4,$5,$6,8)")
+        .bind(file).bind(project).bind(run).bind(b"verified".as_slice()).bind(&key).bind(objects::digest(b"verified")).execute(&pool).await.unwrap();
+    // Emulate the schema of a restored, explicitly contracted database. The
+    // actual guarded transition and verification are covered by app tests.
+    sqlx::query("ALTER TABLE workflow_files DROP COLUMN content")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE workflow_file_storage_state SET mode='contracted' WHERE singleton")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut r = f.report();
+    db::scan(&f.config, &url, &mut r.database, &local_deadline())
+        .await
+        .unwrap();
+    objects::scan(&f.config, &f.inventory, &mut r, &local_deadline())
+        .await
+        .unwrap();
+    assert_eq!(r.objects.references, 1);
+    assert_eq!(r.objects.hash_checked, 1);
+    assert!(!codes(&r).contains(&"invalid_integrity_metadata"));
+    assert!(!codes(&r).contains(&"referenced_materialization_missing"));
+    pool.close().await;
+}
