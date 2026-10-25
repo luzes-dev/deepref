@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::UserId;
+use crate::{ApiKeyId, UserId, WorkspaceId};
 
 const MAX_EXTERNAL_USER_ID_BYTES: usize = 128;
 
@@ -74,11 +74,13 @@ pub struct UserPrincipal {
     pub user_id: UserId,
 }
 
-/// A machine credential such as an API key. Declared for later handoffs; no
-/// request produces it yet.
+/// A machine credential. It carries no human identity. Live scopes and
+/// creator membership are re-read by the central PDP for each decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct ServicePrincipal;
+pub struct ServicePrincipal {
+    pub key_id: ApiKeyId,
+    pub workspace_id: WorkspaceId,
+}
 
 /// Work DeepRef starts itself, such as applying a provider webhook. Declared
 /// for later handoffs; no request produces it yet.
@@ -103,9 +105,12 @@ impl Principal {
         Self::System(SystemPrincipal)
     }
 
-    /// A machine credential. No request produces it before handoff 11.
-    pub const fn service() -> Self {
-        Self::Service(ServicePrincipal)
+    /// A verified machine credential; never a human session.
+    pub const fn service(key_id: ApiKeyId, workspace_id: WorkspaceId) -> Self {
+        Self::Service(ServicePrincipal {
+            key_id,
+            workspace_id,
+        })
     }
 
     pub const fn user_id(&self) -> Option<UserId> {
@@ -144,6 +149,13 @@ mod tests {
         let id = UserId::new(Uuid::from_u128(7));
         assert_eq!(Principal::user(id).user_id(), Some(id));
         assert_eq!(Principal::System(SystemPrincipal).user_id(), None);
-        assert_eq!(Principal::Service(ServicePrincipal).user_id(), None);
+        assert_eq!(
+            Principal::service(
+                crate::ApiKeyId::new(Uuid::new_v4()),
+                crate::WorkspaceId::new(Uuid::new_v4())
+            )
+            .user_id(),
+            None
+        );
     }
 }

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use super::policy::{NON_HTTP, ROUTES, ResourceFrom, RouteRule, Rule, Verb};
+use super::policy::{NON_HTTP, ROUTES, ResourceFrom, RouteRule, Rule, Verb, machine_safe};
 
 /// A route registered outside the OpenAPI router in `routes::router`.
 const UNDOCUMENTED_ROUTES: &[(Verb, &str)] = &[(Verb::Get, "/openapi.json")];
@@ -143,6 +143,16 @@ pub fn render_markdown() -> String {
          A foreign-workspace principal calling a `Require` row receives exactly the response \
          for a nonexistent resource (`404 NOT_FOUND`).\n\n",
     );
+    out.push_str("API keys are accepted only on these explicit machine-safe reads; all other routes require a human session or their documented open boundary:\n\n");
+    for row in ROUTES.iter().filter(|row| machine_safe(row)) {
+        let _ = writeln!(
+            out,
+            "- `{} {}` (central scope and live membership check)",
+            row.method.as_str(),
+            row.path
+        );
+    }
+    out.push('\n');
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for row in ROUTES {
         *counts.entry(rule_columns(row.rule).0).or_default() += 1;

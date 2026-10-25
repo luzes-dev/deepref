@@ -208,6 +208,38 @@ pub(crate) async fn authenticate_requests(
         return ApiError::Configuration("authentication is enabled but not configured".to_owned())
             .into_response();
     };
+    // A presented Authorization header is never allowed to fall back to a
+    // browser cookie. Reject duplicate headers and ambiguous mixed credentials.
+    if request.headers().contains_key(header::AUTHORIZATION) {
+        let mut values = request.headers().get_all(header::AUTHORIZATION).iter();
+        let token = match (values.next(), values.next()) {
+            (Some(value), None) => value
+                .to_str()
+                .ok()
+                .and_then(|value| value.strip_prefix("Bearer ")),
+            _ => None,
+        };
+        let token = token
+            .filter(|_| read_cookie(request.headers(), auth.cookies().session_name()).is_none());
+        let resolution = match token {
+            Some(token) => deepref_app::api_keys::authenticate(&gate.state.pool, token).await,
+            None => Ok(None),
+        };
+        return match resolution {
+            Ok(Some(principal)) => {
+                request.extensions_mut().insert(principal);
+                next.run(request).await
+            }
+            Ok(None) => {
+                gate.state
+                    .record_auth_rejection(RejectionReason::ApiKeyInvalidCredential, None)
+                    .await;
+                ApiError::Auth(AuthFailure::Unauthenticated).into_response()
+            }
+            Err(_) => ApiError::Internal(anyhow::anyhow!("API key authentication is unavailable"))
+                .into_response(),
+        };
+    }
     let cookie_token = read_cookie(request.headers(), auth.cookies().session_name())
         .filter(|value| !value.is_empty());
     match resolve(&auth, &gate.state.pool, cookie_token).await {

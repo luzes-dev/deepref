@@ -60,7 +60,13 @@ mod tests {
 
     #[test]
     fn system_and_service_principals_cannot_be_http_actors() {
-        for principal in [Principal::system(), Principal::service()] {
+        for principal in [
+            Principal::system(),
+            Principal::service(
+                deepref_domain::ApiKeyId::new(uuid::Uuid::new_v4()),
+                deepref_domain::WorkspaceId::new(uuid::Uuid::new_v4()),
+            ),
+        ] {
             assert!(actor_from_principal(principal).is_err());
         }
     }

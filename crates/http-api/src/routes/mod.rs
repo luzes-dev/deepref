@@ -2,6 +2,7 @@ mod acquisitions;
 mod actor;
 mod ai;
 mod ai_first;
+mod api_keys;
 mod articles;
 mod assistant;
 mod auth;
@@ -47,6 +48,9 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
     openapi.info = Info::new("DeepRef API", env!("CARGO_PKG_VERSION"));
 
     let base = OpenApiRouter::with_openapi(openapi)
+        .routes(routes!(api_keys::list, api_keys::create))
+        .routes(routes!(api_keys::revoke))
+        .routes(routes!(api_keys::rotate))
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(health::dependencies))

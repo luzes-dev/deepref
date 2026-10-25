@@ -9,6 +9,7 @@ mod ai_exposure;
 mod ai_first;
 mod ai_reviewer;
 mod ai_usage;
+pub mod api_keys;
 mod appraisal;
 mod assistant;
 mod assistant_host;
