@@ -513,13 +513,30 @@ pub async fn serve_with_shutdown(
     let provider = ai_config.provider;
     match ai_config.api_key() {
         Some(api_key) => {
+            let canonical: std::sync::Arc<dyn deepref_ai::AiConcurrencyAdmission> =
+                std::sync::Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(&pool));
+            let admission = match config.runtime.valkey.as_ref().and_then(|config| {
+                deepref_integrations::valkey_concurrency::ValkeyConcurrencyMirror::from_config(
+                    config,
+                )
+                .ok()
+            }) {
+                Some(mirror) => std::sync::Arc::new(
+                    deepref_app::mirrored_concurrency::MirroredAiConcurrencyAdmission::new(
+                        canonical,
+                        std::sync::Arc::new(mirror),
+                    ),
+                )
+                    as std::sync::Arc<dyn deepref_ai::AiConcurrencyAdmission>,
+                None => canonical,
+            };
             let gateway = deepref_ai::build_metered_provider(
                 provider.id(),
                 &ai_config.base_url,
                 api_key,
                 std::sync::Arc::new(deepref_app::PostgresUsageLedger::new(&pool)),
                 price_book(ai_config),
-                std::sync::Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(&pool)),
+                admission,
                 deepref_ai::AiConcurrencyLimits {
                     workspace: ai_config.max_concurrent_per_workspace,
                     route: ai_config.max_concurrent_per_route,

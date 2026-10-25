@@ -19,3 +19,36 @@ The facade exposes closed backend/purpose/outcome and latency observations plus 
 This rate-limit slice does not complete handoff 06. Valkey concurrency admission, useful cache-aside metadata, the deployed metrics bridge, failure/load acceptance and production cutover remain pending. Existing PostgreSQL AI slots, financial reservations, billing projections, scientific records and durable jobs retain their existing authority.
 
 A rolling upgrade may still contain binaries with the old process-local hook limiter or API-key code without this shared counter. The global operational-limit guarantee begins only after every serving API replica participates in the PostgreSQL ceiling; drain those older replicas before declaring distributed-limit acceptance or activating reliance on the Valkey path. Ordinary schema expansion and legacy handlers remain compatible during overlap, but an unaware binary cannot be counted as sharing the new operational budget. The existing financial/quota PostgreSQL checks remain separate throughout that rollout.
+
+## AI concurrency mirrors
+
+When Valkey is configured, API and worker AI admission use TTL mirrors in addition
+to PostgreSQL's workspace and provider-route leases. Every dispatch still needs
+both PostgreSQL slots. Valkey can refuse before a database claim, or refuse a
+racing claim after the database grants it; the latter reports saturation only
+after exact database release succeeds. A failed release remains an explicit
+persistence failure with lease expiry as the fallback.
+
+Keys are `deepref:<deployment>:concurrency:v1:workspace:<uuid>` and
+`deepref:<deployment>:concurrency:v1:route:<sha256>`. Sorted-set members contain
+only holder UUID, generation and slot index. Expired members are removed using
+Valkey server time. Each key expires after the lease TTL (60 seconds in
+production); each set is bounded by its configured limit, at most 10,000.
+Namespaces, route catalog and live workspace count bound key cardinality. There
+is no global scan or wildcard deletion on a request path.
+
+PostgreSQL renews first. Optional mirror refresh uses at most one quarter of the
+remaining heartbeat interval and cannot turn a confirmed database renewal into
+a lost lease. Refresh cannot insert a missing member, so a delayed refresh
+cannot resurrect a release. After reset, live calls may be absent from Valkey
+until a subsequent acquire; PostgreSQL still counts them. Timed-out writes are
+never blindly retried and may leave restrictive ghosts until TTL. Exact member
+removal cannot remove a newer generation. PostgreSQL releases before mirror
+cleanup; crash and cancellation retain the database expiry fallback.
+
+Deleting Valkey, partitioning a subset of replicas or running database-only
+replicas cannot create independent grant budgets. Neither mirror contents nor
+its availability changes financial holds, settlements or scientific data.
+Closed observer dimensions expose scope kind, operation, outcome and latency;
+the deployed metrics/exporter bridge and live TLS/load acceptance remain
+separate release requirements. Cluster/sentinel behavior is not claimed.

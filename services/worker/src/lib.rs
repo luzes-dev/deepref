@@ -45,6 +45,7 @@ pub mod workflows;
 async fn build_ai_gateway(
     pool: &sqlx::PgPool,
     ai_config: &deepref_config::AiProviderConfig,
+    valkey: Option<&deepref_config::ValkeyConfig>,
 ) -> anyhow::Result<Arc<dyn AiGateway>> {
     for notice in ai_config.deprecations() {
         tracing::warn!("{notice}");
@@ -79,16 +80,41 @@ async fn build_ai_gateway(
         routes_repointed = routes.repointed,
         "AI provider configured for jobs"
     );
+    let admission = ai_concurrency_admission(pool, valkey);
     let gateway = deepref_ai::build_metered_provider(
         provider.id(),
         &ai_config.base_url,
         api_key,
         Arc::new(deepref_app::PostgresUsageLedger::new(pool)),
         prices,
-        Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(pool)),
+        admission,
         concurrency_limits(ai_config),
     )?;
     Ok(gateway)
+}
+
+fn ai_concurrency_admission(
+    pool: &sqlx::PgPool,
+    valkey: Option<&deepref_config::ValkeyConfig>,
+) -> Arc<dyn deepref_ai::AiConcurrencyAdmission> {
+    let canonical = Arc::new(deepref_app::PostgresAiConcurrencyAdmission::new(pool));
+    if let Some(config) = valkey {
+        match deepref_integrations::valkey_concurrency::ValkeyConcurrencyMirror::from_config(config)
+        {
+            Ok(mirror) => {
+                return Arc::new(
+                    deepref_app::mirrored_concurrency::MirroredAiConcurrencyAdmission::new(
+                        canonical,
+                        Arc::new(mirror),
+                    ),
+                );
+            }
+            Err(_) => {
+                tracing::warn!("Valkey concurrency mirror unavailable; using PostgreSQL leases")
+            }
+        }
+    }
+    canonical
 }
 
 /// The simultaneous-call ceilings one process admits its AI calls under.
@@ -187,7 +213,8 @@ pub async fn run_with_shutdown(
         .await?;
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     let document_store = Arc::new(DocumentStore::from_config(&config.documents)?);
-    let ai_gateway = build_ai_gateway(&pool, &config.runtime.ai).await?;
+    let ai_gateway =
+        build_ai_gateway(&pool, &config.runtime.ai, config.runtime.valkey.as_ref()).await?;
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
     workflows::set_autonomy_gate(Arc::new(deepref_app::ProjectAutonomyGate::new(&pool)));
