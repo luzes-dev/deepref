@@ -54,6 +54,60 @@ impl ValkeyFixtureControl {
         ValkeyRateAccelerator::from_config(&self.config)
     }
 
+    pub fn project_count_cache(
+        &self,
+    ) -> Result<
+        crate::valkey_project_counts::ValkeyProjectCountCache,
+        deepref_application::project_count_cache::CountCacheUnavailable,
+    > {
+        crate::valkey_project_counts::ValkeyProjectCountCache::from_config(&self.config)
+    }
+
+    pub fn unavailable_project_count_cache() -> Result<
+        crate::valkey_project_counts::ValkeyProjectCountCache,
+        deepref_application::project_count_cache::CountCacheUnavailable,
+    > {
+        crate::valkey_project_counts::ValkeyProjectCountCache::from_config(&ValkeyConfig {
+            url: "redis://127.0.0.1:1".to_owned().into(),
+            namespace: "contract-unavailable".to_owned(),
+            timeout: std::time::Duration::from_millis(20),
+        })
+    }
+
+    /// Poison only an exact key in this owned contract namespace.
+    pub async fn set_project_count(
+        &mut self,
+        key: deepref_application::project_count_cache::ProjectCountKey,
+        value: &[u8],
+        ttl: std::time::Duration,
+    ) -> Result<(), RateLimitUnavailable> {
+        redis::cmd("SET")
+            .arg(crate::valkey_project_counts::count_key(
+                &self.namespace,
+                key,
+            ))
+            .arg(value)
+            .arg("PX")
+            .arg(ttl.as_millis() as u64)
+            .query_async(&mut self.connection)
+            .await
+            .map_err(|_| RateLimitUnavailable)
+    }
+
+    pub async fn project_count_ttl(
+        &mut self,
+        key: deepref_application::project_count_cache::ProjectCountKey,
+    ) -> Result<i64, RateLimitUnavailable> {
+        redis::cmd("PTTL")
+            .arg(crate::valkey_project_counts::count_key(
+                &self.namespace,
+                key,
+            ))
+            .query_async(&mut self.connection)
+            .await
+            .map_err(|_| RateLimitUnavailable)
+    }
+
     pub fn concurrency_mirror(
         &self,
     ) -> Result<

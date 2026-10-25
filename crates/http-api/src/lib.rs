@@ -485,6 +485,17 @@ pub async fn serve_with_shutdown(
     }
 
     if let Some(valkey) = &config.runtime.valkey {
+        state.project_count_cache =
+            deepref_integrations::valkey_project_counts::ValkeyProjectCountCache::from_config(
+                valkey,
+            )
+            .ok()
+            .map(|cache| {
+                std::sync::Arc::new(cache)
+                    as std::sync::Arc<
+                        dyn deepref_application::project_count_cache::ProjectCountCache,
+                    >
+            });
         match deepref_integrations::valkey::ValkeyRateAccelerator::from_config(valkey) {
             Ok(accelerator) => {
                 state = state.with_rate_limiter(std::sync::Arc::new(

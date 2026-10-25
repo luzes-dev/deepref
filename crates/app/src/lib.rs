@@ -284,3 +284,5 @@ pub use ai_first::{
 
 pub mod billing;
 pub mod work_publication;
+
+pub mod project_counts;

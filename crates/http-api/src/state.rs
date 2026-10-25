@@ -24,6 +24,8 @@ pub struct AppState {
     pub pool: PgPool,
     pub billing: Option<deepref_app::billing::BillingService>,
     pub rate_limiter: Arc<dyn deepref_application::rate_limits::RateLimiter>,
+    pub project_count_cache:
+        Option<Arc<dyn deepref_application::project_count_cache::ProjectCountCache>>,
     pub started_at: Instant,
     pub document_store: Option<DocumentStore>,
     pub ai_gateway: Arc<dyn AiGateway>,
@@ -58,6 +60,7 @@ impl AppState {
             rate_limiter: Arc::new(deepref_app::rate_limits::PostgresRateLimiter::new(
                 pool.clone(),
             )),
+            project_count_cache: None,
             pool,
             billing: None,
             started_at: Instant::now(),
