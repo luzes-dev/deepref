@@ -3,9 +3,7 @@ use axum::{
     extract::{Path, State},
 };
 use chrono::{DateTime, Utc};
-use deepref_domain::graph::ProjectionState;
 use serde::Serialize;
-use sqlx::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -14,10 +12,12 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, serde::Deserialize, ToSchema)]
 pub struct ProjectionStatusDto {
     pub project_id: Uuid,
     pub state: String,
+    pub requested_revision: i64,
+    pub applied_revision: i64,
     pub revision: i64,
     pub watermark: i64,
     pub lag: i64,
@@ -33,29 +33,21 @@ pub async fn get_projection(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<ProjectionStatusDto>, ApiError> {
-    let row = sqlx::query(
-        "SELECT state,revision,watermark,lag,last_success_at,last_error,rebuild_state \
-         FROM projection_state WHERE projection_name='postgres_graph' AND (project_id=$1 OR project_id IS NULL) \
-         ORDER BY project_id NULLS LAST LIMIT 1",
-    ).bind(project_id).fetch_one(&state.pool).await?;
-    let projection_state = row
-        .try_get::<String, _>("state")?
-        .parse::<ProjectionState>()
-        .map_err(|error| ApiError::Internal(error.into()))?;
-    let rebuild_state: Option<String> = row.try_get("rebuild_state")?;
-    if let Some(value) = rebuild_state {
-        return Err(ApiError::Internal(anyhow::anyhow!(
-            "unsupported persisted graph rebuild state: {value}"
-        )));
-    }
+    let status = deepref_app::get_projection_status(&state.pool, project_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
+
     Ok(Json(ProjectionStatusDto {
-        project_id,
-        state: projection_state.as_str().to_owned(),
-        revision: row.get("revision"),
-        watermark: row.get("watermark"),
-        lag: row.get("lag"),
-        last_success_at: row.get("last_success_at"),
-        last_error: row.get("last_error"),
-        rebuild_state: None,
+        project_id: status.project_id,
+        state: status.state.as_str().to_owned(),
+        requested_revision: status.requested_revision,
+        applied_revision: status.applied_revision,
+        revision: status.revision,
+        watermark: status.watermark,
+        lag: status.lag,
+        last_success_at: status.last_success_at,
+        last_error: status.last_error,
+        rebuild_state: status.rebuild_state,
     }))
 }

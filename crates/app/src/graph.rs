@@ -3,12 +3,27 @@ use deepref_domain::ProjectId;
 use deepref_domain::graph::{
     GraphAppraisalOverlay, GraphEdge, GraphFieldSelection, GraphMetricsOverlay, GraphNode,
     GraphProvenanceOverlay, GraphScreeningOverlay, GraphStudyOverlay, ProjectGraph,
+    ProjectionState,
 };
 use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
 use uuid::Uuid;
 
 pub const MAX_GRAPH_NODES: i64 = 2_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectionStatus {
+    pub project_id: Uuid,
+    pub state: ProjectionState,
+    pub requested_revision: i64,
+    pub applied_revision: i64,
+    pub revision: i64,
+    pub watermark: i64,
+    pub lag: i64,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub rebuild_state: Option<String>,
+}
 
 /// Loads the bounded project graph from canonical UUID rows. This adapter owns
 /// SQL and ordering; the graph crate only contains in-memory data and analysis.
@@ -18,6 +33,158 @@ pub async fn load_project_graph(
     fields: GraphFieldSelection,
 ) -> anyhow::Result<ProjectGraph> {
     load_project_graph_with_limit(pool, project_id, fields, Some(MAX_GRAPH_NODES)).await
+}
+
+/// Strict read-after-write graph loader: ensures graph projection is synchronized with
+/// canonical mutations (or recomputed if lagging) before returning, guaranteeing
+/// snapshot consistency and avoiding hidden stale state.
+/// Strict read loader: checks projection freshness and returns the bounded project graph
+/// along with truthful projection status. If the read model lags canonical mutations,
+/// it returns explicit lagging/pending status rather than hiding stale state or
+/// blocking the HTTP request with synchronous unbounded graph computation.
+pub async fn load_project_graph_strict(
+    pool: &PgPool,
+    project_id: Uuid,
+    fields: GraphFieldSelection,
+) -> anyhow::Result<(ProjectGraph, ProjectionStatus)> {
+    let status = get_projection_status(pool, project_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
+    let graph = load_project_graph(pool, project_id, fields).await?;
+    Ok((graph, status))
+}
+
+/// Query projection status for a project with strict tenant scoping.
+/// Eliminates global NULL-project row leakage and derives truthful state
+/// (pending, ready, lagging, rebuilding, failed) with requested vs applied revision.
+pub async fn get_projection_status(
+    pool: &PgPool,
+    project_id: Uuid,
+) -> anyhow::Result<Option<ProjectionStatus>> {
+    let project_row = sqlx::query("SELECT metric_requested_revision FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await?;
+
+    let Some(project) = project_row else {
+        return Ok(None);
+    };
+    let requested_revision: i64 = project.get("metric_requested_revision");
+
+    let row = sqlx::query(
+        "SELECT state, revision, watermark, lag, last_success_at, last_error, rebuild_state \
+         FROM projection_state \
+         WHERE projection_name = 'postgres_graph' AND project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(row) = row {
+        let applied_revision: i64 = row.get("watermark");
+        let lag = (requested_revision - applied_revision).max(0);
+        let rebuild_state: Option<String> = row.get("rebuild_state");
+        let last_error: Option<String> = row.get("last_error");
+        let last_success_at: Option<DateTime<Utc>> = row.get("last_success_at");
+        let persisted_state: String = row.get("state");
+
+        let state = if rebuild_state.is_some() || persisted_state == "rebuilding" {
+            ProjectionState::Rebuilding
+        } else if last_error.is_some() || persisted_state == "failed" {
+            ProjectionState::Failed
+        } else if lag > 0 {
+            ProjectionState::Lagging
+        } else if last_success_at.is_none() || persisted_state == "pending" {
+            // Never mark revision 0 fresh absent actual successful projection!
+            ProjectionState::Pending
+        } else {
+            ProjectionState::Ready
+        };
+
+        Ok(Some(ProjectionStatus {
+            project_id,
+            state,
+            requested_revision,
+            applied_revision,
+            revision: applied_revision,
+            watermark: applied_revision,
+            lag,
+            last_success_at,
+            last_error,
+            rebuild_state,
+        }))
+    } else {
+        let lag = requested_revision;
+        let state = if requested_revision > 0 {
+            ProjectionState::Lagging
+        } else {
+            ProjectionState::Pending
+        };
+        Ok(Some(ProjectionStatus {
+            project_id,
+            state,
+            requested_revision,
+            applied_revision: 0,
+            revision: 0,
+            watermark: 0,
+            lag,
+            last_success_at: None,
+            last_error: None,
+            rebuild_state: None,
+        }))
+    }
+}
+
+/// Administrative / operator rebuild path for a project projection.
+/// Resets read model state and enqueues a durable recompute job from canonical tables.
+pub async fn rebuild_project_projection(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Uuid> {
+    let mut transaction = pool.begin().await?;
+    let project_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)")
+            .bind(project_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+    if !project_exists {
+        anyhow::bail!("project not found: {project_id}");
+    }
+
+    let updated = sqlx::query(
+        "UPDATE projection_state
+         SET state = 'rebuilding', rebuild_state = 'rebuilding', updated_at = now()
+         WHERE projection_name = 'postgres_graph' AND project_id = $1",
+    )
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        sqlx::query(
+            "INSERT INTO projection_state
+               (projection_name, project_id, state, revision, watermark, lag, rebuild_state, updated_at)
+             VALUES ('postgres_graph', $1, 'rebuilding', 0, 0, 0, 'rebuilding', now())",
+        )
+        .bind(project_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    sqlx::query(
+        "UPDATE project_reports
+         SET metrics_computed_at = NULL
+         WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    sqlx::query("DELETE FROM metric_snapshots WHERE project_id = $1")
+        .bind(project_id)
+        .execute(&mut *transaction)
+        .await?;
+
+    let job_id = enqueue_metrics_recompute(&mut transaction, project_id).await?;
+    transaction.commit().await?;
+    Ok(job_id)
 }
 
 async fn load_project_graph_with_limit(
@@ -232,26 +399,35 @@ async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyh
 
     let projection_update = sqlx::query(
         "UPDATE projection_state
-         SET state='ready', revision=$1, watermark=$1, lag=0,
+         SET state='ready', revision=$1, watermark=GREATEST(COALESCE(watermark, 0), $1), lag=0,
              last_success_at=$2, last_error=NULL, rebuild_state=NULL, updated_at=$2
-         WHERE projection_name='postgres_graph' AND project_id=$3",
+         WHERE projection_name='postgres_graph' AND project_id=$3 AND watermark <= $1",
     )
     .bind(current_revision)
     .bind(computed_at)
     .bind(project_id)
     .execute(&mut *transaction)
     .await?;
+
     if projection_update.rows_affected() == 0 {
-        sqlx::query(
-            "INSERT INTO projection_state
-               (projection_name, project_id, state, revision, watermark, lag, last_success_at, updated_at)
-             VALUES ('postgres_graph',$1,'ready',$2,$2,0,$3,$3)",
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM projection_state WHERE projection_name='postgres_graph' AND project_id=$1)",
         )
         .bind(project_id)
-        .bind(current_revision)
-        .bind(computed_at)
-        .execute(&mut *transaction)
+        .fetch_one(&mut *transaction)
         .await?;
+        if !exists {
+            sqlx::query(
+                "INSERT INTO projection_state
+                   (projection_name, project_id, state, revision, watermark, lag, last_success_at, updated_at)
+                 VALUES ('postgres_graph',$1,'ready',$2,$2,0,$3,$3)",
+            )
+            .bind(project_id)
+            .bind(current_revision)
+            .bind(computed_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
     }
     transaction.commit().await?;
     Ok(())

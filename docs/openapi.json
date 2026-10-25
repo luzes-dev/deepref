@@ -6609,6 +6609,17 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "strict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -19694,11 +19705,17 @@
         "required": [
           "project_id",
           "state",
+          "requested_revision",
+          "applied_revision",
           "revision",
           "watermark",
           "lag"
         ],
         "properties": {
+          "applied_revision": {
+            "type": "integer",
+            "format": "int64"
+          },
           "lag": {
             "type": "integer",
             "format": "int64"
@@ -19725,6 +19742,10 @@
               "string",
               "null"
             ]
+          },
+          "requested_revision": {
+            "type": "integer",
+            "format": "int64"
           },
           "revision": {
             "type": "integer",

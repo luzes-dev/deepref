@@ -685,8 +685,23 @@ async fn handle_recompute_metrics_job(
     if request.revision < 0 {
         anyhow::bail!("metric request revision must be nonnegative");
     }
-    deepref_app::recompute_project_metrics(pool, request.project_id).await?;
-    Ok(DeliveryAction::Ack)
+    match deepref_app::recompute_project_metrics(pool, request.project_id).await {
+        Ok(()) => Ok(DeliveryAction::Ack),
+        Err(error) => {
+            let error_text = error.to_string();
+            let _ = sqlx::query(
+                "UPDATE projection_state
+                 SET state = 'failed', last_error = $1, updated_at = now()
+                 WHERE projection_name = 'postgres_graph' AND project_id = $2 AND watermark <= $3",
+            )
+            .bind(&error_text)
+            .bind(request.project_id)
+            .bind(request.revision)
+            .execute(pool)
+            .await;
+            Err(error)
+        }
+    }
 }
 
 /// Upper bound on passes for one import, so a huge import cannot pin a worker.

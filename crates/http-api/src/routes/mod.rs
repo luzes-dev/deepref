@@ -938,3 +938,5 @@ mod tests {
         }
     }
 }
+
+pub use projection::ProjectionStatusDto;

@@ -6,6 +6,7 @@
  */
 
 export interface ProjectionStatusDto {
+	applied_revision: number;
 	lag: number;
 	/** @nullable */
 	last_error?: string | null;
@@ -14,6 +15,7 @@ export interface ProjectionStatusDto {
 	project_id: string;
 	/** @nullable */
 	rebuild_state?: string | null;
+	requested_revision: number;
 	revision: number;
 	state: string;
 	watermark: number;

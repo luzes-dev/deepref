@@ -130,6 +130,7 @@ pub(crate) struct ProjectGraphDto {
 #[derive(Debug, Deserialize, IntoParams)]
 pub(crate) struct GraphQuery {
     fields: Option<String>,
+    strict: Option<bool>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -251,16 +252,36 @@ pub(crate) async fn project_graph(
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<ProjectGraphDto>, ApiError> {
     let fields = parse_graph_fields(query.fields.as_deref())?;
-    let project_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-            .bind(project_id)
-            .fetch_one(&state.pool)
-            .await?;
-    if !project_exists {
-        return Err(ApiError::NotFound("project not found".to_owned()));
-    }
-    let projection = projection_metadata(&state, project_id).await?;
-    let graph = deepref_app::load_project_graph(&state.pool, project_id, fields).await?;
+    let (graph, projection) = if query.strict.unwrap_or(false) {
+        let (graph, status) =
+            deepref_app::load_project_graph_strict(&state.pool, project_id, fields)
+                .await
+                .map_err(|e| {
+                    if e.to_string().contains("project not found") {
+                        ApiError::NotFound("project not found".to_owned())
+                    } else {
+                        ApiError::Internal(e)
+                    }
+                })?;
+        let projection = ProjectionMetadata {
+            revision: status.watermark,
+            lag: status.lag,
+            last_success_at: status.last_success_at,
+        };
+        (graph, projection)
+    } else {
+        let project_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
+                .bind(project_id)
+                .fetch_one(&state.pool)
+                .await?;
+        if !project_exists {
+            return Err(ApiError::NotFound("project not found".to_owned()));
+        }
+        let projection = projection_metadata(&state, project_id).await?;
+        let graph = deepref_app::load_project_graph(&state.pool, project_id, fields).await?;
+        (graph, projection)
+    };
     let nodes = graph.nodes.into_iter().map(graph_node_dto).collect();
     let edges = graph
         .edges
@@ -385,24 +406,16 @@ async fn projection_metadata(
     state: &AppState,
     project_id: Uuid,
 ) -> Result<ProjectionMetadata, ApiError> {
-    let row = sqlx::query(
-    "SELECT revision,lag,last_success_at FROM projection_state WHERE projection_name='postgres_graph' AND (project_id=$1 OR project_id IS NULL) ORDER BY project_id NULLS LAST LIMIT 1",
-    )
-    .bind(project_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    Ok(row.map_or(
-        ProjectionMetadata {
-            revision: 0,
-            lag: 0,
-            last_success_at: None,
-        },
-        |row| ProjectionMetadata {
-            revision: row.get("revision"),
-            lag: row.get("lag"),
-            last_success_at: row.get("last_success_at"),
-        },
-    ))
+    let status = deepref_app::get_projection_status(&state.pool, project_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
+
+    Ok(ProjectionMetadata {
+        revision: status.watermark,
+        lag: status.lag,
+        last_success_at: status.last_success_at,
+    })
 }
 
 fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {

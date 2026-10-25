@@ -41,6 +41,24 @@ pub async fn backfill_project_workspaces(config: &ApiConfig) -> anyhow::Result<(
     Ok(())
 }
 
+/// Rebuilds project graph read model from canonical source tables.
+pub async fn rebuild_project_projection(
+    config: &ApiConfig,
+    project_id: Uuid,
+) -> anyhow::Result<Uuid> {
+    let pool = database_pool(config).await?;
+    deepref_app::rebuild_project_projection(&pool, project_id).await
+}
+
+/// Retrieves current projection status for a project.
+pub async fn get_project_projection_status(
+    config: &ApiConfig,
+    project_id: Uuid,
+) -> anyhow::Result<Option<deepref_app::ProjectionStatus>> {
+    let pool = database_pool(config).await?;
+    deepref_app::get_projection_status(&pool, project_id).await
+}
+
 /// Apply a trusted operator mapping from a pre-canonical actor label to a
 /// DeepRef user. The app store commits the mapping and its audit row together.
 pub async fn legacy_actor_map(

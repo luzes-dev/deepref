@@ -32,7 +32,14 @@ pub enum Command {
     Audit(AuditCommand),
     Accounts(AccountsCommand),
     AiUsage(AiUsageCommand),
+    Projection(ProjectionCommand),
     PrintOpenApi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionCommand {
+    Rebuild { project_id: Uuid },
+    Status { project_id: Uuid },
 }
 
 /// Administrative audit tooling (handoff 11 Part B).
@@ -398,6 +405,16 @@ impl Command {
                     fields().deny()
                 }))
             }
+            [command, action, project_id] if command == "projection" && action == "rebuild" => {
+                Ok(Self::Projection(ProjectionCommand::Rebuild {
+                    project_id: parse_uuid(project_id, "project UUID")?,
+                }))
+            }
+            [command, action, project_id] if command == "projection" && action == "status" => {
+                Ok(Self::Projection(ProjectionCommand::Status {
+                    project_id: parse_uuid(project_id, "project UUID")?,
+                }))
+            }
             [command, action] if command == "accounts" && action == "complete-deletions" => {
                 Ok(Self::Accounts(AccountsCommand::CompleteDeletions))
             }
@@ -705,6 +722,33 @@ mod tests {
             })
         );
         assert!(Command::parse(["import-legacy".into()]).is_err());
+    }
+
+    #[test]
+    fn parses_projection_commands() {
+        let project_id = Uuid::new_v4();
+        assert_eq!(
+            Command::parse([
+                "projection".into(),
+                "rebuild".into(),
+                project_id.to_string()
+            ])
+            .unwrap(),
+            Command::Projection(ProjectionCommand::Rebuild { project_id })
+        );
+        assert_eq!(
+            Command::parse(["projection".into(), "status".into(), project_id.to_string()]).unwrap(),
+            Command::Projection(ProjectionCommand::Status { project_id })
+        );
+        assert!(Command::parse(["projection".into(), "rebuild".into()]).is_err());
+        assert!(
+            Command::parse([
+                "projection".into(),
+                "invalid".into(),
+                project_id.to_string()
+            ])
+            .is_err()
+        );
     }
 
     #[test]
