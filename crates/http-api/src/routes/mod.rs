@@ -8,6 +8,7 @@ mod assistant;
 mod auth;
 mod automations;
 mod autonomy;
+mod billing;
 mod deduplication;
 mod documents;
 mod exports;
@@ -48,6 +49,10 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
     openapi.info = Info::new("DeepRef API", env!("CARGO_PKG_VERSION"));
 
     let base = OpenApiRouter::with_openapi(openapi)
+        .routes(routes!(billing::provision))
+        .routes(routes!(billing::checkout))
+        .routes(routes!(billing::portal))
+        .routes(routes!(billing::webhook))
         .routes(routes!(api_keys::list, api_keys::create))
         .routes(routes!(api_keys::revoke))
         .routes(routes!(api_keys::rotate))

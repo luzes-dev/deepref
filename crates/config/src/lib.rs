@@ -3,6 +3,7 @@ mod api;
 mod database;
 mod deletion_digest;
 mod document;
+mod dodo;
 mod environment;
 mod error;
 mod integrations;
@@ -30,6 +31,7 @@ pub use deletion_digest::DeletionDigestConfig;
 pub use document::{
     DEFAULT_MAX_DOCUMENT_BYTES, DocumentConfig, DocumentStorageBackend, MAX_DOCUMENT_BYTES,
 };
+pub use dodo::{DodoConfig, DodoMode, DodoOffering};
 pub use environment::{APP_ENV, Environment, load_development_dotenv_files};
 pub use error::ConfigError;
 pub use integrations::{IntegrationsConfig, OpenAlexCorpus};
@@ -57,6 +59,7 @@ pub struct RuntimeConfig {
     pub auth_enabled: bool,
     pub workos: Option<WorkOsConfig>,
     pub polar: Option<PolarConfig>,
+    pub dodo: Option<DodoConfig>,
     pub database: DatabaseConfig,
     pub telemetry: TelemetryConfig,
     pub workflow: WorkflowConfig,
@@ -95,6 +98,7 @@ impl RuntimeConfig {
             public_origin: PublicOrigin::from_source(environment, get)?,
             workos: WorkOsConfig::from_source(environment, auth_enabled, get)?,
             polar: PolarConfig::from_source(environment, get)?,
+            dodo: DodoConfig::from_source(get, PublicOrigin::from_source(environment, get)?)?,
             auth_enabled,
             database: DatabaseConfig::from_source(environment, get)?,
             telemetry: TelemetryConfig::from_source(service_name, get)?,
