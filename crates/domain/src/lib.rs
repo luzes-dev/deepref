@@ -1,3 +1,4 @@
+pub mod billing;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;

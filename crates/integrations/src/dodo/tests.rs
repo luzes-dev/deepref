@@ -1,0 +1,321 @@
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+use super::*;
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    extract::{Request, State},
+    response::Response,
+    routing::any,
+};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+fn config() -> DodoConfig {
+    deepref_config::RuntimeConfig::from_map("test",&HashMap::from([
+            ("APP_ENV".into(), "development".into()),
+        ("DODO_MODE".into(),"test_mode".into()),("DODO_BUSINESS_ID".into(),"bus_test".into()),("DODO_API_KEY".into(),"credential-never-log".into()),
+        ("DODO_WEBHOOK_KEY".into(),"whsec_MDEyMzQ1Njc4OWFiY2RlZg==".into()),
+        ("DODO_WEBHOOK_KEY_PREVIOUS".into(),"whsec_ZmVkY2JhOTg3NjU0MzIxMA==".into()),
+        ("DODO_OFFERINGS_JSON".into(),r#"[{"offering":"primary","product_id":"pdt_reviewed","entitlements":{"features":["ai_first"],"projects":8,"members":2,"monthly_ai_units":0}}]"#.into())
+    ])).unwrap().dodo.unwrap()
+}
+#[derive(Clone)]
+struct Fixture {
+    responses: Arc<Mutex<std::collections::VecDeque<(u16, String)>>>,
+    requests: Arc<Mutex<Vec<(String, Value)>>>,
+}
+async fn serve(State(f): State<Fixture>, request: Request) -> Response {
+    assert_eq!(
+        request.headers().get("authorization").unwrap(),
+        "Bearer credential-never-log"
+    );
+    let path = request.uri().to_string();
+    let body = to_bytes(request.into_body(), 1024 * 1024).await.unwrap();
+    let value = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap()
+    };
+    f.requests.lock().unwrap().push((path, value));
+    let (status, body) = f
+        .responses
+        .lock()
+        .unwrap()
+        .pop_front()
+        .expect("unexpected provider request");
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+async fn adapter(
+    responses: Vec<(u16, Value)>,
+) -> (DodoBilling, Fixture, tokio::task::JoinHandle<()>) {
+    let f = Fixture {
+        responses: Arc::new(Mutex::new(
+            responses
+                .into_iter()
+                .map(|(s, b)| (s, b.to_string()))
+                .collect(),
+        )),
+        requests: Default::default(),
+    };
+    let app = Router::new().fallback(any(serve)).with_state(f.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut dodo = DodoBilling::new(config()).unwrap();
+    dodo.origin = origin;
+    (dodo, f, task)
+}
+#[tokio::test]
+async fn hosted_contract_is_closed_nullable_and_does_not_send_portal_email() {
+    let (dodo, f, task) = adapter(vec![
+        (
+            200,
+            json!({"checkout_url":"https://test.checkout.dodopayments.com/session/capability"}),
+        ),
+        (
+            200,
+            json!({"link":"https://test.customer.dodopayments.com/session/capability"}),
+        ),
+        (200, json!({"checkout_url":null})),
+    ])
+    .await;
+    let c = CustomerReference::new("cus_test".into()).unwrap();
+    assert!(
+        dodo.checkout(&c, Offering::Primary, "/settings/billing")
+            .await
+            .is_ok()
+    );
+    assert!(dodo.portal(&c, "/settings").await.is_ok());
+    assert!(matches!(
+        dodo.checkout(&c, Offering::Primary, "/settings").await,
+        Err(BillingError::Contract)
+    ));
+    assert!(matches!(
+        dodo.checkout(&c, Offering::Primary, "//evil.test").await,
+        Err(BillingError::Refused)
+    ));
+    let requests = f.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[0].1,
+        json!({"customer":{"customer_id":"cus_test"},"product_cart":[{"product_id":"pdt_reviewed","quantity":1}],"return_url":"http://127.0.0.1:5173/settings/billing"})
+    );
+    assert!(requests[1].0.contains("send_email=false"));
+    assert_eq!(requests[1].1, Value::Null);
+    task.abort();
+}
+#[test]
+fn hosted_links_reject_other_modes_credentials_fragments_and_unsafe_schemes() {
+    let dodo = DodoBilling::new(config()).unwrap();
+    for url in [
+        "http://test.checkout.dodopayments.com/x",
+        "https://checkout.dodopayments.com/x",
+        "https://test.checkout.dodopayments.com.evil.test/x",
+        "https://user@test.checkout.dodopayments.com/x",
+        "https://test.checkout.dodopayments.com/x#secret",
+        "https://test.customer.dodopayments.com/x",
+    ] {
+        assert!(dodo.hosted(Some(url.into()), false).is_err(), "{url}");
+    }
+}
+#[tokio::test]
+async fn unknown_creation_never_retries_post_and_zero_or_incomplete_scan_is_unresolved() {
+    let (dodo, f, task) = adapter(vec![
+        (503, json!({"error":"credential-never-log"})),
+        (200, json!({"items":[]})),
+    ])
+    .await;
+    let op = Uuid::new_v4();
+    let contact =
+        BillingContact::parse("owner@example.test".into(), "Billing owner".into()).unwrap();
+    assert!(matches!(
+        dodo.create_customer(CustomerIntent {
+            workspace: Uuid::new_v4().into(),
+            operation: op,
+            contact: &contact
+        })
+        .await,
+        Err(BillingError::Ambiguous)
+    ));
+    assert!(matches!(
+        dodo.resolve_customer(op).await,
+        Ok(CustomerResolution::Unresolved)
+    ));
+    let requests = f.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].1,
+        json!({"email":"owner@example.test","name":"Billing owner","metadata":{"deepref_operation":op.to_string()}})
+    );
+    assert!(!requests[1].0.contains("email"));
+    task.abort();
+}
+#[tokio::test]
+async fn current_active_subscription_carries_adverse_payment_evidence() {
+    let (dodo,_,task)=adapter(vec![(200,json!({"business_id":"bus_test","customer_id":"cus_test"})),(200,json!({"items":[{"subscription_id":"sub_fixture","customer":{"customer_id":"cus_test"},"product_id":"pdt_reviewed","status":"active"}]})),(200,json!({"items":[]})),(200,json!({"items":[{"customer":{"customer_id":"cus_test"},"payment_id":"pay_1","refund_status":"full","dispute_status":null}]})),(200,json!({"items":[]}))]).await;
+    let result = dodo
+        .observe(&CustomerReference::new("cus_test".into()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(result.state, SubscriptionState::Active);
+    assert!(result.review.is_some());
+    task.abort();
+}
+#[test]
+fn independent_python_standard_webhook_vectors_authenticate_raw_bytes_rotation_and_replay() {
+    // Generated independently using Python stdlib hmac/sha256/base64, not this
+    // verifier. Exact body includes whitespace; reserialization must fail.
+    let dodo = DodoBilling::new(config()).unwrap();
+    let body=br#"{ "business_id":"bus_test", "type":"subscription.active", "timestamp":"2026-10-24T00:00:00Z", "data":{"customer":{"customer_id":"cus_test"}} }"#;
+    let now = chrono::DateTime::from_timestamp(1792800000, 0).unwrap();
+    let verify = |b: &[u8], signature: &str, at| {
+        dodo.verify(
+            b,
+            WebhookHeaders {
+                id: "msg_vector",
+                timestamp: "1792800000",
+                signatures: signature,
+            },
+            at,
+        )
+    };
+    assert!(verify(body, "v1,e9FSoXqpQb7bEcw2l7sZ3iEG48qMoUsW5+xO3uNjRJY=", now).is_ok());
+    assert!(
+        verify(
+            body,
+            "v1,invalid v1,6fx+8NaffAJBRtlmAioOqUEPg3/sk+EoLxfD+6CxONg=",
+            now
+        )
+        .is_ok()
+    );
+    assert!(
+        verify(
+            br#"{}"#,
+            "v1,e9FSoXqpQb7bEcw2l7sZ3iEG48qMoUsW5+xO3uNjRJY=",
+            now
+        )
+        .is_err()
+    );
+    assert!(
+        verify(
+            body,
+            "v1,e9FSoXqpQb7bEcw2l7sZ3iEG48qMoUsW5+xO3uNjRJY=",
+            now + chrono::Duration::seconds(301)
+        )
+        .is_err()
+    );
+    let different = String::from_utf8(body.to_vec())
+        .unwrap()
+        .replace("bus_test", "bus_else");
+    assert!(
+        verify(
+            different.as_bytes(),
+            "v1,e9FSoXqpQb7bEcw2l7sZ3iEG48qMoUsW5+xO3uNjRJY=",
+            now
+        )
+        .is_err()
+    );
+    assert!(
+        matches!(
+            verify(
+                different.as_bytes(),
+                "v1,DLlFjSQwGoO7RH7aovRELXGkXsUgU6apWFsXpCw4SdY=",
+                now
+            ),
+            Err(BillingError::Refused)
+        ),
+        "a correctly signed foreign-business envelope must be refused"
+    );
+    let compact = serde_json::to_vec(&serde_json::from_slice::<Value>(body).unwrap()).unwrap();
+    assert!(
+        verify(
+            &compact,
+            "v1,e9FSoXqpQb7bEcw2l7sZ3iEG48qMoUsW5+xO3uNjRJY=",
+            now
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn bounded_customer_scan_never_claims_unique_match_from_incomplete_pages() {
+    let customer = json!({"business_id":"bus_test","customer_id":"cus_unrelated","metadata":{}});
+    let responses = (0..10)
+        .map(|_| (200, json!({"items":[customer.clone()]})))
+        .collect();
+    let (dodo, f, task) = adapter(responses).await;
+    assert!(matches!(
+        dodo.resolve_customer(Uuid::new_v4()).await,
+        Err(BillingError::Ambiguous)
+    ));
+    let requests = f.requests.lock().unwrap();
+    assert_eq!(requests.len(), 10);
+    assert!(requests[0].0.contains("page_number=1&"));
+    assert!(requests[9].0.contains("page_number=10&"));
+    task.abort();
+}
+
+#[test]
+fn configured_scope_binds_mode_and_business_without_logging_provider_identity() {
+    let first = DodoBilling::new(config()).unwrap();
+    let mut live = config();
+    live.mode = deepref_config::DodoMode::Live;
+    let live = DodoBilling::new(live).unwrap();
+    let mut other = config();
+    other.business_id = "bus_another".into();
+    let other = DodoBilling::new(other).unwrap();
+    assert_ne!(first.namespace(), live.namespace());
+    assert_ne!(first.namespace(), other.namespace());
+    assert!(!first.namespace().contains("bus_test"));
+}
+#[test]
+fn all_provider_lifecycle_states_are_closed_and_unknown_products_never_grant() {
+    let c = CustomerReference::new("cus_test".into()).unwrap();
+    for (raw, state) in [
+        ("pending", SubscriptionState::Pending),
+        ("on_hold", SubscriptionState::OnHold),
+        ("paused", SubscriptionState::Paused),
+        ("cancelled", SubscriptionState::Cancelled),
+        ("failed", SubscriptionState::Failed),
+        ("expired", SubscriptionState::Expired),
+        ("past_due", SubscriptionState::PastDue),
+        ("new_future_status", SubscriptionState::Unknown),
+    ] {
+        let o = observation(
+            &config(),
+            &c,
+            vec![Subscription {
+                subscription_id: "sub_fixture".into(),
+                customer: LimitedCustomer {
+                    customer_id: "cus_test".into(),
+                },
+                product_id: "pdt_reviewed".into(),
+                status: raw.into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(o.state, state);
+        assert!(o.entitlements.features.is_empty());
+    }
+    assert!(
+        observation(
+            &config(),
+            &c,
+            vec![Subscription {
+                subscription_id: "sub_fixture".into(),
+                customer: LimitedCustomer {
+                    customer_id: "cus_test".into()
+                },
+                product_id: "pdt_unreviewed".into(),
+                status: "active".into()
+            }]
+        )
+        .is_err()
+    );
+}
