@@ -275,7 +275,7 @@ test('preserves PICO values across custom framework switching and validates dupl
 	await page.getByLabel('Comparator').fill('Usual care');
 	await page.getByLabel('Outcome').fill('Sleep quality');
 
-	await page.getByRole('button', { name: 'PICO' }).click();
+	await page.getByRole('combobox', { name: 'PICO' }).click();
 	await page.getByRole('option', { name: 'Custom' }).click();
 	const customNames = page.getByPlaceholder('Field name');
 	const customDefinitions = page.getByPlaceholder('Definition');
@@ -297,7 +297,7 @@ test('preserves PICO values across custom framework switching and validates dupl
 	await page.getByRole('option', { name: 'PICO', exact: true }).click();
 	await expect(page.getByLabel('Population')).toHaveValue('Adults');
 	await expect(page.getByLabel('Intervention')).toHaveValue('Exercise');
-	await page.getByRole('button', { name: 'PICO' }).click();
+	await page.getByRole('combobox', { name: 'PICO' }).click();
 	await page.getByRole('option', { name: 'Custom' }).click();
 	await expect(customNames.nth(0)).toHaveValue('scope');
 	await expect(customNames.nth(1)).toHaveValue('intervention');
