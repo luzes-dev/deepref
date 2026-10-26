@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,9 @@ pub(crate) struct ProjectDto {
     updated_at: DateTime<Utc>,
     /// Number of articles (project reports) in the project.
     article_count: i64,
+    /// When this displayed count was observed. Cached snapshots are at most five
+    /// seconds old; request Cache-Control: no-cache for a primary count.
+    article_count_as_of: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -68,6 +71,7 @@ impl CreateProject {
     path = "/projects",
     operation_id = "listProjects",
     tag = "projects",
+    params(("Cache-Control" = Option<String>, Header, description = "no-cache, no-store or max-age=0 bypasses the five-second displayed count cache")),
     responses(
         (status = 200, description = "Projects ordered by most recently updated", body = PaginatedResponse<ProjectDto>),
         (status = 500, description = "Internal server error", body = ErrorResponse)
@@ -77,6 +81,7 @@ pub(crate) async fn list_projects(
     State(state): State<AppState>,
     session: Option<CurrentSession>,
     Query(pagination): Query<PaginationParams>,
+    headers: HeaderMap,
 ) -> Result<Json<PaginatedResponse<ProjectDto>>, ApiError> {
     let limit = pagination.limit()?;
     let cursor: Option<(DateTime<Utc>, Uuid)> = pagination.decode()?;
@@ -87,8 +92,7 @@ pub(crate) async fn list_projects(
         .and_then(|session| session.0.principal.user_id());
     let roles = deepref_app::authorization::ProjectViewRoles::current();
     let rows = sqlx::query(concat!(
-        "SELECT id,name,description,default_max_depth,created_at,updated_at,\
-         (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count \
+        "SELECT id,name,description,default_max_depth,created_at,updated_at,workspace_id \
          FROM projects \
          WHERE ($1::timestamptz IS NULL OR (updated_at,id)<($1,$2)) \
            AND ($4::uuid IS NULL OR ",
@@ -103,7 +107,31 @@ pub(crate) async fn list_projects(
     .bind(roles.project_roles())
     .fetch_all(&state.pool)
     .await?;
-    let projects = rows.into_iter().map(project_from_row).collect();
+    let identities = rows
+        .iter()
+        .map(|row| {
+            (
+                WorkspaceId::new(row.get("workspace_id")),
+                ProjectId::new(row.get("id")),
+            )
+        })
+        .collect::<Vec<_>>();
+    let counts = deepref_app::project_counts::article_counts(
+        &state.pool,
+        &identities,
+        state.project_count_cache.as_deref(),
+        primary_counts(&headers),
+    )
+    .await?;
+    let projects = rows
+        .into_iter()
+        .filter_map(|row| {
+            let project = ProjectId::new(row.get("id"));
+            counts
+                .get(&project)
+                .map(|count| project_with_count(row, count.count, count.observed_at))
+        })
+        .collect();
     Ok(Json(page(projects, limit as usize, |project| {
         (project.updated_at, project.id)
     })?))
@@ -145,7 +173,7 @@ pub(crate) async fn create_project(
         INSERT INTO projects (id, name, description, default_max_depth, workspace_id)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING id, name, description, default_max_depth, created_at, updated_at,
-          0::bigint AS article_count
+          0::bigint AS article_count, statement_timestamp() AS article_count_as_of
         "#,
     )
     .bind(id)
@@ -217,7 +245,8 @@ async fn target_workspace(
     path = "/projects/{project_id}",
     operation_id = "getProject",
     tag = "projects",
-    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    params(("project_id" = Uuid, Path, description = "Project identifier"),
+        ("Cache-Control" = Option<String>, Header, description = "no-cache, no-store or max-age=0 bypasses the five-second displayed count cache")),
     responses(
         (status = 200, description = "Project", body = ProjectDto),
         (status = 404, description = "Project not found", body = ErrorResponse),
@@ -227,16 +256,32 @@ async fn target_workspace(
 pub(crate) async fn get_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> Result<Json<ProjectDto>, ApiError> {
     let row = sqlx::query(
-        "SELECT id, name, description, default_max_depth, created_at, updated_at,\
-         (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count \
+        "SELECT id, name, description, default_max_depth, created_at, updated_at,workspace_id \
          FROM projects WHERE id = $1",
     )
     .bind(project_id)
     .fetch_one(&state.pool)
     .await?;
-    Ok(Json(project_from_row(row)))
+    let project = ProjectId::new(project_id);
+    let workspace = WorkspaceId::new(row.get("workspace_id"));
+    let counts = deepref_app::project_counts::article_counts(
+        &state.pool,
+        &[(workspace, project)],
+        state.project_count_cache.as_deref(),
+        primary_counts(&headers),
+    )
+    .await?;
+    let count = counts
+        .get(&project)
+        .ok_or_else(|| ApiError::NotFound("project not found".into()))?;
+    Ok(Json(project_with_count(
+        row,
+        count.count,
+        count.observed_at,
+    )))
 }
 
 #[utoipa::path(
@@ -265,7 +310,8 @@ pub(crate) async fn update_project(
           default_max_depth = COALESCE($4, default_max_depth), updated_at = now()
         WHERE id = $1
         RETURNING id, name, description, default_max_depth, created_at, updated_at,
-          (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count
+          (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count,
+          statement_timestamp() AS article_count_as_of
         "#,
     )
     .bind(project_id)
@@ -327,7 +373,31 @@ pub(crate) async fn delete_project(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn primary_counts(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(axum::http::header::CACHE_CONTROL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|token| {
+            matches!(
+                token.trim().to_ascii_lowercase().as_str(),
+                "no-cache" | "no-store" | "max-age=0"
+            )
+        })
+}
+
 fn project_from_row(row: sqlx::postgres::PgRow) -> ProjectDto {
+    let count = row.get("article_count");
+    let observed_at = row.get("article_count_as_of");
+    project_with_count(row, count, observed_at)
+}
+
+fn project_with_count(
+    row: sqlx::postgres::PgRow,
+    count: i64,
+    observed_at: DateTime<Utc>,
+) -> ProjectDto {
     ProjectDto {
         id: row.get("id"),
         name: row.get("name"),
@@ -335,7 +405,8 @@ fn project_from_row(row: sqlx::postgres::PgRow) -> ProjectDto {
         default_max_depth: row.get("default_max_depth"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
-        article_count: row.get("article_count"),
+        article_count: count,
+        article_count_as_of: Some(observed_at),
     }
 }
 
