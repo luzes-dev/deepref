@@ -298,10 +298,22 @@ pub async fn run_with_shutdown(
     ));
     let usage_export_registry = if config.runtime.usage_export.enabled {
         let sink: Arc<dyn deepref_application::usage_export::UsageExportSink> =
-            // No billing provider is chosen yet (BUSINESS_DECISIONS.md). The
-            // disabled sink never claims success, so exported events stay
-            // pending until handoff 08 supplies an adapter.
-            Arc::new(deepref_application::usage_export::DisabledUsageExportSink);
+            if let Some(dodo) = &config.runtime.dodo {
+                if dodo.meter.enabled {
+                    Arc::new(deepref_app::billing::DodoUsageExportSink::new(
+                        pool.clone(),
+                        std::sync::Arc::new(deepref_integrations::dodo::DodoBilling::new(
+                            dodo.clone(),
+                        )?),
+                        dodo.meter.enabled,
+                        dodo.meter.event_name.clone(),
+                    ))
+                } else {
+                    Arc::new(deepref_application::usage_export::DisabledUsageExportSink)
+                }
+            } else {
+                Arc::new(deepref_application::usage_export::DisabledUsageExportSink)
+            };
         deepref_app::usage_export_registry(
             &pool,
             sink,

@@ -48,7 +48,14 @@ async fn serve(State(f): State<Fixture>, request: Request) -> Response {
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
-        .body(Body::from(body))
+        .body(Body::from_stream(futures::stream::iter(
+            body.as_bytes()
+                .chunks(4096)
+                .map(|chunk| {
+                    Ok::<_, std::convert::Infallible>(axum::body::Bytes::copy_from_slice(chunk))
+                })
+                .collect::<Vec<_>>(),
+        )))
         .unwrap()
 }
 async fn adapter(
@@ -318,4 +325,225 @@ fn all_provider_lifecycle_states_are_closed_and_unknown_products_never_grant() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn canonical_wire_payload_verification_is_strict_and_complete() {
+    let mut metadata = std::collections::BTreeMap::new();
+    metadata.insert("amount".to_owned(), json!(42));
+    metadata.insert("model".to_owned(), json!("test-model"));
+    metadata.insert("provider".to_owned(), json!("test-provider"));
+
+    let expected = DodoUsageEvent {
+        customer_id: "cus_target".to_owned(),
+        event_id: "evt_12345".to_owned(),
+        event_name: "ai_commercial_units".to_owned(),
+        timestamp: "2026-10-25T12:00:00Z".to_owned(),
+        metadata: Some(metadata.clone()),
+    };
+
+    let record = DodoEventRecord {
+        business_id: "bus_test".to_owned(),
+        customer_id: "cus_target".to_owned(),
+        event_id: "evt_12345".to_owned(),
+        event_name: "ai_commercial_units".to_owned(),
+        timestamp: "2026-10-25T12:00:00Z".to_owned(),
+        metadata: Some(metadata.clone()),
+    };
+
+    // Identical record matches
+    assert!(record.matches_canonical(&expected, "bus_test"));
+
+    // Business ID mismatch
+    assert!(!record.matches_canonical(&expected, "bus_other"));
+
+    // Customer ID mismatch
+    let mut rec_diff = record.clone();
+    rec_diff.customer_id = "cus_other".to_owned();
+    assert!(!rec_diff.matches_canonical(&expected, "bus_test"));
+
+    // Event ID mismatch
+    let mut rec_diff = record.clone();
+    rec_diff.event_id = "evt_other".to_owned();
+    assert!(!rec_diff.matches_canonical(&expected, "bus_test"));
+
+    // Event name mismatch
+    let mut rec_diff = record.clone();
+    rec_diff.event_name = "other_units".to_owned();
+    assert!(!rec_diff.matches_canonical(&expected, "bus_test"));
+
+    // Timestamp mismatch
+    let mut rec_diff = record.clone();
+    rec_diff.timestamp = "2026-10-25T13:00:00Z".to_owned();
+    assert!(!rec_diff.matches_canonical(&expected, "bus_test"));
+
+    // Metadata amount mismatch
+    let mut rec_diff = record.clone();
+    let mut diff_meta = metadata.clone();
+    diff_meta.insert("amount".to_owned(), json!(999));
+    rec_diff.metadata = Some(diff_meta);
+    assert!(!rec_diff.matches_canonical(&expected, "bus_test"));
+
+    // Metadata extra or missing key mismatch
+    let mut rec_diff = record.clone();
+    let mut diff_meta = metadata.clone();
+    diff_meta.insert("extra_key".to_owned(), json!("extra_val"));
+    rec_diff.metadata = Some(diff_meta);
+    assert!(!rec_diff.matches_canonical(&expected, "bus_test"));
+}
+
+#[tokio::test]
+async fn ingest_usage_event_outcomes() {
+    let (dodo, _, _task) = adapter(vec![
+        (200, json!({"ingested_count": 1})),
+        (200, json!({"ingested_count": 0})),
+        (409, json!({"error": "conflict"})),
+        (500, json!({"error": "internal"})),
+        (400, json!({"error": "bad request"})),
+    ])
+    .await;
+
+    let event = DodoUsageEvent {
+        customer_id: "cus_test".to_owned(),
+        event_id: "evt_test".to_owned(),
+        event_name: "ai_commercial_units".to_owned(),
+        timestamp: "2026-10-25T12:00:00Z".to_owned(),
+        metadata: None,
+    };
+
+    // 200 + count 1 -> Accepted
+    let outcome = dodo.ingest_usage_event(event.clone()).await.unwrap();
+    assert_eq!(outcome, DodoIngestOutcome::Accepted);
+
+    // 200 + count 0 -> Ambiguous
+    let outcome = dodo.ingest_usage_event(event.clone()).await.unwrap();
+    assert_eq!(outcome, DodoIngestOutcome::Ambiguous);
+
+    // 409 -> Conflict
+    let outcome = dodo.ingest_usage_event(event.clone()).await.unwrap();
+    assert_eq!(outcome, DodoIngestOutcome::Conflict);
+
+    // 500 -> Ambiguous
+    let outcome = dodo.ingest_usage_event(event.clone()).await.unwrap();
+    assert_eq!(outcome, DodoIngestOutcome::Ambiguous);
+
+    // 400 -> Refused
+    let outcome = dodo.ingest_usage_event(event.clone()).await.unwrap();
+    assert!(matches!(outcome, DodoIngestOutcome::Refused(_)));
+}
+
+#[test]
+fn canonical_usage_timestamp_requires_exact_instant_and_valid_rfc3339() {
+    let mut expected = DodoUsageEvent {
+        customer_id: "cus_timestamp".into(),
+        event_id: "event_timestamp".into(),
+        event_name: "units".into(),
+        timestamp: "2026-10-25T12:00:00.123456Z".into(),
+        metadata: None,
+    };
+    let mut record = DodoEventRecord {
+        business_id: "business".into(),
+        customer_id: expected.customer_id.clone(),
+        event_id: expected.event_id.clone(),
+        event_name: expected.event_name.clone(),
+        timestamp: "2026-10-25T12:00:00.999999Z".into(),
+        metadata: None,
+    };
+    assert!(
+        !record.matches_canonical(&expected, "business"),
+        "same second is not the same provider event instant"
+    );
+    record.timestamp = "2026-10-25T09:00:00.123456-03:00".into();
+    assert!(
+        record.matches_canonical(&expected, "business"),
+        "equivalent timezone representation is the same instant"
+    );
+    record.timestamp = "invalid".into();
+    expected.timestamp = "invalid".into();
+    assert!(
+        !record.matches_canonical(&expected, "business"),
+        "matching invalid strings are not timestamp evidence"
+    );
+}
+
+#[tokio::test]
+async fn lookup_usage_event_outcomes() {
+    let (dodo, _, _task) = adapter(vec![
+        (
+            200,
+            json!({
+                "business_id": "bus_test",
+                "customer_id": "cus_test",
+                "event_id": "evt_test",
+                "event_name": "ai_commercial_units",
+                "timestamp": "2026-10-25T12:00:00Z",
+                "metadata": {"amount": 10}
+            }),
+        ),
+        (404, json!({"error": "not found"})),
+        (503, json!({"error": "service unavailable"})),
+    ])
+    .await;
+
+    // 200 -> Some(record)
+    let record = dodo.lookup_usage_event("evt_test").await.unwrap();
+    assert!(record.is_some());
+    assert_eq!(record.unwrap().event_id, "evt_test");
+
+    // 404 -> None
+    let record = dodo.lookup_usage_event("evt_missing").await.unwrap();
+    assert!(record.is_none());
+
+    // 503 -> BillingError::Unavailable
+    let err = dodo.lookup_usage_event("evt_err").await.unwrap_err();
+    assert_eq!(err, BillingError::Unavailable);
+}
+
+#[tokio::test]
+async fn usage_ingest_rejects_oversize_unknown_length_response_as_ambiguous() {
+    let (dodo, _, task) = adapter(vec![(
+        200,
+        json!({"ingested_count":1,"padding":"x".repeat(MAX_RESPONSE)}),
+    )])
+    .await;
+    let event = DodoUsageEvent {
+        customer_id: "cus_test".into(),
+        event_id: "evt_test".into(),
+        event_name: "units".into(),
+        timestamp: "2026-10-25T12:00:00Z".into(),
+        metadata: None,
+    };
+    assert_eq!(
+        dodo.ingest_usage_event(event).await.unwrap(),
+        DodoIngestOutcome::Ambiguous
+    );
+    task.abort();
+}
+#[tokio::test]
+async fn usage_lookup_rejects_oversize_unknown_length_response() {
+    let (dodo, _, task) = adapter(vec![(200, json!({"business_id":"bus_test","customer_id":"cus_test","event_id":"evt_test","event_name":"units","timestamp":"2026-10-25T12:00:00Z","metadata":{"padding":"x".repeat(MAX_RESPONSE)}}))]).await;
+    assert_eq!(
+        dodo.lookup_usage_event("evt_test").await.unwrap_err(),
+        BillingError::Contract
+    );
+    task.abort();
+}
+#[tokio::test]
+async fn usage_refusal_discards_provider_body_marker() {
+    let marker = "PRIVATE_PROVIDER_CAPABILITY_SENTINEL";
+    let (dodo, _, task) = adapter(vec![(400, json!({"error":marker}))]).await;
+    let event = DodoUsageEvent {
+        customer_id: "cus_test".into(),
+        event_id: "evt_test".into(),
+        event_name: "units".into(),
+        timestamp: "2026-10-25T12:00:00Z".into(),
+        metadata: None,
+    };
+    let outcome = dodo.ingest_usage_event(event).await.unwrap();
+    assert!(
+        !format!("{outcome:?}").contains(marker),
+        "raw provider error must not cross the adapter boundary"
+    );
+    assert!(matches!(outcome, DodoIngestOutcome::Refused(_)));
+    task.abort();
 }

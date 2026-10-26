@@ -2,8 +2,12 @@
 //! every response is fenced against current tenant, permission and generation.
 mod reconcile;
 mod store;
+pub mod usage_resolution;
+pub mod usage_sink;
 mod webhooks;
 pub use reconcile::BillingReconciler;
+pub use usage_resolution::*;
+pub use usage_sink::DodoUsageExportSink;
 pub use webhooks::{receive, registry};
 
 use crate::{
