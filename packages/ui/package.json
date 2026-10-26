@@ -281,7 +281,7 @@
     "@lucide/svelte": "^1.61.0",
     "@tanstack/svelte-table": "^9.3.1",
     "@xyflow/svelte": "^1.7.0",
-    "bits-ui": "^2.20.2",
+    "bits-ui": "2.19.5",
     "clsx": "^2.1.1",
     "mode-watcher": "^1.1.0",
     "paneforge": "^1.0.2",
