@@ -26,7 +26,15 @@
 			foundational: [],
 			core_to_project: [],
 			underexplored: [],
-			projection: { revision: 0, lag: 0 }
+			projection: {
+				project_id: workspace.project.id,
+				state: 'pending',
+				requested_revision: 0,
+				applied_revision: 0,
+				revision: 0,
+				watermark: 0,
+				lag: 0
+			}
 		}
 	);
 	const groupEntries = $derived([

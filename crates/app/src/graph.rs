@@ -11,6 +11,10 @@ use uuid::Uuid;
 
 pub const MAX_GRAPH_NODES: i64 = 2_000;
 
+#[derive(Debug, thiserror::Error)]
+#[error("project not found")]
+pub struct ProjectGraphNotFound;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProjectionStatus {
     pub project_id: Uuid,
@@ -49,7 +53,7 @@ pub async fn load_project_graph_strict(
         .await?;
     let status = projection_status_from_connection(&mut transaction, project_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
+        .ok_or(ProjectGraphNotFound)?;
     let graph = load_project_graph_from_connection(
         &mut transaction,
         project_id,
@@ -160,7 +164,7 @@ pub async fn rebuild_project_projection(pool: &PgPool, project_id: Uuid) -> anyh
     .bind(project_id)
     .fetch_optional(&mut *transaction)
     .await?
-    .ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
+    .ok_or(ProjectGraphNotFound)?;
 
     let updated = sqlx::query(
         "UPDATE projection_state

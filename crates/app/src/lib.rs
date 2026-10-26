@@ -180,9 +180,9 @@ pub use extraction::{
     list_field_definitions, list_values, record_manual_value, update_field_definition,
 };
 pub use graph::{
-    MAX_GRAPH_NODES, ProjectionStatus, enqueue_metrics_recompute, get_projection_status,
-    load_project_graph, load_project_graph_strict, rebuild_project_projection,
-    recompute_project_metrics,
+    MAX_GRAPH_NODES, ProjectGraphNotFound, ProjectionStatus, enqueue_metrics_recompute,
+    get_projection_status, load_project_graph, load_project_graph_strict,
+    rebuild_project_projection, recompute_project_metrics,
 };
 pub use graph_outbox::register_metrics_projection;
 pub use jobs::{

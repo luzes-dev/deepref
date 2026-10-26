@@ -134,6 +134,17 @@ async fn projection_tenant_isolation_and_foreign_workspace_blocking() {
             graph["projection"], expected_metadata,
             "strict metadata must preserve the entire freshness contract for {expected}"
         );
+        for suffix in ["graph", "graph?strict=false", "recommendations"] {
+            let (status, bytes) = harness
+                .get(&alice, &format!("/projects/{alice_project_id}/{suffix}"))
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body["projection"], expected_metadata,
+                "{suffix} must preserve truthful complete metadata for {expected}"
+            );
+        }
     }
 
     // Clean up

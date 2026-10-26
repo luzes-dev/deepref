@@ -136,6 +136,8 @@ pub(crate) struct ProjectGraphDto {
 #[derive(Debug, Deserialize, IntoParams)]
 pub(crate) struct GraphQuery {
     fields: Option<String>,
+    // Compatibility parameter: all freshness-bearing graph reads now share a snapshot.
+    #[allow(dead_code)]
     strict: Option<bool>,
 }
 
@@ -258,32 +260,12 @@ pub(crate) async fn project_graph(
     Query(query): Query<GraphQuery>,
 ) -> Result<Json<ProjectGraphDto>, ApiError> {
     let fields = parse_graph_fields(query.fields.as_deref())?;
-    let (graph, projection) = if query.strict.unwrap_or(false) {
-        let (graph, status) =
-            deepref_app::load_project_graph_strict(&state.pool, project_id, fields)
-                .await
-                .map_err(|e| {
-                    if e.to_string().contains("project not found") {
-                        ApiError::NotFound("project not found".to_owned())
-                    } else {
-                        ApiError::Internal(e)
-                    }
-                })?;
-        let projection = status.into();
-        (graph, projection)
-    } else {
-        let project_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-                .bind(project_id)
-                .fetch_one(&state.pool)
-                .await?;
-        if !project_exists {
-            return Err(ApiError::NotFound("project not found".to_owned()));
-        }
-        let projection = projection_metadata(&state, project_id).await?;
-        let graph = deepref_app::load_project_graph(&state.pool, project_id, fields).await?;
-        (graph, projection)
-    };
+    // All freshness-bearing reads share one snapshot. The legacy `strict`
+    // parameter remains accepted; neither mode performs synchronous recompute.
+    let (graph, status) = deepref_app::load_project_graph_strict(&state.pool, project_id, fields)
+        .await
+        .map_err(graph_read_error)?;
+    let projection = status.into();
     let nodes = graph.nodes.into_iter().map(graph_node_dto).collect();
     let edges = graph
         .edges
@@ -307,8 +289,7 @@ pub(crate) async fn recommendations(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<RecommendationGroupsDto>, ApiError> {
-    let projection = projection_metadata(&state, project_id).await?;
-    let graph = deepref_app::load_project_graph(
+    let (graph, status) = deepref_app::load_project_graph_strict(
         &state.pool,
         project_id,
         deepref_domain::graph::GraphFieldSelection {
@@ -316,7 +297,9 @@ pub(crate) async fn recommendations(
             ..deepref_domain::graph::GraphFieldSelection::metrics()
         },
     )
-    .await?;
+    .await
+    .map_err(graph_read_error)?;
+    let projection = status.into();
     let nodes = graph
         .nodes
         .into_iter()
@@ -404,16 +387,12 @@ pub(crate) async fn recompute_metrics(
     ))
 }
 
-async fn projection_metadata(
-    state: &AppState,
-    project_id: Uuid,
-) -> Result<ProjectionMetadata, ApiError> {
-    let status = deepref_app::get_projection_status(&state.pool, project_id)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
-
-    Ok(status.into())
+fn graph_read_error(error: anyhow::Error) -> ApiError {
+    if error.is::<deepref_app::ProjectGraphNotFound>() {
+        ApiError::NotFound("project not found".to_owned())
+    } else {
+        ApiError::Internal(error)
+    }
 }
 
 fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
