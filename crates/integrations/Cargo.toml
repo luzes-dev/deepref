@@ -23,7 +23,7 @@ unicode-normalization.workspace = true
 urlencoding.workspace = true
 workos = "3.4.1"
 # Checks access-token signatures against keys the adapter fetched itself.
-jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["rust_crypto"] }
 
 [lints]
 workspace = true
