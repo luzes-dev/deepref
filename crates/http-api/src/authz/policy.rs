@@ -1281,6 +1281,18 @@ pub struct NonHttpRow {
 
 pub static NON_HTTP: &[NonHttpRow] = &[
     NonHttpRow {
+        kind: "Operator CLI",
+        name: "projection status <project_uuid>",
+        control: "Trusted deployment operator with database credentials; no tenant HTTP principal is inferred. Scoped UUID reads projection metadata only; no mutations or tenant authority inferred. Restrict shell/database access to operators.",
+        test: "deepref-server command::tests::parses_projection_commands",
+    },
+    NonHttpRow {
+        kind: "Operator CLI",
+        name: "projection rebuild <project_uuid>",
+        control: "Trusted deployment operator with database credentials; scoped UUID starts a fenced repair generation through the durable outbox. Restrict shell/database access to operators; ordinary user HTTP requests use central PDP/PEP.",
+        test: "deepref-server command::tests::parses_projection_commands",
+    },
+    NonHttpRow {
         kind: "SSE stream",
         name: "Assistant run events (`GET /projects/{project_id}/assistant/runs/{run_id}/events`)",
         control: "PEP requires `project:view` on connect. A resume is a new request (`after_seq`), so it is authorized again. An open stream re-checks `project:view` every `stream_recheck` (20 s by default) and ends when denied. The run is loaded with its `project_id` and a run of another project is a 404.",

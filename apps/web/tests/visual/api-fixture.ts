@@ -169,6 +169,8 @@ const acquisitions: AcquisitionDto[] = [
 const projection: ProjectionStatusDto = {
 	project_id: VISUAL_PROJECT_ID,
 	state: 'ready',
+	requested_revision: 42,
+	applied_revision: 42,
 	watermark: 42,
 	revision: 42,
 	lag: 0,

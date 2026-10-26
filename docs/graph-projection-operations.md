@@ -1,0 +1,20 @@
+# Graph projection operations
+
+The server's `projection status <project-uuid>` and `projection rebuild <project-uuid>` commands are trusted operator tools. Possession of configured database credentials is their authority, as with migrations; they do not accept an HTTP principal and must not be exposed to tenant callers. Limit execution and credentials to deployment operators. Each invocation requires one explicit project UUID; there is no implicit workspace/global fallback or `all` scope. HTTP callers use the centrally authorized `project:view` status/graph routes or `project:edit` recompute route instead.
+
+```sh
+deepref-server projection status <project-uuid>
+deepref-server projection rebuild <project-uuid>
+```
+
+Status prints the current lifecycle, requested/applied revisions, watermark, lag, last success/error and rebuild marker as JSON. Missing projects fail. Invalid stored lifecycle values fail as persistence errors. Revision zero without a successful computation is pending, whereas a successful empty graph at revision zero is ready. A failed rebuild reports failed and retains its rebuild marker for diagnosis.
+
+Rebuild locks the project, advances a repair generation, clears corrupt output progress/timestamps/snapshots, and writes a new request and 04a outbox event transactionally. It preserves normalized reports, identifiers and citations. It prints an event UUID, not a claim that computation finished. A registered `graph_metrics_queue` consumer commits the existing `recompute_metrics` queue job and its outbox receipt atomically. Only the `projection` workload pool claims that computation. Pause/resume that pool through the existing worker pool configuration; do not route graph computation into the outbox dispatcher's execution slots.
+
+After repair, poll status using the explicit project UUID until ready and requested_revision equals applied_revision. Failed state retains the actual computation error. Restarting the dispatcher/worker processes retained outbox and queue work; duplicate or older requests recompute current canonical state. Retry/quarantine/replay remain the existing 04a and job-queue controls. Persisted attempt and generation identities prevent delayed failures from replacing completed success or a newer repair.
+
+The algorithm counts directed graph degrees and calculates the legacy weighted citation/degree/recency rank formula, with O(V+E) in-memory work and per-report SQL writes. It is not iterative PageRank. Recompute loads the full graph (`max_nodes=None`); HTTP node/edge response bounds do not limit recomputation. No graph-size throughput, lag SLO, hosted deployment, measured outage recovery or full production operations acceptance is asserted by local tests.
+
+Verification: server `projection_help_and_invalid_scope_are_explicit`/`parses_projection_commands`; app `rebuild_supersedes_corrupt_watermark` and `metrics_failure_is_fenced_by_actual_attempt_and_repair_generation`; worker `graph_production_command_outbox_consumer_handler_failure_restart_and_redelivery` and `graph_shared_report_refresh_invalidates_every_project_and_rolls_back_atomically`; HTTP `projection_tenant_isolation_and_foreign_workspace_blocking`. The worker fixtures start at the actual acquisition persistence command, not manual job insertion for the projection under test.
+
+The fixed ancestor lacks 04b/05b. This branch supplies the broker-independent event and registered 04a consumer without importing sibling transport sources. Future transport integration must register the same type/version/consumer and preserve the atomic receipt/queue effect and projection pool. The selected full target remains required; this local branch does not claim JetStream cutover or deployed acceptance. During a binary rollback, retain outbox events for a compatible registry to process later; older binaries with direct-job producers can coexist during expansion, but they do not provide the new failure fence. Drain old compute workers before relying on the new guarantee.

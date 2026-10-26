@@ -261,6 +261,8 @@ export * from './projectArgsDto.ts';
 export * from './projectDto.ts';
 export * from './projectGraphDto.ts';
 export * from './projectionMetadata.ts';
+export * from './projectionRebuildStateDto.ts';
+export * from './projectionStateDto.ts';
 export * from './projectionStatusDto.ts';
 export * from './proposalDecisionInput.ts';
 export * from './proposalDecisionRequest.ts';

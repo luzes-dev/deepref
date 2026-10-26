@@ -671,7 +671,7 @@ async fn grobid_enrichment(
     (enrichment.structure, version, header)
 }
 
-async fn handle_recompute_metrics_job(
+pub(crate) async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
@@ -685,6 +685,8 @@ async fn handle_recompute_metrics_job(
     if request.revision < 0 {
         anyhow::bail!("metric request revision must be nonnegative");
     }
+    // The application seam owns persisted attempt/generation failure fencing;
+    // a delayed job revision is never an execution identity.
     deepref_app::recompute_project_metrics(pool, request.project_id).await?;
     Ok(DeliveryAction::Ack)
 }
