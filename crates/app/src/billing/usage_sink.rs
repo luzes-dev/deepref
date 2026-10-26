@@ -43,6 +43,7 @@ pub struct DodoUsageExportSink {
 
 #[derive(Debug, FromRow)]
 struct FrozenTargetRow {
+    mode: Option<String>,
     customer_ref: String,
     account_generation: i64,
     provider_scope: String,
@@ -185,7 +186,10 @@ impl DodoUsageExportSink {
         let claim_res = sqlx::query(
             "UPDATE billing_usage_fact_targets
              SET dispatch_claimed_at = now(), dispatch_state = 'dispatched'
-             WHERE fact_id = $1 AND dispatch_claimed_at IS NULL",
+             WHERE fact_id = $1 AND dispatch_claimed_at IS NULL
+               AND account_id IS NOT NULL AND mode IS NOT NULL AND business_id IS NOT NULL
+               AND event_name IS NOT NULL AND original_timestamp IS NOT NULL
+               AND metadata IS NOT NULL AND wire_digest IS NOT NULL",
         )
         .bind(fact.fact_id)
         .execute(&self.pool)
@@ -345,7 +349,7 @@ impl DodoUsageExportSink {
 
         // 1. Check if already frozen
         let existing: Option<FrozenTargetRow> = sqlx::query_as(
-            "SELECT customer_ref, account_generation, provider_scope, account_id, business_id, event_name, original_timestamp, metadata, wire_digest
+            "SELECT mode, customer_ref, account_generation, provider_scope, account_id, business_id, event_name, original_timestamp, metadata, wire_digest
              FROM billing_usage_fact_targets WHERE fact_id = $1",
         )
         .bind(fact.fact_id)
@@ -354,6 +358,15 @@ impl DodoUsageExportSink {
         .map_err(|_| UsageExportOutcome::RetryableFailure("failed to query fact targets".into()))?;
 
         if let Some(target) = existing {
+            if target
+                .mode
+                .as_deref()
+                .is_some_and(|mode| mode != self.dodo.usage_environment().as_str())
+            {
+                return Err(UsageExportOutcome::PermanentFailure(
+                    "dodo downstream export: environment drifted across retries".into(),
+                ));
+            }
             // Target immutable scope must be compared even when current scoped account shares the same customer!
             if target.provider_scope != provider_scope {
                 return Err(UsageExportOutcome::PermanentFailure(
@@ -396,7 +409,7 @@ impl DodoUsageExportSink {
 
             let expected_digest = compute_canonical_digest(
                 provider_scope,
-                "live",
+                self.dodo.usage_environment().as_str(),
                 self.dodo.business_id(),
                 &target.customer_ref,
                 &self.event_name,
@@ -493,7 +506,7 @@ impl DodoUsageExportSink {
 
         let wire_digest = compute_canonical_digest(
             provider_scope,
-            "live",
+            self.dodo.usage_environment().as_str(),
             self.dodo.business_id(),
             &customer_ref,
             &self.event_name,
@@ -508,7 +521,7 @@ impl DodoUsageExportSink {
                 bound_at, account_id, mode, business_id, event_name, original_timestamp, metadata,
                 wire_digest, dispatch_claimed_at, dispatch_state
              )
-             VALUES ($1, $2, $3, $4, $5, now(), $6, 'live', $7, $8, $9, $10, $11, NULL, 'bound')
+             VALUES ($1, $2, $3, $4, $5, now(), $6, $12, $7, $8, $9, $10, $11, NULL, 'bound')
              ON CONFLICT (fact_id) DO NOTHING",
         )
         .bind(fact.fact_id)
@@ -522,6 +535,7 @@ impl DodoUsageExportSink {
         .bind(fact.settled_at)
         .bind(metadata_val)
         .bind(&wire_digest)
+        .bind(self.dodo.usage_environment().as_str())
         .execute(&self.pool)
         .await
         .map_err(|_| UsageExportOutcome::RetryableFailure("failed to freeze fact target".into()))?;
@@ -529,7 +543,7 @@ impl DodoUsageExportSink {
         if inserted.rows_affected() == 0 {
             // Concurrently inserted; re-fetch frozen target and validate against race
             let frozen: Option<FrozenTargetRow> = sqlx::query_as(
-                "SELECT customer_ref, account_generation, provider_scope, account_id, business_id, event_name, original_timestamp, metadata, wire_digest
+                "SELECT mode, customer_ref, account_generation, provider_scope, account_id, business_id, event_name, original_timestamp, metadata, wire_digest
                  FROM billing_usage_fact_targets WHERE fact_id = $1",
             )
             .bind(fact.fact_id)
@@ -539,6 +553,7 @@ impl DodoUsageExportSink {
 
             if let Some(target) = frozen {
                 if target.provider_scope != provider_scope
+                    || target.mode.as_deref() != Some(self.dodo.usage_environment().as_str())
                     || target.customer_ref != customer_ref
                     || target.account_id.is_some_and(|aid| aid != account_id)
                     || target

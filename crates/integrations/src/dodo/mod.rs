@@ -547,6 +547,12 @@ fn observation(
 mod tests;
 
 impl BillingUsageProvider for DodoBilling {
+    fn usage_environment(&self) -> UsageEnvironment {
+        match self.config.mode {
+            deepref_config::DodoMode::Test => UsageEnvironment::Test,
+            deepref_config::DodoMode::Live => UsageEnvironment::Live,
+        }
+    }
     fn usage_namespace(&self) -> &str {
         &self.namespace
     }

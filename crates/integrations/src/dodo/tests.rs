@@ -425,6 +425,40 @@ async fn ingest_usage_event_outcomes() {
     assert!(matches!(outcome, DodoIngestOutcome::Refused(_)));
 }
 
+#[test]
+fn canonical_usage_timestamp_requires_exact_instant_and_valid_rfc3339() {
+    let mut expected = DodoUsageEvent {
+        customer_id: "cus_timestamp".into(),
+        event_id: "event_timestamp".into(),
+        event_name: "units".into(),
+        timestamp: "2026-10-25T12:00:00.123456Z".into(),
+        metadata: None,
+    };
+    let mut record = DodoEventRecord {
+        business_id: "business".into(),
+        customer_id: expected.customer_id.clone(),
+        event_id: expected.event_id.clone(),
+        event_name: expected.event_name.clone(),
+        timestamp: "2026-10-25T12:00:00.999999Z".into(),
+        metadata: None,
+    };
+    assert!(
+        !record.matches_canonical(&expected, "business"),
+        "same second is not the same provider event instant"
+    );
+    record.timestamp = "2026-10-25T09:00:00.123456-03:00".into();
+    assert!(
+        record.matches_canonical(&expected, "business"),
+        "equivalent timezone representation is the same instant"
+    );
+    record.timestamp = "invalid".into();
+    expected.timestamp = "invalid".into();
+    assert!(
+        !record.matches_canonical(&expected, "business"),
+        "matching invalid strings are not timestamp evidence"
+    );
+}
+
 #[tokio::test]
 async fn lookup_usage_event_outcomes() {
     let (dodo, _, _task) = adapter(vec![

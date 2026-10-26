@@ -215,7 +215,7 @@ pub enum DodoIngestOutcome {
 impl DodoEventRecord {
     /// Compares the complete canonical wire payload against the expected event.
     /// Returns true if and only if business_id, customer_id, event_id, event_name,
-    /// timestamp (parsed and compared at second precision), and all metadata keys/values
+    /// timestamp (the exact parsed instant), and all metadata keys/values
     /// are identical.
     pub fn matches_canonical(&self, expected: &DodoUsageEvent, expected_business_id: &str) -> bool {
         if self.business_id != expected_business_id {
@@ -230,18 +230,16 @@ impl DodoEventRecord {
         if self.event_name != expected.event_name {
             return false;
         }
-        if self.timestamp != expected.timestamp {
-            match (
-                DateTime::parse_from_rfc3339(&self.timestamp),
-                DateTime::parse_from_rfc3339(&expected.timestamp),
-            ) {
-                (Ok(rec_ts), Ok(exp_ts)) => {
-                    if rec_ts.timestamp() != exp_ts.timestamp() {
-                        return false;
-                    }
+        match (
+            DateTime::parse_from_rfc3339(&self.timestamp),
+            DateTime::parse_from_rfc3339(&expected.timestamp),
+        ) {
+            (Ok(rec_ts), Ok(exp_ts)) => {
+                if rec_ts != exp_ts {
+                    return false;
                 }
-                _ => return false,
             }
+            _ => return false,
         }
         let empty_map = BTreeMap::new();
         let self_meta = self.metadata.as_ref().unwrap_or(&empty_map);
@@ -250,7 +248,23 @@ impl DodoEventRecord {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageEnvironment {
+    Test,
+    Live,
+}
+
+impl UsageEnvironment {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Test => "test_mode",
+            Self::Live => "live_mode",
+        }
+    }
+}
+
 pub trait BillingUsageProvider: Send + Sync {
+    fn usage_environment(&self) -> UsageEnvironment;
     fn usage_namespace(&self) -> &str;
     fn business_id(&self) -> &str;
     fn ingest_usage_event<'a>(

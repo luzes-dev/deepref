@@ -44,6 +44,9 @@ impl MockUsageProvider {
 }
 
 impl BillingUsageProvider for MockUsageProvider {
+    fn usage_environment(&self) -> deepref_application::billing::UsageEnvironment {
+        deepref_application::billing::UsageEnvironment::Test
+    }
     fn usage_namespace(&self) -> &str {
         &self.namespace
     }
@@ -198,6 +201,23 @@ async fn disabled_meter_returns_retryable_failure_preserving_facts() {
     }
 }
 
+#[tokio::test]
+async fn legacy_target_without_frozen_wire_can_lookup_but_never_post() {
+    let Some(pool) = database().await else { return };
+    let mock = Arc::new(MockUsageProvider::new("bus_test", "dodo_test"));
+    let sink = DodoUsageExportSink::new(pool.clone(), mock.clone(), true, "units".into());
+    let workspace = Uuid::new_v4();
+    seed_billing_account(&pool, workspace, "dodo_test", "cus_legacy").await;
+    let fact = sample_fact(workspace, Some(5), None, Utc::now());
+    seed_outbox_fact(&pool, &fact).await;
+    sqlx::query("INSERT INTO billing_usage_fact_targets(fact_id,workspace_id,provider_scope,customer_ref,account_generation) VALUES($1,$2,'dodo_test','cus_legacy',1)").bind(fact.fact_id).bind(workspace).execute(&pool).await.unwrap();
+    assert!(
+        matches!(sink.deliver(&fact).await, UsageExportOutcome::Ambiguous(_)),
+        "pre-dispatch provenance is unknown for legacy rows"
+    );
+    assert_eq!(mock.received_events.lock().unwrap().len(), 0);
+}
+
 async fn seed_outbox_fact(pool: &PgPool, fact: &AiUsageFact) {
     sqlx::query(
         "INSERT INTO outbox_events (event_id, message_type, message_version, payload, expected_consumers, delivery_state)
@@ -252,7 +272,7 @@ async fn late_fact_lookup_before_refusal() {
         customer_id: "cus_late_test".into(),
         event_id: fact.fact_id.to_string(),
         event_name: "ai_commercial_units".into(),
-        timestamp: late_settled.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        timestamp: late_settled.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
         metadata: Some(meta),
     });
 
