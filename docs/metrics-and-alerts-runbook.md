@@ -36,6 +36,37 @@ These are OTLP instrument names. A backend may normalize punctuation or units; v
 
 Usage settlement counts nonterminal reservations opened at least five minutes ago. It is diagnostic age, including legitimately running or provider-unknown liabilities, and never authorizes automatic voiding. Usage export includes emitted-but-undelivered events; usage_unemitted includes resolvable facts/corrections not yet represented by their matching export event. Unattributed and conflicting facts have their own gauges. Do not add overlapping backlog families to infer a unique fact total.
 
+## Optional infrastructure observations
+
+API and worker boot install the rate-limit observer; AI worker admission also installs the concurrency-mirror observer. These use the configured OTLP provider. The NATS worker installs its transport observer after configuration validation, records verified startup readiness and records subsequent management-check observations. Without OTLP export these instruments remain no-ops; they never change grants, retries or work settlement.
+
+| Instrument | Kind/unit | Attributes | Meaning |
+| --- | --- | --- | --- |
+| `deepref.rate_limit.decisions` | counter | `purpose`, `backend`, `outcome` | Allowed, limited or unavailable observations; Valkey allowance still requires PostgreSQL |
+| `deepref.rate_limit.duration` | histogram/seconds | same | Observed backend operation duration |
+| `deepref.rate_limit.fallbacks` | counter | `purpose` | Canonical PostgreSQL path used after optional accelerator error |
+| `deepref.concurrency_mirror.operations` | counter | `scope`, `operation`, `outcome` | Optional mirror check, hold, refresh and release observations |
+| `deepref.concurrency_mirror.duration` | histogram/seconds | same | Optional mirror operation duration |
+| `deepref.ai.concurrency.live` | gauge/slots | `scope` | Global non-expired PostgreSQL workspace or route slot count |
+| `deepref.project_count_cache.operations` | counter | `operation`, `outcome` | Completed, unavailable or cancelled get/put operations |
+| `deepref.project_count_cache.duration` | histogram/seconds | same | Time through completion or cancellation |
+| `deepref.project_count_cache.entries` | counter/entries | `outcome` | Hit or miss entries returned by completed reads |
+| `deepref.transport.ready` | gauge/boolean | none | Most recent JetStream management-readiness observation |
+| `deepref.transport.readiness.last_observed` | gauge/Unix seconds | none | Timestamp of that readiness observation |
+| `deepref.transport.pending` | gauge/messages | `pool` | Last observed broker consumer pending count |
+| `deepref.transport.in_flight` | gauge/messages | `pool` | Last observed broker consumer ACK-pending count |
+| `deepref.transport.redeliveries` | gauge/messages | `pool` | Current broker redelivery observation, not a cumulative local counter |
+| `deepref.transport.visibility.last_observed` | gauge/Unix seconds | `pool` | Timestamp of the corresponding broker visibility observation |
+| `deepref.transport.claims` | counter | `pool`, `outcome` | Claimed, noop, retry or failed targeted database claim |
+| `deepref.transport.claim.duration` | histogram/seconds | same | Targeted claim operation duration |
+| `deepref.transport.delivery.age` | histogram/seconds | none | Envelope age at intake, including database/outbox residence |
+
+All dimensions come from closed application/domain enums. Cache cancellation counts a dropped operation; it does not claim the subsequent primary read succeeded. Cache entry ratios cover completed reads only. Mirror counts are observations, never financial authority. Workspace and route PostgreSQL gauges describe separate ceilings over the same executions; do not sum them into unique executions or active provider calls.
+
+The backlog families also include `object_cleanup` (due registry cleanup candidates, which may still be protected by references) and `retired_objects` (permanently retired bytes without acknowledged deletion, including rows under retry backoff). The latter age starts at retirement and cannot prove the physical deletion deadline measured from an account request. These observations are read-only; they do not retire, delete or release anything.
+
+Transport gauges require their own recent observation timestamp per process. Missing/stale transport observations are unknown, not ready or empty. API `/health/dependencies` currently reports database and worker heartbeats only; it must not be interpreted as an independent live NATS probe. A broker-ready management observation does not prove delivery or handler success. Envelope age is not publish-ACK-to-consume latency and must not be used to claim that SLO. Worker/API health integration and operator alert delivery remain open until separately verified.
+
 ## Sampling and aggregation
 
 Each configured worker samples every 30 seconds, with missed intervals skipped. It reads a repeatable-read, read-only transaction, a five-second outer deadline, 1.5-second statement timeout and 250-millisecond lock timeout. It publishes no partial sample. A query failure records sample.up=0 and does not replace last-known backlog counts with zero or advance last_success. An absent series is not evidence of an empty queue.

@@ -497,7 +497,12 @@ pub async fn serve_with_shutdown(
             )
             .ok()
             .map(|cache| {
-                std::sync::Arc::new(cache)
+                std::sync::Arc::new(
+                    deepref_telemetry::project_count_cache::ObservedProjectCountCache::new(
+                        std::sync::Arc::new(cache),
+                        deepref_telemetry::project_count_cache::ProjectCountMetrics::default(),
+                    ),
+                )
                     as std::sync::Arc<
                         dyn deepref_application::project_count_cache::ProjectCountCache,
                     >
