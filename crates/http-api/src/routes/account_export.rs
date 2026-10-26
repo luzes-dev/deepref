@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    body::Body,
+    body::{Body, Bytes},
     extract::{Path, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -13,6 +13,7 @@ use deepref_app::account_export::{
 };
 use deepref_app::identity::AuditRequest;
 use deepref_domain::UserId;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -178,10 +179,24 @@ pub async fn download_export(
     Path(id): Path<Uuid>,
     session: Option<CurrentSession>,
 ) -> Result<Response, ApiError> {
+    let started = tokio::time::Instant::now();
     let user = account_owner(&state, session.as_ref())?;
-    let export = authorize_download(&state.pool, user, id)
-        .await
-        .map_err(map_export_error)?;
+    let preparation_deadline = started + std::time::Duration::from_secs(300);
+    let export = tokio::time::timeout_at(
+        preparation_deadline,
+        authorize_download(&state.pool, user, id),
+    )
+    .await
+    .map_err(|_| download_timeout())?
+    .map_err(map_export_error)?;
+    let retention_remaining = export
+        .retained_until
+        .and_then(|until| (until - chrono::Utc::now()).to_std().ok())
+        .unwrap_or_default();
+    let deadline = download_deadline(started, retention_remaining);
+    if tokio::time::Instant::now() >= deadline {
+        return Err(download_timeout());
+    }
 
     match export.status {
         ExportStatus::Completed => {}
@@ -215,47 +230,45 @@ pub async fn download_export(
         .document_store
         .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
 
-    let object = store.get(&storage_key).await.map_err(|error| {
-        if error.is_not_found() {
-            ApiError::NotFound("export artifact is no longer available".to_owned())
-        } else {
-            ApiError::Internal(error.into())
-        }
-    })?;
+    let object = tokio::time::timeout_at(deadline, store.get(&storage_key))
+        .await
+        .map_err(|_| download_timeout())?
+        .map_err(|error| {
+            if error.is_not_found() {
+                ApiError::NotFound("export artifact is no longer available".to_owned())
+            } else {
+                ApiError::Internal(error.into())
+            }
+        })?;
 
     // Record audit event for download
     let request_id = crate::error::correlation_id();
-    record_export_download_audit(
-        &state.pool,
-        user,
-        id,
-        AuditRequest {
-            request_id: request_id.as_deref(),
-            session_ref: None,
-        },
+    tokio::time::timeout_at(
+        deadline,
+        record_export_download_audit(
+            &state.pool,
+            user,
+            id,
+            AuditRequest {
+                request_id: request_id.as_deref(),
+                session_ref: None,
+            },
+        ),
     )
     .await
+    .map_err(|_| download_timeout())?
     .map_err(map_export_error)?;
-
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
-    let source = object.into_stream();
-    let stream = futures::stream::unfold((source, false), move |(mut source, done)| async move {
-        if done {
-            return None;
-        }
-        use futures::StreamExt;
-        match tokio::time::timeout_at(deadline, source.next()).await {
-            Ok(Some(value)) => Some((value.map_err(std::io::Error::other), (source, false))),
-            Ok(None) => None,
-            Err(_) => Some((
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "export download deadline exceeded",
-                )),
-                (source, true),
-            )),
-        }
-    });
+    // timeout_at can accept a ready future at the boundary: refuse a body
+    // after expired preparation even when no operation needed another poll.
+    if tokio::time::Instant::now() >= deadline {
+        return Err(download_timeout());
+    }
+    let stream = bounded_download_stream(
+        object
+            .into_stream()
+            .map(|value| value.map_err(std::io::Error::other)),
+        deadline,
+    );
     let mut response = Body::from_stream(stream).into_response();
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -319,4 +332,90 @@ pub async fn cancel_export(
     .map_err(map_export_error)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn download_deadline(
+    started: tokio::time::Instant,
+    retention_remaining: std::time::Duration,
+) -> tokio::time::Instant {
+    (started + std::time::Duration::from_secs(300))
+        .min(tokio::time::Instant::now() + retention_remaining)
+}
+
+fn download_timeout() -> ApiError {
+    ApiError::Internal(anyhow::anyhow!("export download deadline exceeded"))
+}
+fn bounded_download_stream<S>(
+    source: S,
+    deadline: tokio::time::Instant,
+) -> impl Stream<Item = std::io::Result<Bytes>> + Send
+where
+    S: Stream<Item = std::io::Result<Bytes>> + Send + 'static,
+{
+    futures::stream::unfold(
+        (Box::pin(source), false),
+        move |(mut source, done)| async move {
+            if done {
+                return None;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Some((
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "export download deadline exceeded",
+                    )),
+                    (source, true),
+                ));
+            }
+            match tokio::time::timeout_at(deadline, source.next()).await {
+                Ok(Some(value)) if tokio::time::Instant::now() < deadline => {
+                    Some((value, (source, false)))
+                }
+                Ok(None) => None,
+                Ok(Some(_)) | Err(_) => Some((
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "export download deadline exceeded",
+                    )),
+                    (source, true),
+                )),
+            }
+        },
+    )
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod deadline_tests {
+    use super::*;
+    #[tokio::test(start_paused = true)]
+    async fn chunk_ready_after_deadline_is_refused() {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        let source = futures::stream::once(async {
+            tokio::time::advance(std::time::Duration::from_secs(2)).await;
+            Ok(Bytes::from_static(b"late ready chunk"))
+        });
+        let body = bounded_download_stream(source, deadline);
+        futures::pin_mut!(body);
+        assert_eq!(
+            body.next().await.unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn delayed_download_preparation_cannot_extend_retained_access() {
+        let started = tokio::time::Instant::now();
+        // Object acquisition plus audit use 299s of a 301s retained window.
+        tokio::time::sleep(std::time::Duration::from_secs(200)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(99)).await;
+        let deadline = download_deadline(started, std::time::Duration::from_secs(2));
+        let source = futures::stream::once(async {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            Ok(Bytes::from_static(b"must-not-outlive-retention"))
+        });
+        let body = bounded_download_stream(source, deadline);
+        futures::pin_mut!(body);
+        let result = body.next().await.unwrap();
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert!(tokio::time::Instant::now() <= started + std::time::Duration::from_secs(301));
+    }
 }

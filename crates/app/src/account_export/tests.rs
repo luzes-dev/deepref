@@ -1,7 +1,23 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
 use super::*;
 use deepref_documents::StoreConfig;
 use deepref_domain::ProjectId;
+
+fn generation_budget() -> generation::GenerationBudget {
+    generation::GenerationBudget::new(std::time::Duration::from_secs(600))
+}
+
+#[test]
+fn export_error_display_keeps_source_in_its_chain() {
+    use std::error::Error;
+    let error = ExportError::Other(anyhow::anyhow!("underlying detail"));
+    assert_eq!(error.to_string(), "internal error");
+    assert_eq!(error.source().unwrap().to_string(), "underlying detail");
+    let database = ExportError::Database(sqlx::Error::PoolClosed);
+    assert_eq!(database.to_string(), "database error");
+    assert!(database.source().is_some());
+}
 
 async fn setup() -> Option<(PgPool, UserId, Uuid, ProjectId, DocumentStore, zip::Staging)> {
     let pool = crate::test_isolation::isolated_pool_from_env("DATABASE_URL", 1).await?;
@@ -78,9 +94,15 @@ async fn committed_source_retention_and_post_collection_revocation() {
         sqlx::query("INSERT INTO documents(id,report_id,project_id,object_key,content_hash,mime_type,byte_size,status) VALUES($1,$1,$2,$3,$4,'application/pdf',$5,'uploaded')").bind(document).bind(project.as_uuid()).bind(key.as_str()).bind(stored.sha256).bind(stored.byte_size as i64).execute(&pool).await.unwrap();
         let (attempt, lease) = begin(&pool, user).await;
         let staging = zip::Staging::new().unwrap();
-        let (inventory, until) = prepare_attempt(&pool, &attempt, &lease, staging.path())
-            .await
-            .unwrap();
+        let (inventory, until) = prepare_attempt(
+            &pool,
+            &attempt,
+            &lease,
+            staging.path(),
+            &generation_budget(),
+        )
+        .await
+        .unwrap();
         let owner: Uuid =
             sqlx::query_scalar("SELECT project_id FROM object_lifecycle WHERE storage_key=$1")
                 .bind(key.as_str())
@@ -100,9 +122,15 @@ async fn committed_source_retention_and_post_collection_revocation() {
             .await
             .unwrap();
         assert!(store.get(key.as_str()).await.is_ok());
-        let summary = zip::package(&store, &inventory, staging.path(), user)
-            .await
-            .unwrap();
+        let summary = zip::package(
+            &store,
+            &inventory,
+            staging.path(),
+            user,
+            &generation_budget(),
+        )
+        .await
+        .unwrap();
         match race {
             "demote" => {
                 sqlx::query("UPDATE workspace_memberships SET role='member' WHERE workspace_id=$1 AND user_id=$2").bind(workspace).bind(user.as_uuid()).execute(&pool).await.unwrap();
@@ -126,8 +154,19 @@ async fn committed_source_retention_and_post_collection_revocation() {
             }
             _ => unreachable!(),
         }
-        let published =
-            publish_attempt(&pool, &store, &attempt, &lease, &inventory, &summary, until).await;
+        let published = publish_attempt(
+            &pool,
+            &store,
+            &attempt,
+            &lease,
+            PreparedArchive {
+                inventory: &inventory,
+                summary: &summary,
+                retained_until: until,
+            },
+            &generation_budget(),
+        )
+        .await;
         if race == "cancel" {
             assert!(published.is_err());
         } else {
@@ -160,12 +199,24 @@ async fn retry_releases_old_reference_and_fences_late_publication() {
     };
     let (old, old_lease) = begin(&pool, user).await;
     let old_staging = zip::Staging::new().unwrap();
-    let (old_inventory, old_until) = prepare_attempt(&pool, &old, &old_lease, old_staging.path())
-        .await
-        .unwrap();
-    let old_summary = zip::package(&store, &old_inventory, old_staging.path(), user)
-        .await
-        .unwrap();
+    let (old_inventory, old_until) = prepare_attempt(
+        &pool,
+        &old,
+        &old_lease,
+        old_staging.path(),
+        &generation_budget(),
+    )
+    .await
+    .unwrap();
+    let old_summary = zip::package(
+        &store,
+        &old_inventory,
+        old_staging.path(),
+        user,
+        &generation_budget(),
+    )
+    .await
+    .unwrap();
     sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
         .bind(old_lease.id)
         .execute(&pool)
@@ -188,28 +239,49 @@ async fn retry_releases_old_reference_and_fences_late_publication() {
         .unwrap();
     assert_ne!(old.id, fresh.id);
     let staging = zip::Staging::new().unwrap();
-    let (inventory, until) = prepare_attempt(&pool, &fresh, &lease, staging.path())
-        .await
-        .unwrap();
+    let (inventory, until) =
+        prepare_attempt(&pool, &fresh, &lease, staging.path(), &generation_budget())
+            .await
+            .unwrap();
     assert!(
         publish_attempt(
             &pool,
             &store,
             &old,
             &old_lease,
-            &old_inventory,
-            &old_summary,
-            old_until
+            PreparedArchive {
+                inventory: &old_inventory,
+                summary: &old_summary,
+                retained_until: old_until
+            },
+            &generation_budget()
         )
         .await
         .is_err()
     );
-    let summary = zip::package(&store, &inventory, staging.path(), user)
-        .await
-        .unwrap();
-    publish_attempt(&pool, &store, &fresh, &lease, &inventory, &summary, until)
-        .await
-        .unwrap();
+    let summary = zip::package(
+        &store,
+        &inventory,
+        staging.path(),
+        user,
+        &generation_budget(),
+    )
+    .await
+    .unwrap();
+    publish_attempt(
+        &pool,
+        &store,
+        &fresh,
+        &lease,
+        PreparedArchive {
+            inventory: &inventory,
+            summary: &summary,
+            retained_until: until,
+        },
+        &generation_budget(),
+    )
+    .await
+    .unwrap();
     assert!(
         !store
             .get(fresh.key.as_str())
@@ -272,9 +344,15 @@ async fn existing_artifact_intent_cannot_be_adopted_or_overwritten() {
     .unwrap();
     let staging = zip::Staging::new().unwrap();
     assert!(
-        prepare_attempt(&pool, &attempt, &lease, staging.path())
-            .await
-            .is_err()
+        prepare_attempt(
+            &pool,
+            &attempt,
+            &lease,
+            staging.path(),
+            &generation_budget()
+        )
+        .await
+        .is_err()
     );
 }
 

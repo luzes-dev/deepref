@@ -16,6 +16,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use super::collector::{Inventory, Source};
+use super::generation::GenerationBudget;
 
 pub struct Staging(PathBuf);
 impl Staging {
@@ -56,12 +57,14 @@ pub fn file_stream(file: tokio::fs::File) -> impl Stream<Item = std::io::Result<
     })
 }
 
-pub async fn package(
+pub(super) async fn package(
     store: &DocumentStore,
     inventory: &Inventory,
     dir: &Path,
     user: UserId,
+    budget: &GenerationBudget,
 ) -> anyhow::Result<ArchiveSummary> {
+    budget.check()?;
     let path = dir.join("export.zip");
     let mut archive = ZipWriter::new(
         File::options()
@@ -75,17 +78,20 @@ pub async fn package(
         .unix_permissions(0o600);
     let mut written = 0u64;
     for (name, source) in &inventory.json_files {
+        budget.check()?;
         archive.start_file(name, options)?;
         let file = tokio::fs::File::open(source).await?;
         let stream = file_stream(file);
         futures::pin_mut!(stream);
         while let Some(chunk) = stream.next().await {
+            budget.check()?;
             let chunk = chunk?;
             charge(&mut written, chunk.len())?;
             archive.write_all(&chunk)?;
         }
     }
     for blob in &inventory.blobs {
+        budget.check()?;
         archive.start_file(&blob.archive_path, options)?;
         let stream: std::pin::Pin<Box<dyn Stream<Item = anyhow::Result<Bytes>> + Send>> =
             match &blob.source {
@@ -105,6 +111,7 @@ pub async fn package(
         let mut actual = 0u64;
         let mut hasher = Sha256::new();
         while let Some(chunk) = stream.next().await {
+            budget.check()?;
             let chunk = chunk?;
             actual = actual
                 .checked_add(u64::try_from(chunk.len())?)
@@ -139,29 +146,42 @@ pub async fn package(
     let body = serde_json::to_vec(&manifest)?;
     charge(&mut written, body.len())?;
     archive.write_all(&body)?;
+    budget.check()?;
     let mut file = archive.finish()?;
+    budget.check()?;
     file.flush()?;
+    budget.check()?;
     let total_bytes = file.metadata()?.len();
     ensure!(
         total_bytes <= super::MAX_ARCHIVE_BYTES,
         "archive budget exceeded"
     );
     file.rewind()?;
+    let sha256_hex = hash_archive(&mut file, budget)?;
+    Ok(ArchiveSummary {
+        path,
+        total_bytes,
+        sha256_hex,
+        manifest,
+    })
+}
+
+pub(super) fn hash_archive(
+    reader: &mut impl Read,
+    budget: &GenerationBudget,
+) -> anyhow::Result<String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 65536];
     loop {
-        let count = file.read(&mut buffer)?;
+        budget.check()?;
+        let count = reader.read(&mut buffer)?;
+        budget.check()?;
         if count == 0 {
             break;
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(ArchiveSummary {
-        path,
-        total_bytes,
-        sha256_hex: hex_digest(hasher.finalize().as_slice()),
-        manifest,
-    })
+    Ok(hex_digest(hasher.finalize().as_slice()))
 }
 fn charge(written: &mut u64, bytes: usize) -> anyhow::Result<()> {
     *written = written

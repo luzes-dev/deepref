@@ -1,4 +1,5 @@
 pub mod collector;
+mod generation;
 pub mod zip;
 
 use crate::object_lifecycle::{self, ObjectOwner};
@@ -97,10 +98,10 @@ pub enum ExportError {
     #[error("export was cancelled")]
     Cancelled,
 
-    #[error("database error: {0}")]
+    #[error("database error")]
     Database(#[from] sqlx::Error),
 
-    #[error("internal error: {0}")]
+    #[error("internal error")]
     Other(#[from] anyhow::Error),
 }
 
@@ -440,11 +441,18 @@ async fn lock_live_claim(
     Ok(())
 }
 
+#[derive(Clone)]
 struct Attempt {
     export: Uuid,
     user: UserId,
     id: Uuid,
     key: ObjectKey,
+}
+
+struct PreparedArchive<'a> {
+    inventory: &'a collector::Inventory,
+    summary: &'a zip::ArchiveSummary,
+    retained_until: DateTime<Utc>,
 }
 
 pub async fn process_export_job(
@@ -462,22 +470,24 @@ pub async fn process_export_job(
     let Some(attempt) = start_attempt(pool, payload.export_id, lease).await? else {
         return Ok(());
     };
-    let result = tokio::time::timeout(
+    let work_pool = pool.clone();
+    let work_store = store.clone();
+    let work_attempt = attempt.clone();
+    let work_lease = lease.clone();
+    let result = generation::run(
         std::time::Duration::from_secs(600),
-        build_attempt(pool, store, &attempt, lease),
+        move |budget| async move {
+            build_attempt(&work_pool, &work_store, &work_attempt, &work_lease, &budget).await
+        },
     )
     .await;
     match result {
-        Ok(Ok(())) => Ok(()),
-        error => {
+        Ok(()) => Ok(()),
+        Err(error) => {
             // Persist a closed category, never an upstream response or source
             // value which might contain credentials. A newer attempt is untouched.
             fail_attempt(pool, &attempt, lease, "export_generation_failed").await?;
-            match error {
-                Ok(Err(error)) => Err(error),
-                Err(error) => Err(error.into()),
-                Ok(Ok(())) => unreachable!(),
-            }
+            Err(error)
         }
     }
 }
@@ -530,11 +540,26 @@ async fn build_attempt(
     store: &DocumentStore,
     attempt: &Attempt,
     lease: &JobLease,
+    budget: &generation::GenerationBudget,
 ) -> anyhow::Result<()> {
+    budget.check()?;
     let staging = zip::Staging::new()?;
-    let (inventory, until) = prepare_attempt(pool, attempt, lease, staging.path()).await?;
-    let summary = zip::package(store, &inventory, staging.path(), attempt.user).await?;
-    publish_attempt(pool, store, attempt, lease, &inventory, &summary, until).await
+    let (inventory, until) = prepare_attempt(pool, attempt, lease, staging.path(), budget).await?;
+    let summary = zip::package(store, &inventory, staging.path(), attempt.user, budget).await?;
+    budget.check()?;
+    publish_attempt(
+        pool,
+        store,
+        attempt,
+        lease,
+        PreparedArchive {
+            inventory: &inventory,
+            summary: &summary,
+            retained_until: until,
+        },
+        budget,
+    )
+    .await
 }
 
 async fn prepare_attempt(
@@ -542,6 +567,7 @@ async fn prepare_attempt(
     attempt: &Attempt,
     lease: &JobLease,
     staging: &std::path::Path,
+    budget: &generation::GenerationBudget,
 ) -> anyhow::Result<(collector::Inventory, DateTime<Utc>)> {
     // This commits before any long transaction, including with max pool size 1.
     object_lifecycle::register_upload_intent(
@@ -572,7 +598,7 @@ async fn prepare_attempt(
         "ownership lost"
     );
     fence_attempt(&mut tx, attempt, lease).await?;
-    let inventory = collector::collect(&mut tx, attempt.user, scope, staging).await?;
+    let inventory = collector::collect(&mut tx, attempt.user, scope, staging, budget).await?;
     let until = Utc::now() + Duration::days(EXPORT_RETENTION_DAYS);
     let mut sources: Vec<_> = inventory
         .blobs
@@ -586,6 +612,7 @@ async fn prepare_attempt(
     // Account artifact sorts before all document/workflow keys.
     object_lifecycle::lock_object_for_upload(&mut tx, &attempt.key).await?;
     for (key, project) in sources {
+        budget.check()?;
         object_lifecycle::retain_object_reference(
             &mut tx,
             ObjectOwner::Project(project),
@@ -612,10 +639,15 @@ async fn publish_attempt(
     store: &DocumentStore,
     attempt: &Attempt,
     lease: &JobLease,
-    inventory: &collector::Inventory,
-    summary: &zip::ArchiveSummary,
-    until: DateTime<Utc>,
+    archive: PreparedArchive<'_>,
+    budget: &generation::GenerationBudget,
 ) -> anyhow::Result<()> {
+    budget.check()?;
+    let PreparedArchive {
+        inventory,
+        summary,
+        retained_until: until,
+    } = archive;
     let mut tx = pool.begin().await?;
     let authorized = lock_scope(&mut tx, attempt.user, &inventory.workspaces).await?;
     fence_attempt(&mut tx, attempt, lease).await?;
@@ -631,6 +663,7 @@ async fn publish_attempt(
         .for_upload(attempt.key.clone())
         .put_stream(stream)
         .await?;
+    budget.check()?;
     ensure!(
         stored.byte_size as u64 == summary.total_bytes && stored.sha256 == summary.sha256_hex,
         "uploaded artifact integrity mismatch"

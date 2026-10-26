@@ -2,6 +2,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use super::generation::GenerationBudget;
 use anyhow::{Context, ensure};
 use deepref_documents::ObjectKey;
 use deepref_domain::{ProjectId, UserId, billing::BillingProjection};
@@ -31,14 +32,15 @@ pub struct Inventory {
     pub blobs: Vec<SourceBlob>,
     pub workspaces: Vec<Uuid>,
 }
-#[derive(Default)]
 struct Budget {
     rows: usize,
     json_bytes: usize,
     source_bytes: u64,
+    generation: GenerationBudget,
 }
 impl Budget {
     fn json(&mut self, bytes: usize) -> anyhow::Result<()> {
+        self.check()?;
         self.rows += 1;
         self.json_bytes += bytes;
         ensure!(self.rows <= MAX_ROWS, "export row budget exceeded");
@@ -49,6 +51,7 @@ impl Budget {
         Ok(())
     }
     fn source(&mut self, bytes: i64, count: usize) -> anyhow::Result<u64> {
+        self.check()?;
         let bytes = u64::try_from(bytes).context("negative source length")?;
         self.source_bytes = self
             .source_bytes
@@ -59,6 +62,9 @@ impl Budget {
             "export source budget exceeded"
         );
         Ok(bytes)
+    }
+    fn check(&self) -> anyhow::Result<()> {
+        self.generation.check()
     }
 }
 
@@ -78,6 +84,7 @@ async fn json_section(
     ids: &[Uuid],
     budget: &mut Budget,
 ) -> anyhow::Result<(String, PathBuf)> {
+    budget.check()?;
     let path = dir.join(name);
     let mut file = std::fs::File::create(&path)?;
     file.write_all(b"[")?;
@@ -98,16 +105,24 @@ async fn json_section(
         file.write_all(body.as_bytes())?;
     }
     file.write_all(b"]")?;
+    budget.check()?;
     Ok((name.to_owned(), path))
 }
 
-pub async fn collect(
+pub(super) async fn collect(
     tx: &mut Transaction<'_, Postgres>,
     user: UserId,
     workspaces: Vec<Uuid>,
     dir: &Path,
+    generation: &GenerationBudget,
 ) -> anyhow::Result<Inventory> {
-    let mut budget = Budget::default();
+    generation.check()?;
+    let mut budget = Budget {
+        generation: generation.clone(),
+        rows: 0,
+        json_bytes: 0,
+        source_bytes: 0,
+    };
     let mut json_files = vec![
         json_section(
             tx,
@@ -292,6 +307,7 @@ pub async fn collect(
                 let mut output = std::fs::File::create(&path)?;
                 let mut offset = 0u64;
                 while offset < size {
+                    generation.check()?;
                     let chunk: Vec<u8> = sqlx::query_scalar("SELECT substring(content FROM $2 FOR 65536) FROM workflow_files WHERE id=$1")
                         .bind(id).bind(i32::try_from(offset + 1)?).fetch_one(&mut **tx).await?;
                     ensure!(!chunk.is_empty(), "inline workflow body ended early");
@@ -309,6 +325,7 @@ pub async fn collect(
             archive_path: format!("workflow_files/{id}"),
         });
     }
+    generation.check()?;
     Ok(Inventory {
         json_files,
         blobs,
