@@ -1094,7 +1094,7 @@ dependencies = [
  "deepref-application",
  "deepref-config",
  "deepref-domain",
- "jsonwebtoken",
+ "jsonwebtoken 11.1.0",
  "quick-xml 0.42.0",
  "reqwest 0.13.5",
  "roxmltree",
@@ -2332,6 +2332,28 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "signature",
+]
+
+[[package]]
+name = "jsonwebtoken"
+version = "11.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75fe14a82d81e5f5af639997db37d8b96045938a7ac6ab18cdbe1c7467e05e1"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
+ "hmac 0.12.1",
+ "js-sys",
+ "p256",
+ "p384",
+ "rand 0.8.8",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "signature",
+ "zeroize",
 ]
 
 [[package]]
@@ -5533,7 +5555,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "http",
- "jsonwebtoken",
+ "jsonwebtoken 10.3.0",
  "rand 0.9.5",
  "reqwest 0.12.28",
  "serde",
@@ -5638,6 +5660,20 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zerotrie"
