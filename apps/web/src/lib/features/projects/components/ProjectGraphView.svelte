@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ProjectionFreshness from './ProjectionFreshness.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
@@ -228,6 +229,11 @@
 	<div
 		class="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-wrap items-start gap-2 p-3"
 	>
+		{#if graphQuery.data && !graphQuery.error}
+			<Surface as="section" tone="subtle" class="w-full p-3" label="Graph metric freshness">
+				<ProjectionFreshness projection={graphData.projection} />
+			</Surface>
+		{/if}
 		<div class="pointer-events-auto w-56">
 			<InputGroup.Root>
 				<InputGroup.Input

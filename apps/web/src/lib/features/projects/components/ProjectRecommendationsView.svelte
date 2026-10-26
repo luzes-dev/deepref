@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ProjectionFreshness from './ProjectionFreshness.svelte';
 	import * as Tabs from '@deepref/ui/tabs';
 	import { Input } from '@deepref/ui/input';
 	import { Button } from '@deepref/ui/button';
@@ -83,6 +84,9 @@
 			class="w-full sm:w-64"
 		/>
 	</header>
+	{#if recommendations.data && !recommendations.error}
+		<ProjectionFreshness projection={groups.projection} />
+	{/if}
 	{#if recommendations.error}
 		<GraphDegradedState
 			error={recommendations.error}
