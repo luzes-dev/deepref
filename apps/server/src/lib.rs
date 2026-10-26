@@ -273,9 +273,14 @@ async fn run_accounts(action: AccountsCommand) -> anyhow::Result<()> {
                 );
                 Ok(())
             })
+            .await
+        }
+        AccountsCommand::ActivateExportRetention { confirm_drained } => {
+            deepref_http_api::activate_export_retention(&config, &confirm_drained).await?;
+            println!("account export retention activated");
+            Ok(())
         }
     }
-    .await
 }
 
 async fn with_telemetry<F>(

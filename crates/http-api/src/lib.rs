@@ -277,6 +277,14 @@ pub async fn activate_tenant_object_keys(
     deepref_app::object_lifecycle::activate_tenant_object_keys(&pool, attestation).await
 }
 
+pub async fn activate_export_retention(
+    config: &ApiConfig,
+    attestation: &str,
+) -> anyhow::Result<()> {
+    let pool = database_pool(config).await?;
+    deepref_app::account_export::activate_export_retention(&pool, attestation).await
+}
+
 pub async fn reconcile_object_orphans(
     config: &ApiConfig,
     attestation: &str,

@@ -155,7 +155,7 @@ pub(crate) async fn webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, ApiError> {
-    let get = |name: &str| -> Result<&str, ApiError> {
+    let header_value = |name: &str| -> Result<&str, ApiError> {
         let mut values = headers.get_all(name).iter();
         let value = values
             .next()
@@ -167,9 +167,9 @@ pub(crate) async fn webhook(
         Ok(value)
     };
     let headers = WebhookHeaders {
-        id: get("webhook-id")?,
-        timestamp: get("webhook-timestamp")?,
-        signatures: get("webhook-signature")?,
+        id: header_value("webhook-id")?,
+        timestamp: header_value("webhook-timestamp")?,
+        signatures: header_value("webhook-signature")?,
     };
     deepref_app::billing::receive(service(&state)?, &body, headers)
         .await

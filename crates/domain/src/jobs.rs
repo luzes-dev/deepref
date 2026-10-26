@@ -19,6 +19,7 @@ pub enum JobKind {
     AiUsageExportReplay,
     BackfillWorkflowFiles,
     CleanupObjects,
+    AccountDataExport,
 }
 
 /// Workload class of a durable job: the pool a worker serves and the unit of
@@ -92,7 +93,7 @@ impl JobKind {
     /// running binary decodes. Claims filter this set before LIMIT and declare
     /// it transaction-locally to the database capability fence. Heartbeats
     /// report the set for diagnostics; they do not establish fleet readiness.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::WorkFetchRequested,
         Self::RecomputeMetrics,
         Self::ImportDeduplication,
@@ -106,6 +107,7 @@ impl JobKind {
         Self::AiUsageExportReplay,
         Self::BackfillWorkflowFiles,
         Self::CleanupObjects,
+        Self::AccountDataExport,
     ];
 
     /// Persisted spellings of [`JobKind::ALL`].
@@ -128,6 +130,7 @@ impl JobKind {
             Self::AiUsageExportReplay => "ai_usage_export_replay",
             Self::BackfillWorkflowFiles => "backfill_workflow_files",
             Self::CleanupObjects => "cleanup_objects",
+            Self::AccountDataExport => "account_data_export",
         }
     }
 
@@ -145,7 +148,8 @@ impl JobKind {
             Self::RetrieveDocument
             | Self::ParseDocument
             | Self::ImportDeduplication
-            | Self::CleanupObjects => WorkloadClass::Documents,
+            | Self::CleanupObjects
+            | Self::AccountDataExport => WorkloadClass::Documents,
             // Durable automation, workflow and review step dispatch.
             Self::DurableRunStep | Self::BackfillWorkflowFiles => WorkloadClass::Workflow,
             // External provider traffic, bounded by provider rate limits.
@@ -198,6 +202,7 @@ impl std::str::FromStr for JobKind {
             "ai_usage_export_replay" => Ok(Self::AiUsageExportReplay),
             "backfill_workflow_files" => Ok(Self::BackfillWorkflowFiles),
             "cleanup_objects" => Ok(Self::CleanupObjects),
+            "account_data_export" => Ok(Self::AccountDataExport),
             _ => Err(InvalidJobKind(value.to_owned())),
         }
     }
@@ -296,6 +301,7 @@ mod tests {
             (JobKind::ParseDocument, WorkloadClass::Documents),
             (JobKind::ImportDeduplication, WorkloadClass::Documents),
             (JobKind::CleanupObjects, WorkloadClass::Documents),
+            (JobKind::AccountDataExport, WorkloadClass::Documents),
             (JobKind::DurableRunStep, WorkloadClass::Workflow),
             (JobKind::BackfillWorkflowFiles, WorkloadClass::Workflow),
             (JobKind::WorkFetchRequested, WorkloadClass::Integration),

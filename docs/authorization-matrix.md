@@ -14,13 +14,13 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 
 | Rule | Rows |
 | --- | --- |
-| Authenticated | 10 |
+| Authenticated | 14 |
 | Handler | 10 |
 | Open | 11 |
 | PlatformOperator | 1 |
 | Require | 143 |
 | RequireIfPresent | 1 |
-| **Total HTTP** | **176** |
+| **Total HTTP** | **180** |
 | **Non-HTTP paths** | **10** |
 
 ## HTTP routes
@@ -43,6 +43,10 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 | GET | `/me` | Authenticated | - | user-scoped | `n/a` | the caller reads their own profile |
 | DELETE | `/me/deletion-request` | Authenticated | - | user-scoped | `authz_user_scoped::deletion_request_affects_only_its_caller` | the caller cancels their own pending account deletion |
 | POST | `/me/deletion-request` | Authenticated | - | user-scoped | `authz_user_scoped::deletion_request_affects_only_its_caller` | the caller schedules deletion of their own account (11, BUSINESS_DECISIONS) |
+| GET | `/me/export` | Authenticated | - | user-scoped | `account_export::test_export_status` | the caller inspects the status of their account data export (11) |
+| POST | `/me/export` | Authenticated | - | user-scoped | `account_export::test_export_request` | the caller requests an account data export (11) |
+| DELETE | `/me/export/{id}` | Authenticated | - | user-scoped | `account_export::test_export_cancel` | the caller cancels or discards their account data export (11) |
+| GET | `/me/export/{id}/download` | Authenticated | - | user-scoped | `account_export::test_export_download` | the caller downloads their completed account data export (11) |
 | GET | `/notifications` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | user-scoped inbox, filtered to projects the caller can still view |
 | POST | `/notifications/mark-read` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | marks only notifications of projects the caller can still view |
 | GET | `/notifications/unread-count` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | user-scoped count over projects the caller can still view |

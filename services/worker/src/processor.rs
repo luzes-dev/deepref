@@ -851,6 +851,21 @@ async fn handle_job_with_document_services_inner(
         deepref_domain::JobKind::BackfillWorkflowFiles => {
             handle_backfill_workflow_files_job(&pool, job, document_store, config).await
         }
+        deepref_domain::JobKind::AccountDataExport => {
+            anyhow::ensure!(
+                job.scope == deepref_application::jobs::JobScope::Platform,
+                "account data export requires platform scope"
+            );
+            let store = match document_store {
+                Some(store) => store,
+                None => std::sync::Arc::new(DocumentStore::from_config(&config.documents)?),
+            };
+            let lease = lease
+                .ok_or_else(|| anyhow::anyhow!("account export requires durable job lease"))?;
+            deepref_app::account_export::process_export_job(&pool, &store, &job.payload, lease)
+                .await?;
+            Ok(DeliveryAction::Ack)
+        }
     }
 }
 

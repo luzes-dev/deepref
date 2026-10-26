@@ -359,6 +359,38 @@ pub static ROUTES: &[RouteRule] = &[
     ),
     tested(
         authenticated(
+            Verb::Post,
+            "/me/export",
+            "the caller requests an account data export (11)",
+        ),
+        "account_export::test_export_request",
+    ),
+    tested(
+        authenticated(
+            Verb::Get,
+            "/me/export",
+            "the caller inspects the status of their account data export (11)",
+        ),
+        "account_export::test_export_status",
+    ),
+    tested(
+        authenticated(
+            Verb::Get,
+            "/me/export/{id}/download",
+            "the caller downloads their completed account data export (11)",
+        ),
+        "account_export::test_export_download",
+    ),
+    tested(
+        authenticated(
+            Verb::Delete,
+            "/me/export/{id}",
+            "the caller cancels or discards their account data export (11)",
+        ),
+        "account_export::test_export_cancel",
+    ),
+    tested(
+        authenticated(
             Verb::Get,
             "/notifications",
             "user-scoped inbox, filtered to projects the caller can still view",

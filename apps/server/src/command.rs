@@ -49,6 +49,8 @@ pub enum AuditCommand {
 pub enum AccountsCommand {
     /// Completes account deletions whose 30-day window has passed.
     CompleteDeletions,
+    /// Activates retained object references for account data exports after confirming eager-deleting binaries are drained.
+    ActivateExportRetention { confirm_drained: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,6 +402,27 @@ impl Command {
             }
             [command, action] if command == "accounts" && action == "complete-deletions" => {
                 Ok(Self::Accounts(AccountsCommand::CompleteDeletions))
+            }
+            [command, action, rest @ ..]
+                if command == "accounts" && action == "activate-export-retention" =>
+            {
+                let mut confirm_drained = None;
+                let mut flags = rest.iter();
+                while let Some(flag) = flags.next() {
+                    match flag.as_str() {
+                        "--confirm-drained" => {
+                            confirm_drained = flags.next().cloned();
+                        }
+                        _ => anyhow::bail!(
+                            "usage: deepref-server accounts activate-export-retention --confirm-drained <token>"
+                        ),
+                    }
+                }
+                let token = confirm_drained
+                    .ok_or_else(|| anyhow::anyhow!("missing --confirm-drained flag"))?;
+                Ok(Self::Accounts(AccountsCommand::ActivateExportRetention {
+                    confirm_drained: token,
+                }))
             }
             [command, action, rest @ ..] if command == "audit" && action == "purge" => {
                 let mut dry_run = false;
