@@ -111,11 +111,11 @@ pub async fn workflow_file_key(
 /// Commit a pending intent before external I/O, then hold its row lock through
 /// upload and metadata/reference commit. Dropping/rolling back this transaction
 /// leaves the committed intent, including when commit success is ambiguous.
-pub async fn begin_object_upload(
+pub async fn register_upload_intent(
     pool: &PgPool,
     owner: ObjectOwner,
     key: &ObjectKey,
-) -> anyhow::Result<Transaction<'static, Postgres>> {
+) -> anyhow::Result<()> {
     let (user, workspace, project) = match owner {
         ObjectOwner::Project(project) => {
             let (workspace, activated) = project_layout(pool, project).await?;
@@ -154,14 +154,31 @@ pub async fn begin_object_upload(
     .bind(project)
     .execute(pool)
     .await?;
-    let mut tx = pool.begin().await?;
+    Ok(())
+}
+
+pub async fn lock_object_for_upload(
+    tx: &mut Transaction<'_, Postgres>,
+    key: &ObjectKey,
+) -> anyhow::Result<()> {
     let deleted: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT retired_at FROM object_lifecycle WHERE storage_key=$1 FOR UPDATE",
     )
     .bind(key.as_str())
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     anyhow::ensure!(deleted.is_none(), "upload intent was already retired");
+    Ok(())
+}
+
+pub async fn begin_object_upload(
+    pool: &PgPool,
+    owner: ObjectOwner,
+    key: &ObjectKey,
+) -> anyhow::Result<Transaction<'static, Postgres>> {
+    register_upload_intent(pool, owner, key).await?;
+    let mut tx = pool.begin().await?;
+    lock_object_for_upload(&mut tx, key).await?;
     Ok(tx)
 }
 
@@ -316,6 +333,7 @@ pub async fn cleanup_objects(
 }
 
 pub async fn schedule_object_cleanup(pool: &PgPool) -> anyhow::Result<()> {
+    crate::account_export::expire_exports(pool).await?;
     let due: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM object_lifecycle WHERE deleted_at IS NULL AND cleanup_after <= now())")
         .fetch_one(pool).await?;
     if due {

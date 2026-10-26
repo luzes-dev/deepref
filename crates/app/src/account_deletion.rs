@@ -698,6 +698,10 @@ async fn finalize_account(
             }
         };
 
+    crate::account_export::release_account_exports(&mut tx, user)
+        .await
+        .map_err(|error| sqlx::Error::Protocol(format!("export release failed: {error}")))?;
+
     // Machine credentials may contain free-text names. Erase their verifiers
     // and names even in shared workspaces, retaining lifecycle audit facts.
     let keys_deleted = crate::api_keys::remove_user_keys(&mut tx, user, audit).await?;

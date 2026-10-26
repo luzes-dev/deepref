@@ -159,7 +159,7 @@ only then do factories use
 PDFs and `workspaces/{workspace_id}/projects/{project_id}/workflow-runs/{run_id}/files/{object_id}`
 for workflow export files. Existing `documents/{uuid}` and
 `projects/{project_id}/workflow-runs/{run_id}/files/{file_id}` references remain
-readable. Account exports use `account-exports/{user_id}/{export_id}` and the
+readable. Account exports use fresh `account-exports/{user_id}/{attempt_id}` keys and the
 privacy feature's user-only authorization. Authorization precedes object access;
 the key layout is not an access boundary.
 
@@ -338,6 +338,7 @@ chosen by the caller. This table is the normative mapping:
 | `run_deduplication`       | `documents`    | CPU/memory-bound deduplication of imported record corpora     |
 | `durable_run_step`        | `workflow`     | durable automation, workflow and review step dispatch         |
 | `cleanup_objects`         | `documents`    | Platform-scoped physical blob cleanup with durable retirement |
+| `account_data_export`    | `documents`    | Bounded human account ZIP with durable claim/retention fencing |
 | `backfill_workflow_files` | `workflow`     | workflow export file copy to object storage                   |
 | `work_fetch_requested`    | `integration`  | external metadata provider traffic, rate-limit bounded        |
 | `pmid_import`             | `integration`  | external PubMed provider traffic, rate-limit bounded          |

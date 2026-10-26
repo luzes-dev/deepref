@@ -171,6 +171,18 @@ pub struct ClaimLoopConfig {
 const CLAIM_TICK: Duration = Duration::from_millis(100);
 const CLAIM_IDLE_MAX: Duration = Duration::from_secs(1);
 
+fn lease_control_pool(business: &sqlx::PgPool) -> sqlx::PgPool {
+    // Long business transactions (notably streaming export uploads) may use
+    // every configured business connection. One additional, bounded control
+    // connection keeps durable lease renewal/settlement and liveness independent.
+    business
+        .options()
+        .clone()
+        .min_connections(0)
+        .max_connections(1)
+        .connect_lazy_with(business.connect_options().as_ref().clone())
+}
+
 /// Checks the OpenAlex key once, when the deployment chain names OpenAlex. A key that
 /// fails only downgrades this process to keyless, so the probe never stops boot.
 async fn probe_openalex(pool: &sqlx::PgPool, config: &config::WorkerConfig) {
@@ -217,13 +229,19 @@ pub async fn run_with_shutdown(
         .max_lifetime(Some(database.max_lifetime))
         .connect(database.url())
         .await?;
+    let control_pool = lease_control_pool(&pool);
+    // Validate the reserved connection at boot rather than discovering a
+    // missing database connection allowance after consequential work starts.
+    drop(control_pool.acquire().await?);
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     let document_store = Arc::new(DocumentStore::from_config(&config.documents)?);
     let ai_gateway =
         build_ai_gateway(&pool, &config.runtime.ai, config.runtime.valkey.as_ref()).await?;
     // Select one primary transport. Startup verifies JetStream configuration
     // before processors start; broker outages later retain DB obligations.
-    let store = PostgresDurableExecutionStore { pool: pool.clone() };
+    let store = PostgresDurableExecutionStore {
+        pool: control_pool.clone(),
+    };
     let broker = match &config.runtime.work_transport {
         deepref_config::WorkTransportConfig::Postgres => None,
         deepref_config::WorkTransportConfig::JetStream(settings) => {
@@ -403,7 +421,7 @@ pub async fn run_with_shutdown(
         })
         .collect::<Vec<_>>();
     let heartbeat_task = tokio::spawn(heartbeat::run(
-        pool.clone(),
+        control_pool.clone(),
         owner.clone(),
         heartbeat::HEARTBEAT_INTERVAL,
         heartbeat_signal,
@@ -475,6 +493,7 @@ pub async fn run_with_shutdown(
     }
     outbox_drained??;
     inbox_drained??;
+    control_pool.close().await;
     Ok(())
 }
 
@@ -1076,6 +1095,79 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::panic_in_result_fn)]
+    async fn lease_control_survives_max_pool_one_long_business_transaction() -> anyhow::Result<()> {
+        let Some(business) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 1).await
+        else {
+            return Ok(());
+        };
+        let lease_duration = Duration::from_secs(1);
+        let job_id = uuid::Uuid::new_v4();
+        deepref_app::enqueue_job_pool(
+            &business,
+            &deepref_app::scoped_job(
+                job_id,
+                deepref_application::jobs::JobScope::Platform,
+                deepref_domain::JobKind::AccountDataExport,
+                serde_json::json!({"export_id":uuid::Uuid::new_v4()}),
+                format!("lease-pool:{job_id}"),
+            ),
+        )
+        .await?;
+        let claimed = deepref_app::claim_job(&business, "pool-reservation-test", lease_duration)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("expected claimed export job"))?;
+        let lease = claimed.lease("pool-reservation-test");
+        let control = lease_control_pool(&business);
+        let control_store = PostgresDurableExecutionStore {
+            pool: control.clone(),
+        };
+        let renewals = Arc::new(AtomicU32::new(0));
+        let counter = renewals.clone();
+        let work_pool = business.clone();
+        let result = run_with_lease_renewal(
+            lease_duration,
+            move || {
+                let store = control_store.clone();
+                let lease = lease.clone();
+                let counter = counter.clone();
+                async move {
+                    let renewed = store.renew(&lease, lease_duration).await?;
+                    if renewed {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(renewed)
+                }
+            },
+            run_isolated(async move {
+                let mut tx = work_pool.begin().await?;
+                sqlx::query("SELECT 1").execute(&mut *tx).await?;
+                tokio::time::sleep(Duration::from_millis(2400)).await;
+                tx.rollback().await?;
+                Ok(DeliveryAction::Ack)
+            }),
+        )
+        .await;
+        assert!(
+            matches!(result, Ok(DeliveryAction::Ack)),
+            "long held upload connection must not consume lease renewal capacity: {result:?}"
+        );
+        assert!(
+            renewals.load(Ordering::SeqCst) >= 2,
+            "real worker renewals must progress beyond the initial lease"
+        );
+        let still_live: bool =
+            sqlx::query_scalar("SELECT leased_until>clock_timestamp() FROM jobs WHERE id=$1")
+                .bind(job_id)
+                .fetch_one(&business)
+                .await?;
+        assert!(still_live);
+        control.close().await;
+        Ok(())
+    }
 
     /// One failed renewal UPDATE (a dropped connection, a pool timeout) must
     /// not cancel work that still holds a valid lease.

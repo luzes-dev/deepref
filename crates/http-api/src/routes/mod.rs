@@ -1,3 +1,4 @@
+mod account_export;
 mod acquisitions;
 mod actor;
 mod ai;
@@ -69,6 +70,12 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
             auth::request_account_deletion,
             auth::cancel_account_deletion
         ))
+        .routes(routes!(
+            account_export::request_export,
+            account_export::get_export_status
+        ))
+        .routes(routes!(account_export::download_export))
+        .routes(routes!(account_export::cancel_export))
         .routes(routes!(projection::get_projection))
         .routes(routes!(settings::get_settings, settings::update_settings))
         .routes(routes!(projects::list_projects, projects::create_project))

@@ -47,6 +47,7 @@ tower.workspace = true
 syn = { version = "2", default-features = false, features = ["full", "parsing", "visit", "derive", "printing"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 opentelemetry.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
