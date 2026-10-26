@@ -16,3 +16,12 @@ id = "RUSTSEC-2023-0071"
 # Keep this accepted risk aligned with deny.toml.
 reason = "rsa 0.9.10 via jsonwebtoken 10.3.0 only verifies public-key WorkOS RS256 signatures in production; private-key signing is confined to a public test fixture; no patch exists for the private-key timing leak"
 ignoreUntil = 2027-10-20
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0387"
+# crypto-bigint 0.5.5 is transitive through jsonwebtoken 10.3.0 (via p256/p384).
+# In production Deepref only verifies public-key WorkOS signatures.
+# Timing variability affects private-key operations; no non-breaking patch exists.
+# Keep this accepted risk aligned with deny.toml.
+reason = "crypto-bigint is transitive through jsonwebtoken's rust_crypto backend (via p256/p384), which only verifies WorkOS signatures with public keys; timing leak affects private-key operations and no non-breaking patch exists"
+ignoreUntil = 2027-10-20
