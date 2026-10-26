@@ -38,7 +38,7 @@ Usage settlement counts nonterminal reservations opened at least five minutes ag
 
 ## Optional infrastructure observations
 
-API and worker boot install the rate-limit observer; AI worker admission also installs the concurrency-mirror observer. These use the configured OTLP provider. The NATS worker installs its transport observer after configuration validation, records verified startup readiness and records subsequent management-check observations. Without OTLP export these instruments remain no-ops; they never change grants, retries or work settlement.
+API boot installs the rate-limit observer. API and worker AI admission install the concurrency-mirror observer. These use the configured OTLP provider. The NATS worker installs its transport observer after configuration validation, records verified startup readiness and records subsequent management-check observations. Without OTLP export these instruments remain no-ops; they never change grants, retries or work settlement.
 
 | Instrument | Kind/unit | Attributes | Meaning |
 | --- | --- | --- | --- |
