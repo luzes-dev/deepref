@@ -411,6 +411,9 @@ async fn ensure_v2_report(tx: &mut Transaction<'_, Postgres>, doi: &str) -> anyh
     .bind(doi)
     .fetch_one(&mut **tx)
     .await?;
+    let previous: Option<(Option<i32>,i64,i64)> = sqlx::query_as(
+        "SELECT publication_year,total_citations,references_count FROM reports WHERE id=$1 FOR UPDATE",
+    ).bind(report_id).fetch_optional(&mut **tx).await?;
     sqlx::query(
         "INSERT INTO reports (id,title,abstract_text,publication_year,journal,url,work_type,publisher,container_title,total_citations,references_count,raw) SELECT $1,title,abstract_text,COALESCE(published_year,issued_year),container_title,url,work_type,publisher,container_title,total_citations,references_count,raw FROM works WHERE canonical_doi=$2 ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,abstract_text=EXCLUDED.abstract_text,publication_year=EXCLUDED.publication_year,journal=EXCLUDED.journal,url=EXCLUDED.url,work_type=EXCLUDED.work_type,publisher=EXCLUDED.publisher,container_title=EXCLUDED.container_title,total_citations=EXCLUDED.total_citations,references_count=EXCLUDED.references_count,raw=EXCLUDED.raw,updated_at=now()",
     )
@@ -418,6 +421,23 @@ async fn ensure_v2_report(tx: &mut Transaction<'_, Postgres>, doi: &str) -> anyh
     .bind(doi)
     .execute(&mut **tx)
     .await?;
+    let current: (Option<i32>, i64, i64) = sqlx::query_as(
+        "SELECT publication_year,total_citations,references_count FROM reports WHERE id=$1",
+    )
+    .bind(report_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if previous.is_some_and(|previous| previous != current) {
+        let projects: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT project_id FROM project_reports WHERE report_id=$1 ORDER BY project_id",
+        )
+        .bind(report_id)
+        .fetch_all(&mut **tx)
+        .await?;
+        for project in projects {
+            deepref_app::enqueue_metrics_recompute(tx, project).await?;
+        }
+    }
     let identifier_id = Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         format!("deepref:doi:{doi}").as_bytes(),
@@ -571,19 +591,7 @@ async fn emit_metrics_request(
     tx: &mut Transaction<'_, Postgres>,
     event: &EventEnvelope<WorkFetchRequested>,
 ) -> anyhow::Result<()> {
-    let revision: i64 = sqlx::query_scalar("UPDATE projects SET metric_requested_revision=metric_requested_revision+1 WHERE id=$1 RETURNING metric_requested_revision")
-        .bind(event.payload.project_id).fetch_one(&mut **tx).await?;
-    deepref_app::enqueue_job(
-        tx,
-        &deepref_app::job(
-            Uuid::new_v4(),
-            event.payload.project_id.into(),
-            deepref_domain::JobKind::RecomputeMetrics,
-            serde_json::json!({"project_id":event.payload.project_id,"revision":revision}),
-            format!("recompute_metrics:{}:{revision}", event.payload.project_id),
-        ),
-    )
-    .await?;
+    deepref_app::enqueue_metrics_recompute(tx, event.payload.project_id).await?;
     Ok(())
 }
 
@@ -1137,5 +1145,317 @@ mod tests {
             "with no attempt the placeholder stays"
         );
         Ok(())
+    }
+    #[tokio::test]
+    async fn graph_shared_report_refresh_invalidates_every_project_and_rolls_back_atomically()
+    -> anyhow::Result<()> {
+        let Some(pool) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+        else {
+            return Ok(());
+        };
+        let doi = "10.5555/shared-refresh";
+        let owner = Uuid::new_v4();
+        let (first, first_lease) = seeded_run(&pool, doi).await?;
+        claim_doi(&pool, doi, owner, OWNER_LEASE).await?;
+        finalize_success(
+            &pool,
+            &first,
+            doi,
+            owner,
+            &first_lease,
+            &fetched(doi, ProviderKind::Crossref),
+        )
+        .await?;
+        let (second, second_lease) = seeded_run(&pool, doi).await?;
+        attach_cached(&pool, &second, doi, &second_lease).await?;
+        for project in [first.payload.project_id, second.payload.project_id] {
+            deepref_app::recompute_project_metrics(&pool, project).await?;
+        }
+        let before = graph_refresh_state(&pool).await?;
+        let (refresh, lease) = seeded_run(&pool, doi).await?;
+        sqlx::query("UPDATE report_fetch_state SET status='failed' WHERE canonical_doi=$1")
+            .bind(doi)
+            .execute(&pool)
+            .await?;
+        claim_doi(&pool, doi, owner, OWNER_LEASE).await?;
+        let mut changed = fetched(doi, ProviderKind::OpenAlex);
+        changed.work.work.total_citations = 123;
+        changed.work.work.issued_year = Some(2020);
+        // A late canonical-command failure happens after report writes and
+        // all projection events. The entire command must roll back.
+        sqlx::raw_sql("CREATE FUNCTION reject_graph_settle() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'graph command rollback'; END $$; CREATE TRIGGER reject_graph_settle BEFORE UPDATE ON acquisition_items FOR EACH ROW EXECUTE FUNCTION reject_graph_settle();").execute(&pool).await?;
+        assert!(
+            finalize_success(&pool, &refresh, doi, owner, &lease, &changed)
+                .await
+                .is_err()
+        );
+        let after = graph_refresh_state(&pool).await?;
+        for project in [first.payload.project_id, second.payload.project_id] {
+            assert_eq!(
+                before.iter().find(|row| row.0 == project),
+                after.iter().find(|row| row.0 == project)
+            );
+            assert_eq!(
+                deepref_app::get_projection_status(&pool, project)
+                    .await?
+                    .unwrap()
+                    .state,
+                deepref_domain::graph::ProjectionState::Ready
+            );
+        }
+        let canonical: (Option<i32>,i64) = sqlx::query_as("SELECT publication_year,total_citations FROM reports WHERE id=(SELECT report_id FROM report_identifiers WHERE normalized_value=$1 AND scheme='doi')").bind(doi).fetch_one(&pool).await?;
+        assert_eq!(canonical, (Some(2024), 0));
+        sqlx::query("DROP TRIGGER reject_graph_settle ON acquisition_items")
+            .execute(&pool)
+            .await?;
+        finalize_success(&pool, &refresh, doi, owner, &lease, &changed).await?;
+        let after = graph_refresh_state(&pool).await?;
+        for project in [first.payload.project_id, second.payload.project_id] {
+            let old = before.iter().find(|row| row.0 == project).unwrap();
+            let new = after.iter().find(|row| row.0 == project).unwrap();
+            assert_eq!(new.1, old.1 + 1);
+            assert_eq!(new.2, old.2 + 1);
+            let status = deepref_app::get_projection_status(&pool, project)
+                .await?
+                .unwrap();
+            assert_eq!(
+                status.state,
+                deepref_domain::graph::ProjectionState::Lagging
+            );
+            assert_eq!(status.lag, 1);
+        }
+        Ok(())
+    }
+
+    async fn graph_refresh_state(pool: &PgPool) -> anyhow::Result<Vec<(Uuid, i64, i64)>> {
+        Ok(sqlx::query_as("SELECT p.id,p.metric_requested_revision,(SELECT count(*) FROM outbox_events e WHERE e.message_type='graph.metrics_recompute_requested' AND e.payload->>'project_id'=p.id::text) FROM projects p ORDER BY p.id").fetch_all(pool).await?)
+    }
+
+    #[tokio::test]
+    async fn graph_production_command_outbox_consumer_handler_failure_restart_and_redelivery()
+    -> anyhow::Result<()> {
+        use deepref_application::{
+            jobs::JobRetry,
+            outbox::{DeliveryContext, OutboxRegistry},
+        };
+        use deepref_domain::{WorkloadClass, graph::ProjectionState};
+        let Some(pool) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+        else {
+            return Ok(());
+        };
+        let doi = "10.5555/graph-delivery";
+        let owner = Uuid::new_v4();
+        let (event, lease) = seeded_run(&pool, doi).await?;
+        claim_doi(&pool, doi, owner, OWNER_LEASE).await?;
+        finalize_success(
+            &pool,
+            &event,
+            doi,
+            owner,
+            &lease,
+            &fetched(doi, ProviderKind::Crossref),
+        )
+        .await?;
+        let project = event.payload.project_id;
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='recompute_metrics'")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(
+            count, 0,
+            "command emits outbox; dispatcher owns queue effect"
+        );
+        assert_eq!(
+            deepref_app::get_projection_status(&pool, project)
+                .await?
+                .unwrap()
+                .state,
+            ProjectionState::Lagging
+        );
+        // Repair is another real producer. With dispatcher/worker stopped,
+        // both requests remain durable. Deliver the newer request first.
+        deepref_app::rebuild_project_projection(&pool, project).await?;
+        let mut registry = OutboxRegistry::new();
+        deepref_app::register_metrics_projection(&pool, &mut registry)?;
+        let mut events = deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &registry,
+            "before-restart",
+            OWNER_LEASE,
+            10,
+        )
+        .await?;
+        assert_eq!(events.len(), 2);
+        events.sort_by_key(|e| std::cmp::Reverse(e.payload["revision"].as_i64().unwrap()));
+        let latest = events[0].clone();
+        // The actual registered consumer must roll its receipt back when
+        // enqueue fails, then succeed under a fresh dispatcher generation.
+        sqlx::raw_sql("CREATE FUNCTION reject_graph_job() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='recompute_metrics' THEN RAISE EXCEPTION 'graph enqueue failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_graph_job BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION reject_graph_job();").execute(&pool).await?;
+        deepref_app::outbox::dispatch_outbox_event(&pool, &registry, OWNER_LEASE, &latest).await?;
+        let delivered: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM outbox_receipts WHERE event_id=$1 AND state='delivered')",
+        )
+        .bind(latest.event_id)
+        .fetch_one(&pool)
+        .await?;
+        assert!(!delivered, "receipt cannot outlive failed effect");
+        sqlx::query("DROP TRIGGER reject_graph_job ON jobs")
+            .execute(&pool)
+            .await?;
+        // Simulate restart/reclaim without waiting through operational backoff.
+        sqlx::query("UPDATE outbox_events SET lease_expires_at=CASE WHEN lease_owner IS NOT NULL THEN now()-interval '1 second' ELSE NULL END,next_attempt_at=now() WHERE delivery_state='pending'").execute(&pool).await?;
+        sqlx::query("UPDATE outbox_receipts SET next_attempt_at=now() WHERE state='retrying'")
+            .execute(&pool)
+            .await?;
+        let mut restarted = OutboxRegistry::new();
+        deepref_app::register_metrics_projection(&pool, &mut restarted)?;
+        let mut events = deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &restarted,
+            "after-restart",
+            OWNER_LEASE,
+            10,
+        )
+        .await?;
+        // Recovery charges the abandoned predecessor and schedules its own
+        // backoff. Age that backoff only after the real recovery has run;
+        // preserve any claim accepted by the first intake.
+        sqlx::query("UPDATE outbox_events SET next_attempt_at=now() WHERE delivery_state='pending' AND lease_owner IS NULL")
+            .execute(&pool).await?;
+        sqlx::query("UPDATE outbox_receipts SET next_attempt_at=now() WHERE state='retrying'")
+            .execute(&pool)
+            .await?;
+        events.extend(
+            deepref_app::outbox::claim_outbox_batch(
+                &pool,
+                &restarted,
+                "after-restart",
+                OWNER_LEASE,
+                10,
+            )
+            .await?,
+        );
+        events.sort_by_key(|e| std::cmp::Reverse(e.payload["revision"].as_i64().unwrap()));
+        assert_eq!(events.len(), 2);
+        for e in &events {
+            deepref_app::outbox::dispatch_outbox_event(&pool, &restarted, OWNER_LEASE, e).await?;
+            let consumer = &e.expected_consumers[0];
+            let handler = restarted
+                .handler(&e.message_type, e.message_version, consumer)
+                .unwrap();
+            handler(
+                DeliveryContext {
+                    event_id: e.event_id,
+                    consumer: consumer.clone(),
+                    message_type: e.message_type.clone(),
+                    message_version: e.message_version,
+                    claim_fence: e.claim_fence.clone(),
+                },
+                e.payload.clone(),
+            )
+            .await?;
+        }
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='recompute_metrics'")
+                .fetch_one(&pool)
+                .await?;
+        let diagnostics: Vec<(Uuid,serde_json::Value,String,Option<String>)> = sqlx::query_as("SELECT event_id,payload,delivery_state,last_error FROM outbox_events ORDER BY event_id").fetch_all(&pool).await?;
+        assert_eq!(
+            count, 2,
+            "consumer redelivery cannot duplicate queue effects: {diagnostics:?}"
+        );
+        let non_projection = deepref_app::claim_jobs(
+            &pool,
+            "other-pool",
+            OWNER_LEASE,
+            &[
+                WorkloadClass::Ai,
+                WorkloadClass::Workflow,
+                WorkloadClass::Documents,
+            ],
+            10,
+        )
+        .await?;
+        assert!(non_projection.is_empty(), "projection work stays isolated");
+        let mut jobs = deepref_app::claim_jobs(
+            &pool,
+            "projection-before-restart",
+            OWNER_LEASE,
+            &[WorkloadClass::Projection],
+            10,
+        )
+        .await?;
+        jobs.sort_by_key(|j| std::cmp::Reverse(j.payload["revision"].as_i64().unwrap()));
+        assert_eq!(jobs.len(), 2);
+        sqlx::raw_sql("CREATE FUNCTION reject_graph_metrics() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'graph compute failure'; END $$; CREATE TRIGGER reject_graph_metrics BEFORE UPDATE ON project_reports FOR EACH ROW EXECUTE FUNCTION reject_graph_metrics();").execute(&pool).await?;
+        let error = crate::processor::handle_recompute_metrics_job(&pool, jobs[0].payload.clone())
+            .await
+            .unwrap_err();
+        let failed = deepref_app::get_projection_status(&pool, project)
+            .await?
+            .unwrap();
+        assert_eq!(failed.state, ProjectionState::Failed);
+        assert!(failed.last_error.unwrap().contains("graph compute failure"));
+        assert!(failed.rebuild_state.is_some());
+        let snapshots: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM metric_snapshots WHERE project_id=$1")
+                .bind(project)
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(
+            snapshots, 0,
+            "failed compute rolls back all projection output"
+        );
+        deepref_app::fail_job(
+            &pool,
+            &jobs[0].lease("projection-before-restart"),
+            &error.to_string(),
+            JobRetry::After(Duration::ZERO),
+        )
+        .await?;
+        sqlx::query("DROP TRIGGER reject_graph_metrics ON project_reports")
+            .execute(&pool)
+            .await?;
+        let resumed = deepref_app::claim_jobs(
+            &pool,
+            "projection-after-restart",
+            OWNER_LEASE,
+            &[WorkloadClass::Projection],
+            10,
+        )
+        .await?;
+        assert_eq!(resumed.len(), 1);
+        crate::processor::handle_recompute_metrics_job(&pool, resumed[0].payload.clone()).await?;
+        assert!(
+            deepref_app::complete_job(&pool, &resumed[0].lease("projection-after-restart")).await?
+        );
+        let expected = graph_metric_values(&pool, project).await?;
+        // Old event, then exact redelivery after success: every deterministic
+        // output must remain identical, even though execution time changes.
+        for payload in [jobs[1].payload.clone(), resumed[0].payload.clone()] {
+            crate::processor::handle_recompute_metrics_job(&pool, payload).await?;
+            assert_eq!(graph_metric_values(&pool, project).await?, expected);
+        }
+        assert!(
+            deepref_app::complete_job(&pool, &jobs[1].lease("projection-before-restart")).await?
+        );
+        let ready = deepref_app::get_projection_status(&pool, project)
+            .await?
+            .unwrap();
+        assert_eq!(ready.state, ProjectionState::Ready);
+        assert_eq!(
+            (ready.requested_revision, ready.applied_revision, ready.lag),
+            (2, 2, 0)
+        );
+        Ok(())
+    }
+
+    async fn graph_metric_values(
+        pool: &PgPool,
+        project: Uuid,
+    ) -> anyhow::Result<Vec<(Uuid, i64, i64, i64, i64, f64)>> {
+        Ok(sqlx::query_as("SELECT report_id,total_citations,references_count,internal_citations,outbound_internal_references,rank_score FROM project_reports WHERE project_id=$1 ORDER BY report_id").bind(project).fetch_all(pool).await?)
     }
 }

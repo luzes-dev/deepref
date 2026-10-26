@@ -27,6 +27,7 @@ mod documents;
 pub mod durable_runs;
 mod extraction;
 mod graph;
+mod graph_outbox;
 pub mod identity;
 pub mod inbox;
 mod jobs;
@@ -183,6 +184,7 @@ pub use graph::{
     load_project_graph, load_project_graph_strict, rebuild_project_projection,
     recompute_project_metrics,
 };
+pub use graph_outbox::register_metrics_projection;
 pub use jobs::{
     PostgresClaimTransport, PostgresDurableExecutionStore, claim_job, claim_jobs, complete_job,
     enqueue_job, enqueue_job_pool, fail_job, job, park_queued_jobs, recover_expired_jobs,

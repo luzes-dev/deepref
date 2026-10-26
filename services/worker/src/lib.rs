@@ -243,7 +243,7 @@ pub async fn run_with_shutdown(
     // export (09 slice B) registers the first production contract; while the
     // export switch is off no consumer is registered, so nothing is claimed
     // and no delivery attempt is spent waiting for a billing provider.
-    let usage_export_registry = if config.runtime.usage_export.enabled {
+    let mut usage_export_registry = if config.runtime.usage_export.enabled {
         let sink: Arc<dyn deepref_application::usage_export::UsageExportSink> =
             // No billing provider is chosen yet (BUSINESS_DECISIONS.md). The
             // disabled sink never claims success, so exported events stay
@@ -258,6 +258,7 @@ pub async fn run_with_shutdown(
         tracing::info!("AI usage export is disabled; retained usage facts wait for a later replay");
         deepref_application::outbox::OutboxRegistry::new()
     };
+    deepref_app::register_metrics_projection(&pool, &mut usage_export_registry)?;
     let outbox_task = tokio::spawn(supervise_processor(
         "outbox dispatcher",
         reconciler_shutdown.clone(),

@@ -19677,28 +19677,27 @@
         }
       },
       "ProjectionMetadata": {
-        "type": "object",
-        "required": [
-          "revision",
-          "lag"
-        ],
-        "properties": {
-          "lag": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "last_success_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProjectionStatusDto"
           }
-        }
+        ]
+      },
+      "ProjectionRebuildStateDto": {
+        "type": "string",
+        "enum": [
+          "rebuilding"
+        ]
+      },
+      "ProjectionStateDto": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "ready",
+          "lagging",
+          "rebuilding",
+          "failed"
+        ]
       },
       "ProjectionStatusDto": {
         "type": "object",
@@ -19738,9 +19737,13 @@
             "format": "uuid"
           },
           "rebuild_state": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProjectionRebuildStateDto"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "requested_revision": {
@@ -19752,7 +19755,7 @@
             "format": "int64"
           },
           "state": {
-            "type": "string"
+            "$ref": "#/components/schemas/ProjectionStateDto"
           },
           "watermark": {
             "type": "integer",

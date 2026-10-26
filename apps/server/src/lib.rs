@@ -392,7 +392,7 @@ async fn run_projection(action: ProjectionCommand) -> anyhow::Result<()> {
             ProjectionCommand::Rebuild { project_id } => {
                 let job_id =
                     deepref_http_api::rebuild_project_projection(&config, project_id).await?;
-                println!("enqueued projection rebuild job {job_id} for project {project_id}");
+                println!("emitted projection rebuild event {job_id} for project {project_id}");
                 Ok(())
             }
             ProjectionCommand::Status { project_id } => {

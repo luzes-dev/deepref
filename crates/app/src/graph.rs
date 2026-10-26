@@ -3,7 +3,7 @@ use deepref_domain::ProjectId;
 use deepref_domain::graph::{
     GraphAppraisalOverlay, GraphEdge, GraphFieldSelection, GraphMetricsOverlay, GraphNode,
     GraphProvenanceOverlay, GraphScreeningOverlay, GraphStudyOverlay, ProjectGraph,
-    ProjectionState,
+    ProjectionRebuildState, ProjectionState,
 };
 use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ pub struct ProjectionStatus {
     pub lag: i64,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
-    pub rebuild_state: Option<String>,
+    pub rebuild_state: Option<ProjectionRebuildState>,
 }
 
 /// Loads the bounded project graph from canonical UUID rows. This adapter owns
@@ -35,22 +35,29 @@ pub async fn load_project_graph(
     load_project_graph_with_limit(pool, project_id, fields, Some(MAX_GRAPH_NODES)).await
 }
 
-/// Strict read-after-write graph loader: ensures graph projection is synchronized with
-/// canonical mutations (or recomputed if lagging) before returning, guaranteeing
-/// snapshot consistency and avoiding hidden stale state.
-/// Strict read loader: checks projection freshness and returns the bounded project graph
-/// along with truthful projection status. If the read model lags canonical mutations,
-/// it returns explicit lagging/pending status rather than hiding stale state or
-/// blocking the HTTP request with synchronous unbounded graph computation.
+/// Read freshness, topology and all selected overlays from one repeatable
+/// snapshot. A strict read reports pending output explicitly; it never runs an
+/// unbounded computation on the HTTP request path.
 pub async fn load_project_graph_strict(
     pool: &PgPool,
     project_id: Uuid,
     fields: GraphFieldSelection,
 ) -> anyhow::Result<(ProjectGraph, ProjectionStatus)> {
-    let status = get_projection_status(pool, project_id)
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *transaction)
+        .await?;
+    let status = projection_status_from_connection(&mut transaction, project_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
-    let graph = load_project_graph(pool, project_id, fields).await?;
+    let graph = load_project_graph_from_connection(
+        &mut transaction,
+        project_id,
+        fields,
+        Some(MAX_GRAPH_NODES),
+    )
+    .await?;
+    transaction.commit().await?;
     Ok((graph, status))
 }
 
@@ -61,44 +68,51 @@ pub async fn get_projection_status(
     pool: &PgPool,
     project_id: Uuid,
 ) -> anyhow::Result<Option<ProjectionStatus>> {
-    let project_row = sqlx::query("SELECT metric_requested_revision FROM projects WHERE id = $1")
-        .bind(project_id)
-        .fetch_optional(pool)
-        .await?;
+    let mut connection = pool.acquire().await?;
+    projection_status_from_connection(&mut connection, project_id).await
+}
 
-    let Some(project) = project_row else {
-        return Ok(None);
-    };
-    let requested_revision: i64 = project.get("metric_requested_revision");
-
+async fn projection_status_from_connection(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+) -> anyhow::Result<Option<ProjectionStatus>> {
+    // One statement also keeps the standalone status query snapshot-consistent.
     let row = sqlx::query(
-        "SELECT state, revision, watermark, lag, last_success_at, last_error, rebuild_state \
-         FROM projection_state \
-         WHERE projection_name = 'postgres_graph' AND project_id = $1",
+        "SELECT p.metric_requested_revision, s.state, s.watermark,
+                s.last_success_at, s.last_error, s.rebuild_state
+         FROM projects p LEFT JOIN projection_state s
+           ON s.project_id=p.id AND s.projection_name='postgres_graph'
+         WHERE p.id=$1",
     )
     .bind(project_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?;
-
-    if let Some(row) = row {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let requested_revision: i64 = row.try_get("metric_requested_revision")?;
+    let persisted: Option<String> = row.try_get("state")?;
+    if let Some(persisted) = persisted {
         let applied_revision: i64 = row.get("watermark");
         let lag = (requested_revision - applied_revision).max(0);
-        let rebuild_state: Option<String> = row.get("rebuild_state");
+        let rebuild_state = row
+            .try_get::<Option<String>, _>("rebuild_state")?
+            .map(|value| value.parse::<ProjectionRebuildState>())
+            .transpose()?;
         let last_error: Option<String> = row.get("last_error");
         let last_success_at: Option<DateTime<Utc>> = row.get("last_success_at");
-        let persisted_state: String = row.get("state");
+        let persisted_state: ProjectionState = persisted.parse()?;
 
-        let state = if rebuild_state.is_some() || persisted_state == "rebuilding" {
-            ProjectionState::Rebuilding
-        } else if last_error.is_some() || persisted_state == "failed" {
+        let state = if last_error.is_some() || persisted_state == ProjectionState::Failed {
             ProjectionState::Failed
-        } else if lag > 0 {
+        } else if rebuild_state.is_some() || persisted_state == ProjectionState::Rebuilding {
+            ProjectionState::Rebuilding
+        } else if applied_revision != requested_revision {
             ProjectionState::Lagging
-        } else if last_success_at.is_none() || persisted_state == "pending" {
-            // Never mark revision 0 fresh absent actual successful projection!
+        } else if last_success_at.is_none() || persisted_state == ProjectionState::Pending {
             ProjectionState::Pending
         } else {
-            ProjectionState::Ready
+            persisted_state
         };
 
         Ok(Some(ProjectionStatus {
@@ -139,31 +153,33 @@ pub async fn get_projection_status(
 /// Resets read model state and enqueues a durable recompute job from canonical tables.
 pub async fn rebuild_project_projection(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Uuid> {
     let mut transaction = pool.begin().await?;
-    let project_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)")
-            .bind(project_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-    if !project_exists {
-        anyhow::bail!("project not found: {project_id}");
-    }
+    let generation: i64 = sqlx::query_scalar(
+        "UPDATE projects SET metric_projection_generation=metric_projection_generation+1
+         WHERE id=$1 RETURNING metric_projection_generation",
+    )
+    .bind(project_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("project not found: {project_id}"))?;
 
     let updated = sqlx::query(
         "UPDATE projection_state
-         SET state = 'rebuilding', rebuild_state = 'rebuilding', updated_at = now()
+         SET state='rebuilding', rebuild_state='rebuilding', generation=$2, attempt=0,
+             revision=0, watermark=0, lag=0, last_success_at=NULL, last_error=NULL, updated_at=now()
          WHERE projection_name = 'postgres_graph' AND project_id = $1",
     )
     .bind(project_id)
+    .bind(generation)
     .execute(&mut *transaction)
     .await?;
 
     if updated.rows_affected() == 0 {
         sqlx::query(
             "INSERT INTO projection_state
-               (projection_name, project_id, state, revision, watermark, lag, rebuild_state, updated_at)
-             VALUES ('postgres_graph', $1, 'rebuilding', 0, 0, 0, 'rebuilding', now())",
+               (projection_name, project_id, state, revision, watermark, lag, rebuild_state, updated_at, generation)
+             VALUES ('postgres_graph', $1, 'rebuilding', 0, 0, 0, 'rebuilding', now(), $2)",
         )
-        .bind(project_id)
+        .bind(project_id).bind(generation)
         .execute(&mut *transaction)
         .await?;
     }
@@ -297,31 +313,101 @@ pub async fn enqueue_metrics_recompute(
         .bind(project_id)
         .fetch_one(&mut **transaction)
         .await?;
-    let job_id = Uuid::new_v4();
-    let payload = serde_json::json!({"project_id": project_id, "revision": revision});
-    crate::jobs::enqueue_job(
-        transaction,
-        &crate::jobs::job(
-            job_id,
-            ProjectId::new(project_id),
-            deepref_domain::JobKind::RecomputeMetrics,
-            payload,
-            format!("recompute_metrics:{project_id}:{revision}"),
-        ),
+    let event_id = Uuid::new_v4();
+    let event = deepref_application::outbox::NewOutboxEvent::for_message(
+        event_id,
+        &deepref_application::graph::MetricsRecomputeRequested {
+            project_id: ProjectId::new(project_id),
+            revision,
+        },
     )
-    .await
     .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
-    Ok(job_id)
+    crate::outbox::insert_outbox_event(transaction, &event)
+        .await
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    Ok(event_id)
+}
+
+/// A persisted execution identity, independent of the triggering event's
+/// revision. Only the latest attempt in the current repair generation may
+/// publish success or failure. Fields are private to this persistence seam.
+#[derive(Debug, Clone, Copy)]
+struct MetricsAttempt {
+    project_id: Uuid,
+    generation: i64,
+    sequence: i64,
+}
+
+async fn begin_metrics_attempt(pool: &PgPool, project_id: Uuid) -> anyhow::Result<MetricsAttempt> {
+    let mut tx = pool.begin().await?;
+    let (generation, sequence): (i64, i64) = sqlx::query_as(
+        "UPDATE projects SET metric_projection_attempt=metric_projection_attempt+1
+         WHERE id=$1 RETURNING metric_projection_generation,metric_projection_attempt",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO projection_state(projection_name,project_id,state,generation,attempt)
+         VALUES('postgres_graph',$1,'pending',$2,$3)
+         ON CONFLICT (projection_name,(COALESCE(project_id,'00000000-0000-0000-0000-000000000000'::uuid)))
+         DO UPDATE SET generation=$2,attempt=$3,last_error=NULL,
+           state=CASE WHEN projection_state.rebuild_state IS NOT NULL THEN 'rebuilding' ELSE 'pending' END,
+           updated_at=now()",
+    ).bind(project_id).bind(generation).bind(sequence).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(MetricsAttempt {
+        project_id,
+        generation,
+        sequence,
+    })
+}
+
+async fn record_metrics_failure(
+    pool: &PgPool,
+    attempt: MetricsAttempt,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    // Use the same lock order as success and repair. A delayed failure can
+    // never overwrite a success, a later attempt, or a new repair generation.
+    sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+        .bind(attempt.project_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE projection_state s SET state='failed',last_error=$4,updated_at=now()
+         FROM projects p WHERE p.id=$1 AND s.project_id=p.id AND s.projection_name='postgres_graph'
+           AND p.metric_projection_generation=$2 AND p.metric_projection_attempt=$3
+           AND s.generation=$2 AND s.attempt=$3 AND s.state<>'ready'",
+    )
+    .bind(attempt.project_id)
+    .bind(attempt.generation)
+    .bind(attempt.sequence)
+    .bind(format!("{error:#}"))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
-    crate::with_retry(crate::RetryPolicy::default(), || {
-        recompute_project_metrics_once(pool, project_id)
+    let attempt = begin_metrics_attempt(pool, project_id).await?;
+    let result = crate::with_retry(crate::RetryPolicy::default(), || {
+        recompute_project_metrics_once(pool, attempt)
     })
-    .await
+    .await;
+    if let Err(error) = &result {
+        record_metrics_failure(pool, attempt, error).await?;
+    }
+    result
 }
 
-async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
+async fn recompute_project_metrics_once(
+    pool: &PgPool,
+    attempt: MetricsAttempt,
+) -> anyhow::Result<()> {
+    let project_id = attempt.project_id;
     // The repository load is the only source for the in-memory graph. The
     // public loader is bounded for HTTP responses; recomputation deliberately
     // loads the complete project so persisted metrics cover every report.
@@ -336,11 +422,17 @@ async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyh
     // Serialize recomputations and graph-change requests on the project row.
     // Under repeatable read a changed lock target forces a retry rather than
     // allowing an older snapshot to overwrite a newer metric projection.
-    let current_revision: i64 =
-        sqlx::query_scalar("SELECT metric_requested_revision FROM projects WHERE id=$1 FOR UPDATE")
-            .bind(project_id)
-            .fetch_one(&mut *transaction)
-            .await?;
+    let (current_revision, generation, sequence): (i64, i64, i64) = sqlx::query_as(
+        "SELECT metric_requested_revision,metric_projection_generation,metric_projection_attempt
+         FROM projects WHERE id=$1 FOR UPDATE",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    anyhow::ensure!(
+        generation == attempt.generation && sequence == attempt.sequence,
+        "metrics attempt superseded by a newer attempt or repair generation"
+    );
     let graph = load_project_graph_from_connection(
         &mut transaction,
         project_id,
@@ -397,38 +489,22 @@ async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyh
     .execute(&mut *transaction)
     .await?;
 
-    let projection_update = sqlx::query(
-        "UPDATE projection_state
-         SET state='ready', revision=$1, watermark=GREATEST(COALESCE(watermark, 0), $1), lag=0,
-             last_success_at=$2, last_error=NULL, rebuild_state=NULL, updated_at=$2
-         WHERE projection_name='postgres_graph' AND project_id=$3 AND watermark <= $1",
+    let updated = sqlx::query(
+        "UPDATE projection_state SET state='ready',revision=$1,watermark=$1,lag=0,
+           last_success_at=$2,last_error=NULL,rebuild_state=NULL,updated_at=$2
+         WHERE projection_name='postgres_graph' AND project_id=$3 AND generation=$4 AND attempt=$5",
     )
     .bind(current_revision)
     .bind(computed_at)
     .bind(project_id)
+    .bind(attempt.generation)
+    .bind(attempt.sequence)
     .execute(&mut *transaction)
     .await?;
-
-    if projection_update.rows_affected() == 0 {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM projection_state WHERE projection_name='postgres_graph' AND project_id=$1)",
-        )
-        .bind(project_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !exists {
-            sqlx::query(
-                "INSERT INTO projection_state
-                   (projection_name, project_id, state, revision, watermark, lag, last_success_at, updated_at)
-                 VALUES ('postgres_graph',$1,'ready',$2,$2,0,$3,$3)",
-            )
-            .bind(project_id)
-            .bind(current_revision)
-            .bind(computed_at)
-            .execute(&mut *transaction)
-            .await?;
-        }
-    }
+    anyhow::ensure!(
+        updated.rows_affected() == 1,
+        "metrics attempt lost its projection fence"
+    );
     transaction.commit().await?;
     Ok(())
 }
@@ -600,4 +676,67 @@ async fn load_graph_edges(
         })
         .collect();
     Ok((edges, edge_truncated))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn metrics_failure_is_fenced_by_actual_attempt_and_repair_generation()
+    -> anyhow::Result<()> {
+        let Some(pool) = crate::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+        else {
+            return Ok(());
+        };
+        let project = Uuid::new_v4();
+        sqlx::query("INSERT INTO projects(id,name) VALUES($1,'Attempt schedules')")
+            .bind(project)
+            .execute(&pool)
+            .await?;
+        let first = begin_metrics_attempt(&pool, project).await?;
+        record_metrics_failure(&pool, first, &anyhow::anyhow!("first actual failure")).await?;
+        let failed = get_projection_status(&pool, project).await?.unwrap();
+        assert_eq!(failed.state, ProjectionState::Failed);
+        assert_eq!(failed.last_error.as_deref(), Some("first actual failure"));
+
+        let success = begin_metrics_attempt(&pool, project).await?;
+        recompute_project_metrics_once(&pool, success).await?;
+        let ready = get_projection_status(&pool, project).await?.unwrap();
+        // Both the exact successful attempt and an older same-revision attempt
+        // can report a delayed failure, neither may replace completed output.
+        record_metrics_failure(&pool, success, &anyhow::anyhow!("late same-attempt error")).await?;
+        record_metrics_failure(&pool, first, &anyhow::anyhow!("late older-attempt error")).await?;
+        assert_eq!(get_projection_status(&pool, project).await?.unwrap(), ready);
+
+        let abandoned = begin_metrics_attempt(&pool, project).await?;
+        rebuild_project_projection(&pool, project).await?;
+        let rebuilding = get_projection_status(&pool, project).await?.unwrap();
+        record_metrics_failure(&pool, abandoned, &anyhow::anyhow!("old generation failure"))
+            .await?;
+        assert_eq!(
+            get_projection_status(&pool, project).await?.unwrap(),
+            rebuilding
+        );
+        assert!(
+            recompute_project_metrics_once(&pool, abandoned)
+                .await
+                .is_err()
+        );
+
+        let repair = begin_metrics_attempt(&pool, project).await?;
+        record_metrics_failure(&pool, repair, &anyhow::anyhow!("repair failed")).await?;
+        let failed_repair = get_projection_status(&pool, project).await?.unwrap();
+        assert_eq!(failed_repair.state, ProjectionState::Failed);
+        assert_eq!(
+            failed_repair.rebuild_state,
+            Some(ProjectionRebuildState::Rebuilding)
+        );
+        recompute_project_metrics(&pool, project).await?;
+        assert_eq!(
+            get_projection_status(&pool, project).await?.unwrap().state,
+            ProjectionState::Ready
+        );
+        Ok(())
+    }
 }

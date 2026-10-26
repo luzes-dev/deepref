@@ -671,7 +671,7 @@ async fn grobid_enrichment(
     (enrichment.structure, version, header)
 }
 
-async fn handle_recompute_metrics_job(
+pub(crate) async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
@@ -685,23 +685,10 @@ async fn handle_recompute_metrics_job(
     if request.revision < 0 {
         anyhow::bail!("metric request revision must be nonnegative");
     }
-    match deepref_app::recompute_project_metrics(pool, request.project_id).await {
-        Ok(()) => Ok(DeliveryAction::Ack),
-        Err(error) => {
-            let error_text = error.to_string();
-            let _ = sqlx::query(
-                "UPDATE projection_state
-                 SET state = 'failed', last_error = $1, updated_at = now()
-                 WHERE projection_name = 'postgres_graph' AND project_id = $2 AND watermark <= $3",
-            )
-            .bind(&error_text)
-            .bind(request.project_id)
-            .bind(request.revision)
-            .execute(pool)
-            .await;
-            Err(error)
-        }
-    }
+    // The application seam owns persisted attempt/generation failure fencing;
+    // a delayed job revision is never an execution identity.
+    deepref_app::recompute_project_metrics(pool, request.project_id).await?;
+    Ok(DeliveryAction::Ack)
 }
 
 /// Upper bound on passes for one import, so a huge import cannot pin a worker.

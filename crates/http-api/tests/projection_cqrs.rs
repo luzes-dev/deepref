@@ -40,14 +40,22 @@ async fn projection_tenant_isolation_and_foreign_workspace_blocking() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    // 2. Bob (foreign workspace principal) tries to access Alice's project projection -> blocked (404/403)
-    let (status, _) = harness
-        .get(&bob, &format!("/projects/{alice_project_id}/projection"))
-        .await;
-    assert!(
-        status == StatusCode::NOT_FOUND || status == StatusCode::FORBIDDEN,
-        "foreign principal must be blocked by PDP middleware, got {status}"
-    );
+    for suffix in ["projection", "graph?strict=true"] {
+        let (foreign_status, foreign_body) = harness
+            .get(&bob, &format!("/projects/{alice_project_id}/{suffix}"))
+            .await;
+        let (missing_status, missing_body) = harness
+            .get(&bob, &format!("/projects/{nonexistent_id}/{suffix}"))
+            .await;
+        assert_eq!(foreign_status, StatusCode::NOT_FOUND);
+        assert_eq!(foreign_status, missing_status);
+        let mut foreign: Value = serde_json::from_slice(&foreign_body).unwrap();
+        let mut missing: Value = serde_json::from_slice(&missing_body).unwrap();
+        // Per-request telemetry identity is not part of resource visibility.
+        foreign.as_object_mut().unwrap().remove("correlation_id");
+        missing.as_object_mut().unwrap().remove("correlation_id");
+        assert_eq!(foreign, missing);
+    }
 
     // 3. Alice (authorized owner) accesses her project projection -> 200 OK with truthful DTO
     let (status, bytes) = harness
@@ -58,7 +66,7 @@ async fn projection_tenant_isolation_and_foreign_workspace_blocking() {
     let dto: ProjectionStatusDto = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(dto.project_id, alice_project_id);
     // Project was just created without a recompute: must be pending, requested_revision 0, applied_revision 0
-    assert_eq!(dto.state, "pending");
+    assert_eq!(dto.state.as_str(), "pending");
     assert_eq!(dto.requested_revision, 0);
     assert_eq!(dto.applied_revision, 0);
     assert_eq!(dto.watermark, 0);
@@ -80,6 +88,53 @@ async fn projection_tenant_isolation_and_foreign_workspace_blocking() {
     assert!(json.get("projection").is_some());
     assert_eq!(json["projection"]["revision"], 0);
     assert_eq!(json["projection"]["lag"], 0);
+
+    assert_eq!(json["projection"]["state"], "pending");
+    assert_eq!(json["projection"]["requested_revision"], 0);
+    assert_eq!(json["projection"]["applied_revision"], 0);
+    assert_eq!(json["projection"]["watermark"], 0);
+    assert_eq!(json["projection"]["last_error"], Value::Null);
+    assert_eq!(json["projection"]["rebuild_state"], Value::Null);
+    for expected in ["ready", "lagging", "rebuilding", "failed", "ready"] {
+        match expected {
+            "ready" => deepref_app::recompute_project_metrics(&harness.pool, alice_project_id)
+                .await
+                .unwrap(),
+            "lagging" => {
+                let (status, _) = harness
+                    .json(
+                        &alice,
+                        axum::http::Method::POST,
+                        &format!("/projects/{alice_project_id}/metrics/recompute"),
+                        "{}",
+                    )
+                    .await;
+                assert_eq!(status, StatusCode::ACCEPTED);
+            }
+            "rebuilding" => {
+                deepref_app::rebuild_project_projection(&harness.pool, alice_project_id)
+                    .await
+                    .unwrap();
+            }
+            "failed" => {
+                sqlx::query("UPDATE projection_state SET state='failed',last_error='HTTP failed repair fixture' WHERE project_id=$1").bind(alice_project_id).execute(&harness.pool).await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let (status, bytes) = harness
+            .get(&alice, &format!("/projects/{alice_project_id}/projection"))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let expected_metadata: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(expected_metadata["state"], expected);
+        let (status,bytes)=harness.get(&alice,&format!("/projects/{alice_project_id}/graph?strict=true&fields=screening,metrics,study,appraisal,provenance")).await;
+        assert_eq!(status, StatusCode::OK);
+        let graph: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            graph["projection"], expected_metadata,
+            "strict metadata must preserve the entire freshness contract for {expected}"
+        );
+    }
 
     // Clean up
     let _ = sqlx::query("DELETE FROM projects WHERE id = $1")

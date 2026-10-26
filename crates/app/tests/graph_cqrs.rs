@@ -249,10 +249,13 @@ async fn idempotency_and_corruption_rebuild() {
             .unwrap();
     assert!(snapshot_count > 0);
 
+    let expected = semantic_metrics(&pool, project_id).await;
     // Re-running recompute is idempotent
     recompute_project_metrics(&pool, project_id)
         .await
         .expect("re-recompute succeeds idempotently");
+
+    assert_eq!(semantic_metrics(&pool, project_id).await, expected);
 
     // 2. Corrupt read model
     sqlx::query("UPDATE project_reports SET rank_score = 999.0 WHERE project_id = $1")
@@ -278,7 +281,7 @@ async fn idempotency_and_corruption_rebuild() {
         .unwrap();
     assert_eq!(rebuilding_status.state, ProjectionState::Rebuilding);
     assert_eq!(
-        rebuilding_status.rebuild_state.as_deref(),
+        rebuilding_status.rebuild_state.map(|state| state.as_str()),
         Some("rebuilding")
     );
 
@@ -313,6 +316,11 @@ async fn idempotency_and_corruption_rebuild() {
             .await
             .unwrap();
     assert!(max_score < 10.0, "rank score must be repaired from 999.0");
+    assert_eq!(
+        semantic_metrics(&pool, project_id).await,
+        expected,
+        "repair must exactly restore all deterministic metric values"
+    );
 
     // Snapshot is restored
     let snapshot_restored: i64 =
@@ -353,4 +361,177 @@ async fn idempotency_and_corruption_rebuild() {
         .bind(project_id)
         .execute(&pool)
         .await;
+}
+
+#[tokio::test]
+async fn invalid_persisted_lifecycle_cannot_be_ready() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'Invalid lifecycle')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    recompute_project_metrics(&pool, project_id).await.unwrap();
+    sqlx::query("UPDATE projection_state SET state='unsupported' WHERE project_id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        get_projection_status(&pool, project_id).await.is_err(),
+        "invalid persisted lifecycle must be a persistence error"
+    );
+}
+
+#[tokio::test]
+async fn invalid_persisted_rebuild_state_is_rejected() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'Invalid rebuild')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    recompute_project_metrics(&pool, project_id).await.unwrap();
+    sqlx::query("UPDATE projection_state SET rebuild_state='unsupported' WHERE project_id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        get_projection_status(&pool, project_id).await.is_err(),
+        "invalid persisted rebuild state must be a persistence error"
+    );
+}
+
+#[tokio::test]
+async fn failed_rebuild_is_failed_until_repaired() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'Failed rebuild')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    rebuild_project_projection(&pool, project_id).await.unwrap();
+    sqlx::query("UPDATE projection_state SET state='failed',last_error='injected failure' WHERE project_id=$1").bind(project_id).execute(&pool).await.unwrap();
+    let status = get_projection_status(&pool, project_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.state, ProjectionState::Failed);
+    assert_eq!(status.last_error.as_deref(), Some("injected failure"));
+    assert_eq!(
+        status.rebuild_state.map(|state| state.as_str()),
+        Some("rebuilding")
+    );
+}
+
+#[tokio::test]
+async fn rebuild_supersedes_corrupt_watermark() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'Corrupt progress')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    recompute_project_metrics(&pool, project_id).await.unwrap();
+    sqlx::query("UPDATE projection_state SET watermark=999999,revision=999999 WHERE project_id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    rebuild_project_projection(&pool, project_id).await.unwrap();
+    recompute_project_metrics(&pool, project_id).await.unwrap();
+    let status = get_projection_status(&pool, project_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.state, ProjectionState::Ready);
+    assert_eq!(status.applied_revision, status.requested_revision);
+    assert_eq!(status.rebuild_state, None);
+}
+
+#[tokio::test]
+async fn strict_read_uses_one_snapshot_across_concurrent_canonical_commit() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects(id,name) VALUES($1,'Snapshot barrier')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    recompute_project_metrics(&pool, project_id).await.unwrap();
+    let mut writer = pool.begin().await.unwrap();
+    let writer_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query("LOCK TABLE reports IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let reader_pool = pool.clone();
+    let reader = tokio::spawn(async move {
+        load_project_graph_strict(&reader_pool, project_id, GraphFieldSelection::all())
+            .await
+            .unwrap()
+    });
+    // The relation lock is a real DB barrier: status has been read, topology
+    // is blocked, and the writer now commits a canonical change between them.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)) AND query LIKE '%SELECT pr.report_id,%')").bind(writer_pid).fetch_one(&pool).await.unwrap();
+            if blocked { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("reader reached topology barrier");
+    let report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO reports(id,title) VALUES($1,'Concurrent report')")
+        .bind(report_id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO project_reports(project_id,report_id) VALUES($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    enqueue_metrics_recompute(&mut writer, project_id)
+        .await
+        .unwrap();
+    writer.commit().await.unwrap();
+    let (graph, status) = reader.await.unwrap();
+    assert_eq!(status.state, ProjectionState::Ready);
+    assert_eq!(status.requested_revision, 0);
+    assert!(
+        graph.nodes.is_empty(),
+        "old Ready status cannot accompany new canonical topology"
+    );
+    let (graph, status) = load_project_graph_strict(&pool, project_id, GraphFieldSelection::all())
+        .await
+        .unwrap();
+    assert_eq!(graph.nodes.len(), 1);
+    assert_eq!(status.requested_revision, 1);
+    assert_eq!(status.state, ProjectionState::Lagging);
+}
+
+async fn semantic_metrics(pool: &PgPool, project: Uuid) -> Vec<(Uuid, i64, i64, i64, i64, f64)> {
+    // Execution timestamps intentionally vary; every deterministic persisted
+    // field must compare exactly, including rank's floating-point output.
+    sqlx::query_as("SELECT report_id,total_citations,references_count,internal_citations,outbound_internal_references,rank_score FROM project_reports WHERE project_id=$1 ORDER BY report_id")
+        .bind(project).fetch_all(pool).await.unwrap()
 }

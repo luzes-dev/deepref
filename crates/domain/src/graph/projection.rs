@@ -71,3 +71,29 @@ mod tests {
         }
     }
 }
+
+/// A rebuild marker is distinct from the projection's current lifecycle:
+/// a failed attempt can retain this marker until a repair succeeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionRebuildState {
+    Rebuilding,
+}
+
+impl ProjectionRebuildState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rebuilding => "rebuilding",
+        }
+    }
+}
+
+impl std::str::FromStr for ProjectionRebuildState {
+    type Err = InvalidProjectionState;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "rebuilding" => Ok(Self::Rebuilding),
+            _ => Err(InvalidProjectionState(format!("rebuild: {value}"))),
+        }
+    }
+}

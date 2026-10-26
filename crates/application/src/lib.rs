@@ -15,6 +15,7 @@ pub mod automations;
 pub mod deduplication;
 pub mod documents;
 pub mod extraction;
+pub mod graph;
 pub mod identity;
 pub mod inbox;
 pub mod jobs;

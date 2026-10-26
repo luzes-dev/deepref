@@ -114,9 +114,15 @@ pub(crate) struct GraphEdgeDto {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ProjectionMetadata {
-    revision: i64,
-    lag: i64,
-    last_success_at: Option<DateTime<Utc>>,
+    #[serde(flatten)]
+    freshness: super::projection::ProjectionStatusDto,
+}
+impl From<deepref_app::ProjectionStatus> for ProjectionMetadata {
+    fn from(status: deepref_app::ProjectionStatus) -> Self {
+        Self {
+            freshness: status.into(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -263,11 +269,7 @@ pub(crate) async fn project_graph(
                         ApiError::Internal(e)
                     }
                 })?;
-        let projection = ProjectionMetadata {
-            revision: status.watermark,
-            lag: status.lag,
-            last_success_at: status.last_success_at,
-        };
+        let projection = status.into();
         (graph, projection)
     } else {
         let project_exists: bool =
@@ -411,11 +413,7 @@ async fn projection_metadata(
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
 
-    Ok(ProjectionMetadata {
-        revision: status.watermark,
-        lag: status.lag,
-        last_success_at: status.last_success_at,
-    })
+    Ok(status.into())
 }
 
 fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
