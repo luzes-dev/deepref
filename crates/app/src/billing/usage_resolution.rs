@@ -1,4 +1,5 @@
 use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
+use deepref_application::usage_export::USAGE_EXPORT_CONSUMER;
 use deepref_domain::UserId;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -162,6 +163,12 @@ pub async fn resolve_usage_export_hold(
     }
 
     let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL lock_timeout='250ms'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL statement_timeout='1500ms'")
+        .execute(&mut *tx)
+        .await?;
 
     // 1. Lock and inspect outbox_events row
     let event_row = sqlx::query(
@@ -244,14 +251,15 @@ pub async fn resolve_usage_export_hold(
             .execute(&mut *tx)
             .await?;
 
-            // Targeted consumer reset: ONLY reset authorized consumer receipt ('ai_usage_export').
+            // Targeted consumer reset: ONLY reset the canonical billing usage consumer receipt.
             // Do NOT touch other consumers or reset monotonic fences (attempt_generation / settled_generation).
             sqlx::query(
                 "UPDATE outbox_receipts
                  SET state = 'retrying', attempts = 0, next_attempt_at = now(), last_error = NULL
-                 WHERE event_id = $1 AND consumer = 'ai_usage_export' AND state = 'quarantined'",
+                 WHERE event_id = $1 AND consumer = $2 AND state = 'quarantined'",
             )
             .bind(fact_id)
+            .bind(USAGE_EXPORT_CONSUMER)
             .execute(&mut *tx)
             .await?;
 

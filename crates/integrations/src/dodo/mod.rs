@@ -48,12 +48,6 @@ impl DodoBilling {
         })
     }
 
-    pub fn with_base_url(config: DodoConfig, origin: String) -> Result<Self, BillingError> {
-        let mut dodo = Self::new(config)?;
-        dodo.origin = origin;
-        Ok(dodo)
-    }
-
     async fn request<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -69,7 +63,7 @@ impl DodoBilling {
             req = req.json(&payload);
         }
         // No automatic POST retries: no documented endpoint idempotency guarantee.
-        let mut response = req.send().await.map_err(|_| {
+        let response = req.send().await.map_err(|_| {
             if post {
                 BillingError::Ambiguous
             } else {
@@ -89,6 +83,13 @@ impl DodoBilling {
                 BillingError::Refused
             });
         }
+        Self::read_json(response, post).await
+    }
+
+    async fn read_json<T: DeserializeOwned>(
+        mut response: reqwest::Response,
+        post: bool,
+    ) -> Result<T, BillingError> {
         if response
             .content_length()
             .is_some_and(|n| n > MAX_RESPONSE as u64)
@@ -161,16 +162,12 @@ impl DodoBilling {
         };
         let status = response.status();
         if status.is_success() {
-            let bytes = match response.bytes().await {
-                Ok(b) => b,
-                Err(_) => return Ok(DodoIngestOutcome::Ambiguous),
-            };
             #[derive(Deserialize)]
             struct IngestResponse {
                 ingested_count: usize,
             }
-            let ingest_res: IngestResponse = match serde_json::from_slice(&bytes) {
-                Ok(r) => r,
+            let ingest_res: IngestResponse = match Self::read_json(response, true).await {
+                Ok(value) => value,
                 Err(_) => return Ok(DodoIngestOutcome::Ambiguous),
             };
             if ingest_res.ingested_count >= 1 {
@@ -184,9 +181,11 @@ impl DodoBilling {
         if status.is_server_error() || status.as_u16() == 429 {
             return Ok(DodoIngestOutcome::Ambiguous);
         }
-        let bytes = response.bytes().await.unwrap_or_default();
-        let reason = String::from_utf8_lossy(&bytes).to_string();
-        Ok(DodoIngestOutcome::Refused(reason))
+        // Refusal bodies may echo PII, credentials or capability links. They
+        // are deliberately discarded, including on oversized error responses.
+        Ok(DodoIngestOutcome::Refused(
+            "provider refused usage event".into(),
+        ))
     }
 
     async fn lookup_usage_event_internal(
@@ -211,12 +210,7 @@ impl DodoBilling {
                 },
             );
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| BillingError::Unavailable)?;
-        let record = serde_json::from_slice(&bytes).map_err(|_| BillingError::Contract)?;
-        Ok(Some(record))
+        Self::read_json(response, false).await.map(Some)
     }
 
     fn return_url(&self, path: &str) -> Result<String, BillingError> {

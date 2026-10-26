@@ -219,17 +219,9 @@ async fn legacy_target_without_frozen_wire_can_lookup_but_never_post() {
 }
 
 async fn seed_outbox_fact(pool: &PgPool, fact: &AiUsageFact) {
-    sqlx::query(
-        "INSERT INTO outbox_events (event_id, message_type, message_version, payload, expected_consumers, delivery_state)
-         VALUES ($1, 'ai_usage.fact', 1, jsonb_build_object('fact_id', $1, 'workspace_id', $2, 'settled_at', $3::text), ARRAY['ai_usage_export'], 'pending')
-         ON CONFLICT (event_id) DO NOTHING",
-    )
-    .bind(fact.fact_id)
-    .bind(fact.workspace_id)
-    .bind(fact.settled_at.to_rfc3339())
-    .execute(pool)
-    .await
-    .expect("seed outbox fact");
+    sqlx::query("INSERT INTO outbox_events(event_id,message_type,message_version,payload,expected_consumers,delivery_state) VALUES($1,'ai_usage.fact',1,$2,ARRAY[$3],'pending') ON CONFLICT(event_id) DO NOTHING")
+        .bind(fact.fact_id).bind(serde_json::to_value(fact).unwrap())
+        .bind(deepref_application::usage_export::USAGE_EXPORT_CONSUMER).execute(pool).await.expect("seed real usage contract");
 }
 
 #[tokio::test]
@@ -365,7 +357,7 @@ async fn operator_resolution_workflow() {
     // Seed outbox event & receipt in quarantined state
     sqlx::query(
         "INSERT INTO outbox_events (event_id, message_type, message_version, payload, expected_consumers, delivery_state)
-         VALUES ($1, 'ai_usage.fact', 1, jsonb_build_object('fact_id', $1, 'workspace_id', $2, 'settled_at', now()::text), ARRAY['ai_usage_export'], 'quarantined')",
+         VALUES ($1, 'ai_usage.fact', 1, jsonb_build_object('fact_id', $1, 'workspace_id', $2, 'settled_at', now()::text), ARRAY['billing_usage_export'], 'quarantined')",
     )
     .bind(fact_id)
     .bind(workspace_id)
@@ -375,7 +367,7 @@ async fn operator_resolution_workflow() {
 
     sqlx::query(
         "INSERT INTO outbox_receipts (event_id, consumer, state, attempts, next_attempt_at)
-         VALUES ($1, 'ai_usage_export', 'quarantined', 5, now())",
+         VALUES ($1, 'billing_usage_export', 'quarantined', 5, now())",
     )
     .bind(fact_id)
     .execute(&pool)
@@ -402,7 +394,7 @@ async fn operator_resolution_workflow() {
 
     // Verify outbox receipt remains quarantined (NOT faked as delivered)
     let state: String = sqlx::query_scalar(
-        "SELECT state FROM outbox_receipts WHERE consumer = 'ai_usage_export' AND event_id = $1",
+        "SELECT state FROM outbox_receipts WHERE consumer = 'billing_usage_export' AND event_id = $1",
     )
     .bind(fact_id)
     .fetch_one(&pool)
@@ -618,7 +610,7 @@ async fn regression_operator_reopen_cannot_authorize_stale_preresolution_receipt
     // Outbox event with claim_generation = 5, quarantined
     sqlx::query(
         "INSERT INTO outbox_events (event_id, message_type, message_version, payload, expected_consumers, delivery_state, claim_generation)
-         VALUES ($1, 'ai_usage.fact', 1, jsonb_build_object('fact_id', $1, 'workspace_id', $2, 'settled_at', now()::text), ARRAY['ai_usage_export', 'audit_consumer'], 'quarantined', 5)",
+         VALUES ($1, 'ai_usage.fact', 1, jsonb_build_object('fact_id', $1, 'workspace_id', $2, 'settled_at', now()::text), ARRAY['billing_usage_export', 'audit_consumer'], 'quarantined', 5)",
     )
     .bind(fact_id)
     .bind(workspace_id)
@@ -626,10 +618,10 @@ async fn regression_operator_reopen_cannot_authorize_stale_preresolution_receipt
     .await
     .unwrap();
 
-    // Consumer 1: ai_usage_export is quarantined at generation 5
+    // Consumer 1: billing_usage_export is quarantined at generation 5
     sqlx::query(
         "INSERT INTO outbox_receipts (event_id, consumer, state, attempts, attempt_generation, settled_generation, next_attempt_at)
-         VALUES ($1, 'ai_usage_export', 'quarantined', 5, 5, 5, now())",
+         VALUES ($1, 'billing_usage_export', 'quarantined', 5, 5, 5, now())",
     )
     .bind(fact_id)
     .execute(&pool)
@@ -689,9 +681,9 @@ async fn regression_operator_reopen_cannot_authorize_stale_preresolution_receipt
         "event claim_generation must advance monotonically on reopen (got {event_claim_gen}, expected > 5)"
     );
 
-    // 3. Receipt for ai_usage_export must be retrying, attempts reset to 0, but attempt_generation/settled_generation NEVER reset to 0
+    // 3. Receipt for billing_usage_export must be retrying, attempts reset to 0, but attempt_generation/settled_generation NEVER reset to 0
     let receipt: (String, i32, i64, i64) = sqlx::query_as(
-        "SELECT state, attempts, attempt_generation, settled_generation FROM outbox_receipts WHERE event_id = $1 AND consumer = 'ai_usage_export'",
+        "SELECT state, attempts, attempt_generation, settled_generation FROM outbox_receipts WHERE event_id = $1 AND consumer = 'billing_usage_export'",
     )
     .bind(fact_id)
     .fetch_one(&pool)
@@ -803,4 +795,94 @@ async fn regression_target_immutable_scope_drift_rejected_even_with_same_custome
         }
         other => panic!("expected PermanentFailure for drifted provider scope, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn reopened_real_usage_contract_dispatches_and_operator_lock_wait_is_bounded() {
+    let Some(pool) = database().await else { return };
+    let workspace = Uuid::new_v4();
+    let mock = Arc::new(MockUsageProvider::new("bus_test", "dodo_test"));
+    seed_billing_account(&pool, workspace, "dodo_test", "cus_reopened").await;
+    let fact = sample_fact(workspace, Some(7), None, Utc::now());
+    seed_outbox_fact(&pool, &fact).await;
+    let consumer = deepref_application::usage_export::USAGE_EXPORT_CONSUMER;
+    sqlx::query("UPDATE outbox_events SET delivery_state='quarantined' WHERE event_id=$1")
+        .bind(fact.fact_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO outbox_receipts(event_id,consumer,state,attempts,next_attempt_at) VALUES($1,$2,'quarantined',5,now())").bind(fact.fact_id).bind(consumer).execute(&pool).await.unwrap();
+    let operator = UserId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO users(id,workos_user_id,primary_email,status) VALUES($1,$2,'operator@test.local','active')").bind(operator.as_uuid()).bind(format!("operator-{}",operator.as_uuid())).execute(&pool).await.unwrap();
+    let resolution = Uuid::new_v4();
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("SELECT event_id FROM outbox_events WHERE event_id=$1 FOR UPDATE")
+        .bind(fact.fact_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let refused = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        resolve_usage_export_hold(
+            &pool,
+            fact.fact_id,
+            operator,
+            resolution,
+            UsageResolutionAction::ReopenedRetry,
+            UsageResolutionReason::ExternalAdjustmentConfirmed,
+            None,
+        ),
+    )
+    .await
+    .expect("operator lock wait must be bounded");
+    assert!(matches!(
+        refused,
+        Err(deepref_app::billing::UsageResolutionError::Database(_))
+    ));
+    blocker.rollback().await.unwrap();
+    let before: String =
+        sqlx::query_scalar("SELECT delivery_state FROM outbox_events WHERE event_id=$1")
+            .bind(fact.fact_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before, "quarantined");
+    resolve_usage_export_hold(
+        &pool,
+        fact.fact_id,
+        operator,
+        resolution,
+        UsageResolutionAction::ReopenedRetry,
+        UsageResolutionReason::ExternalAdjustmentConfirmed,
+        None,
+    )
+    .await
+    .unwrap();
+    let sink = Arc::new(DodoUsageExportSink::new(
+        pool.clone(),
+        mock.clone(),
+        true,
+        "units".into(),
+    ));
+    let registry = deepref_app::usage_export_registry(
+        &pool,
+        sink,
+        Arc::new(deepref_application::usage_export::UsageExportCounters::default()),
+    )
+    .unwrap();
+    assert_eq!(
+        deepref_app::outbox::dispatch_outbox_batch(
+            &pool,
+            &registry,
+            "reopened-usage",
+            std::time::Duration::from_secs(30),
+            1
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    let state:(String,String)=sqlx::query_as("SELECT e.delivery_state,r.state FROM outbox_events e JOIN outbox_receipts r USING(event_id) WHERE event_id=$1 AND r.consumer=$2").bind(fact.fact_id).bind(consumer).fetch_one(&pool).await.unwrap();
+    assert_eq!(state, ("delivered".into(), "delivered".into()));
+    assert_eq!(mock.received_events.lock().unwrap().len(), 1);
 }

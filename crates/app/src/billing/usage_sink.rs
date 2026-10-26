@@ -299,8 +299,8 @@ impl DodoUsageExportSink {
                     ),
                 }
             }
-            Ok(DodoIngestOutcome::Refused(reason)) => {
-                UsageExportOutcome::PermanentFailure(format!("provider refused event: {reason}"))
+            Ok(DodoIngestOutcome::Refused(_)) => {
+                UsageExportOutcome::PermanentFailure("provider refused usage event".into())
             }
             Err(BillingError::Unavailable) => {
                 UsageExportOutcome::RetryableFailure("provider unavailable".into())

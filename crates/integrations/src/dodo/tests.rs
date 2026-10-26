@@ -48,7 +48,14 @@ async fn serve(State(f): State<Fixture>, request: Request) -> Response {
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
-        .body(Body::from(body))
+        .body(Body::from_stream(futures::stream::iter(
+            body.as_bytes()
+                .chunks(4096)
+                .map(|chunk| {
+                    Ok::<_, std::convert::Infallible>(axum::body::Bytes::copy_from_slice(chunk))
+                })
+                .collect::<Vec<_>>(),
+        )))
         .unwrap()
 }
 async fn adapter(
@@ -490,4 +497,53 @@ async fn lookup_usage_event_outcomes() {
     // 503 -> BillingError::Unavailable
     let err = dodo.lookup_usage_event("evt_err").await.unwrap_err();
     assert_eq!(err, BillingError::Unavailable);
+}
+
+#[tokio::test]
+async fn usage_ingest_rejects_oversize_unknown_length_response_as_ambiguous() {
+    let (dodo, _, task) = adapter(vec![(
+        200,
+        json!({"ingested_count":1,"padding":"x".repeat(MAX_RESPONSE)}),
+    )])
+    .await;
+    let event = DodoUsageEvent {
+        customer_id: "cus_test".into(),
+        event_id: "evt_test".into(),
+        event_name: "units".into(),
+        timestamp: "2026-10-25T12:00:00Z".into(),
+        metadata: None,
+    };
+    assert_eq!(
+        dodo.ingest_usage_event(event).await.unwrap(),
+        DodoIngestOutcome::Ambiguous
+    );
+    task.abort();
+}
+#[tokio::test]
+async fn usage_lookup_rejects_oversize_unknown_length_response() {
+    let (dodo, _, task) = adapter(vec![(200, json!({"business_id":"bus_test","customer_id":"cus_test","event_id":"evt_test","event_name":"units","timestamp":"2026-10-25T12:00:00Z","metadata":{"padding":"x".repeat(MAX_RESPONSE)}}))]).await;
+    assert_eq!(
+        dodo.lookup_usage_event("evt_test").await.unwrap_err(),
+        BillingError::Contract
+    );
+    task.abort();
+}
+#[tokio::test]
+async fn usage_refusal_discards_provider_body_marker() {
+    let marker = "PRIVATE_PROVIDER_CAPABILITY_SENTINEL";
+    let (dodo, _, task) = adapter(vec![(400, json!({"error":marker}))]).await;
+    let event = DodoUsageEvent {
+        customer_id: "cus_test".into(),
+        event_id: "evt_test".into(),
+        event_name: "units".into(),
+        timestamp: "2026-10-25T12:00:00Z".into(),
+        metadata: None,
+    };
+    let outcome = dodo.ingest_usage_event(event).await.unwrap();
+    assert!(
+        !format!("{outcome:?}").contains(marker),
+        "raw provider error must not cross the adapter boundary"
+    );
+    assert!(matches!(outcome, DodoIngestOutcome::Refused(_)));
+    task.abort();
 }
