@@ -16,7 +16,7 @@ Run `bash scripts/ci/test-valkey.sh` only with matching disposable `DATABASE_URL
 
 The facade exposes closed backend/purpose/outcome and latency observations plus fallback counts, without subject identifiers. The default observer is a no-op until the integrated telemetry bridge is installed; hooks alone do not establish deployed metrics or alerts.
 
-This rate-limit slice does not complete handoff 06. Valkey concurrency admission, useful cache-aside metadata, the deployed metrics bridge, failure/load acceptance and production cutover remain pending. Existing PostgreSQL AI slots, financial reservations, billing projections, scientific records and durable jobs retain their existing authority.
+This rate-limit slice does not complete handoff 06. The deployed metrics bridge, failure/load acceptance and production cutover remain pending. Bounded concurrency mirrors and displayed-count caching are described below. Existing PostgreSQL AI slots, financial reservations, billing projections, scientific records and durable jobs retain their existing authority.
 
 A rolling upgrade may still contain binaries with the old process-local hook limiter or API-key code without this shared counter. The global operational-limit guarantee begins only after every serving API replica participates in the PostgreSQL ceiling; drain those older replicas before declaring distributed-limit acceptance or activating reliance on the Valkey path. Ordinary schema expansion and legacy handlers remain compatible during overlap, but an unaware binary cannot be counted as sharing the new operational budget. The existing financial/quota PostgreSQL checks remain separate throughout that rollout.
 
@@ -52,3 +52,36 @@ its availability changes financial holds, settlements or scientific data.
 Closed observer dimensions expose scope kind, operation, outcome and latency;
 the deployed metrics/exporter bridge and live TLS/load acceptance remain
 separate release requirements. Cluster/sentinel behavior is not claimed.
+
+## Displayed project article counts
+
+With Valkey configured, project list/detail reads cache only the displayed count
+of project reports. Names, membership, permissions, billing, scientific decisions
+and whole project responses are never cached. Each request still runs the live
+central policy and primary tenant/project lookup. A warm cache cannot restore a
+deleted project or authorize a revoked membership or API key.
+
+The response `article_count_as_of` states the PostgreSQL observation time.
+Snapshots are accepted only within five seconds, with an exact workspace,
+project and revision match. `Cache-Control: no-cache`, `no-store` or `max-age=0`
+bypasses both cache reads and writes for a primary count. Create/update responses
+remain canonical. The existing graph request revision is an additional
+invalidation hint; raw and older writers can leave a displayed count stale until
+expiry. This count is never used for quotas or consequential commands.
+
+Keys are `deepref:<deployment>:project-count:v1:<workspace>:<project>:<revision>`.
+Maximum live cardinality is the distinct project/revision pairs read within five seconds, bounded operationally by the dedicated instance memory limit. Values have a strict 512-byte JSON limit checked on the server before retrieval;
+batches contain at most 101 project identities. Each entry has a five-second
+TTL. Wrong scope, unknown JSON fields, impossible counts, future/old timestamps,
+wrong revisions, malformed or oversized values become misses. Cache connection,
+command or memory failures fall back to the bounded PostgreSQL count query. The count facade caps each optional cache operation at 100 ms even when other Valkey purposes have a longer configured deadline.
+There is no write-behind, wildcard deletion or permission cache. A reset loses
+only this optional accelerator. Different revision entries expire independently.
+
+The real service contracts cover one-connection PostgreSQL fallback, cache hits,
+strict bypass, revision hints, server expiry, corrupt values, deployment/tenant
+separation and authorization revocation after a warm read. A separately run
+broker-pause test covers ambiguous delayed ZSET HOLD execution: PostgreSQL retains
+its shared ceiling, release frees its slots, and an eventual restrictive ghost
+expires. A client timeout alone is never proof that a mutation did not execute.
+The observer/exporter bridge and live TLS/topology/load acceptance remain pending.

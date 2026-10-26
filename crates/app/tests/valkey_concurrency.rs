@@ -404,3 +404,169 @@ async fn unconfirmed_pg_refund_is_never_misreported_as_clean_saturation() {
     let held = faulty.held.lock().unwrap().take().unwrap();
     real.release(held).await.unwrap();
 }
+
+struct DelayedHold {
+    real: Arc<dyn ConcurrencyMirror>,
+    control: tokio::sync::Mutex<ValkeyFixtureControl>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ConcurrencyMirror for DelayedHold {
+    fn check(&self, scope: MirrorScope, policy: MirrorPolicy) -> MirrorFuture<'_, MirrorDecision> {
+        self.real.check(scope, policy)
+    }
+    fn hold(
+        &self,
+        scope: MirrorScope,
+        lease: MirrorLeaseId,
+        policy: MirrorPolicy,
+    ) -> MirrorFuture<'_, MirrorDecision> {
+        Box::pin(async move {
+            // Pause after both CHECKs and PG acquisition, immediately before
+            // the first production HOLD. The server executes that mutation
+            // after the real client deadline has already elapsed.
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                self.control.lock().await.pause_writes().await.unwrap();
+            }
+            self.real.hold(scope, lease, policy).await
+        })
+    }
+    fn refresh(
+        &self,
+        scope: MirrorScope,
+        lease: MirrorLeaseId,
+        policy: MirrorPolicy,
+    ) -> MirrorFuture<'_, ()> {
+        self.real.refresh(scope, lease, policy)
+    }
+    fn release(&self, _: MirrorScope, _: MirrorLeaseId) -> MirrorFuture<'_, ()> {
+        // A partition during release must not leave canonical PG capacity held.
+        // No attempt to replay an ambiguous mutation is made by this shim.
+        Box::pin(async { Err(deepref_application::concurrency_mirror::MirrorUnavailable) })
+    }
+}
+
+#[tokio::test]
+async fn delayed_real_zset_hold_is_only_a_restrictive_ghost_after_pg_release_and_expires() {
+    let Some((pool, control)) = fixture().await else {
+        return;
+    };
+    let real = Arc::new(control.concurrency_mirror().unwrap());
+    // Preload HOLD and RELEASE before pausing server writes. Otherwise a cold
+    // EVALSHA's NOSCRIPT -> SCRIPT LOAD can time out before HOLD is ever sent.
+    let warm_scope = MirrorScope::Workspace(WorkspaceId::new(Uuid::new_v4()));
+    let warm_lease = MirrorLeaseId {
+        holder: Uuid::new_v4(),
+        generation: 1,
+        slot: 0,
+    };
+    real.hold(
+        warm_scope,
+        warm_lease,
+        MirrorPolicy::new(1, Duration::from_secs(1)).unwrap(),
+    )
+    .await
+    .unwrap();
+    real.release(warm_scope, warm_lease).await.unwrap();
+    let mirror = Arc::new(DelayedHold {
+        real,
+        control: tokio::sync::Mutex::new(control),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let primary = canonical(&pool, Duration::from_secs(2));
+    let observed = Arc::new(HoldTimeoutCount::default());
+    let admission = MirroredAiConcurrencyAdmission::new(primary.clone(), mirror.clone())
+        .with_observer(observed.clone());
+    let scope = scope();
+    let held = admission.acquire(scope.clone()).await.unwrap();
+    assert!(
+        observed.0.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "a real HOLD reply timed out"
+    );
+    assert_eq!(
+        mirror.calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "one outer HOLD per scope; no blind application replay"
+    );
+    assert!(matches!(
+        primary.acquire(scope.clone()).await,
+        Err(AdmissionError::Saturated { .. })
+    ));
+    admission.release(held).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM ai_concurrency_slots")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "both canonical slots released despite optional cache partition"
+    );
+    let key = MirrorScope::Workspace(scope.workspace_id);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if mirror
+                .control
+                .lock()
+                .await
+                .concurrency_count(key)
+                .await
+                .unwrap()
+                > 0
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed-out mutation eventually executed on real server");
+    // A ghost may refuse useful work; it cannot grant past the PG ceiling.
+    assert!(matches!(
+        admission.acquire(scope.clone()).await,
+        Err(AdmissionError::Saturated { .. })
+    ));
+    let pg_only = primary.acquire(scope.clone()).await.unwrap();
+    primary.release(pg_only).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if mirror
+                .control
+                .lock()
+                .await
+                .concurrency_count(key)
+                .await
+                .unwrap()
+                == 0
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("restrictive ghost has bounded real TTL");
+    let recovered = admission.acquire(scope).await.unwrap();
+    admission.release(recovered).await.unwrap();
+}
+
+#[derive(Default)]
+struct HoldTimeoutCount(std::sync::atomic::AtomicUsize);
+impl deepref_application::concurrency_mirror::ConcurrencyMirrorObserver for HoldTimeoutCount {
+    fn observe(
+        &self,
+        _: deepref_application::concurrency_mirror::MirrorScopeKind,
+        operation: deepref_application::concurrency_mirror::MirrorOperation,
+        outcome: deepref_application::concurrency_mirror::MirrorOutcome,
+        _: Duration,
+    ) {
+        if matches!(
+            operation,
+            deepref_application::concurrency_mirror::MirrorOperation::Hold
+        ) && matches!(
+            outcome,
+            deepref_application::concurrency_mirror::MirrorOutcome::Unavailable
+        ) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}

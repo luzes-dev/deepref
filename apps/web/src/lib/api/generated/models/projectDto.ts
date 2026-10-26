@@ -8,6 +8,12 @@
 export interface ProjectDto {
 	/** Number of articles (project reports) in the project. */
 	article_count: number;
+	/**
+	 * When this displayed count was observed. Cached snapshots are at most five
+	 * seconds old; request Cache-Control: no-cache for a primary count.
+	 * @nullable
+	 */
+	article_count_as_of?: string | null;
 	created_at: string;
 	default_max_depth: number;
 	/** @nullable */

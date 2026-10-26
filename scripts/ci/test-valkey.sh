@@ -28,5 +28,12 @@ mapping=$(docker port "$fixture_id" 6379/tcp)
 export TEST_VALKEY_URL="redis://127.0.0.1:${mapping##*:}"
 cargo nextest run -p deepref-application --lib --locked -E 'test(rate_limits::)' --retries 0
 cargo nextest run -p deepref-config --lib --locked -E 'test(valkey::)' --retries 0
-cargo nextest run -p deepref-app --test rate_limits --test valkey_limits --test valkey_concurrency --locked --retries 0
-cargo nextest run -p deepref-http-api --test api_keys --locked --retries 0
+# CLIENT PAUSE affects the entire fixture, not only its contract namespace.
+# Keep both pause cases in separate invocations so no unrelated cache/mirror
+# assertion can observe their deliberate outage. Other PG contracts retain
+# their configured parallel group and timeouts.
+cargo nextest run -p deepref-app --test rate_limits --test valkey_limits --test valkey_concurrency --test project_count_cache --locked --retries 0 \
+  -E 'not test(real_atomic_ttl_reset_partition_and_ambiguous_reply) & not test(delayed_real_zset)'
+cargo nextest run -p deepref-http-api --test api_keys --test project_count_cache --locked --retries 0
+cargo nextest run -p deepref-app --test valkey_limits --locked --retries 0 -E 'test(real_atomic_ttl_reset_partition_and_ambiguous_reply)'
+cargo nextest run -p deepref-app --test valkey_concurrency --locked --retries 0 -E 'test(delayed_real_zset)'

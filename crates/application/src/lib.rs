@@ -252,3 +252,5 @@ mod tests {
 }
 
 pub mod work_delivery;
+
+pub mod project_count_cache;
