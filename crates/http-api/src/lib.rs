@@ -484,12 +484,19 @@ pub async fn serve_with_shutdown(
         ));
     }
 
+    let rate_observer =
+        std::sync::Arc::new(deepref_telemetry::operational::OperationalMetrics::default());
+    state = state.with_rate_limiter(std::sync::Arc::new(
+        deepref_app::rate_limits::PostgresRateLimiter::new(pool.clone())
+            .with_observer(rate_observer.clone()),
+    ));
     if let Some(valkey) = &config.runtime.valkey {
         match deepref_integrations::valkey::ValkeyRateAccelerator::from_config(valkey) {
             Ok(accelerator) => {
                 state = state.with_rate_limiter(std::sync::Arc::new(
                     deepref_app::rate_limits::PostgresRateLimiter::new(pool.clone())
-                        .with_accelerator(std::sync::Arc::new(accelerator)),
+                        .with_accelerator(std::sync::Arc::new(accelerator))
+                        .with_observer(rate_observer),
                 ));
             }
             Err(_) => tracing::warn!(
@@ -525,7 +532,10 @@ pub async fn serve_with_shutdown(
                     deepref_app::mirrored_concurrency::MirroredAiConcurrencyAdmission::new(
                         canonical,
                         std::sync::Arc::new(mirror),
-                    ),
+                    )
+                    .with_observer(std::sync::Arc::new(
+                        deepref_telemetry::operational::OperationalMetrics::default(),
+                    )),
                 )
                     as std::sync::Arc<dyn deepref_ai::AiConcurrencyAdmission>,
                 None => canonical,
