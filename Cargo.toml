@@ -68,7 +68,7 @@ csv = "1.4.0"
 dotenvy = "0.15.7"
 futures = "0.3.32"
 garde = { version = "0.23.0", features = ["derive"] }
-jsonschema = "0.58.6"
+jsonschema = "0.59.0"
 rig-agent = "0.44.0"
 rig-cassette = { version = "0.44.0", features = ["agent"] }
 rig-core = "0.44.0"
