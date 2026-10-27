@@ -307,7 +307,7 @@ pub async fn run_with_shutdown(
         deepref_application::inbox::InboxRegistry::new()
     };
     let provider_reconcilers = Arc::new(provider_reconcilers);
-    let reconciler_task = tokio::spawn(reconciler::run_with_provider_reconcilers(
+    let mut reconciler_task = tokio::spawn(reconciler::run_with_provider_reconcilers(
         pool.clone(),
         config.reconciler_interval,
         reconciler_signal.clone(),
@@ -462,16 +462,13 @@ pub async fn run_with_shutdown(
     let loop_result =
         run_claim_loop(transport, store, owner, loop_config, handler, loop_shutdown).await;
 
-    heartbeat_stop.send_replace(true);
-    if tokio::time::timeout(Duration::from_secs(5), heartbeat_task)
-        .await
-        .is_err()
-    {
-        tracing::warn!("worker heartbeat did not stop in time; its row will age out");
-    }
+    heartbeat::stop(heartbeat_task, heartbeat_stop, Duration::from_secs(5)).await;
     reconciler_shutdown.send_replace(true);
-    let reconciler_drained =
-        tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, reconciler_task).await;
+    let reconciler_drained = tokio::time::timeout(
+        config.runtime.telemetry.shutdown_deadline,
+        &mut reconciler_task,
+    )
+    .await;
     // These processors enforce their own drain deadline, then abort and await
     // every owned event. Await the processors themselves instead of dropping
     // a JoinHandle on an outer timeout and detaching cleanup.
@@ -486,6 +483,12 @@ pub async fn run_with_shutdown(
     }
     let outbox_drained = outbox_task.await;
     let inbox_drained = inbox_task.await;
+    if reconciler_drained.is_err() {
+        reconciler_task.abort();
+        let _ = reconciler_task.await;
+    }
+    // Close on error paths too, after every processor has stopped owning work.
+    shutdown::close_control_pool(&control_pool, Duration::from_secs(5)).await;
     loop_result?;
     match reconciler_drained {
         Ok(result) => result?,
@@ -493,7 +496,6 @@ pub async fn run_with_shutdown(
     }
     outbox_drained??;
     inbox_drained??;
-    control_pool.close().await;
     Ok(())
 }
 
