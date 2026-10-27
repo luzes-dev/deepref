@@ -1,7 +1,7 @@
 //! Disk-backed ZIP packaging, with bounded chunk I/O and private RAII staging.
 use std::fs::File;
 use std::io::{Read, Seek, Write};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
@@ -11,7 +11,6 @@ use deepref_domain::UserId;
 use futures::{Stream, StreamExt};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
-use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -21,10 +20,12 @@ use super::generation::GenerationBudget;
 pub struct Staging(PathBuf);
 impl Staging {
     pub fn new() -> std::io::Result<Self> {
-        let path = std::env::temp_dir().join(format!("deepref-export-{}", Uuid::new_v4()));
-        // create_dir (not recursive) refuses an existing directory or symlink.
-        std::fs::DirBuilder::new().mode(0o700).create(&path)?;
-        Ok(Self(path))
+        let directory = tempfile::Builder::new()
+            .prefix("deepref-export-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?;
+        // Staging takes cleanup ownership so failures retain the existing warning.
+        Ok(Self(directory.keep()))
     }
     pub fn path(&self) -> &Path {
         &self.0

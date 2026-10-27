@@ -27,6 +27,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+tempfile = "3.27.0"
 
 [features]
 # Per-test database isolation for integration tests. Enabled only through
