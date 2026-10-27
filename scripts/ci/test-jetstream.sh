@@ -10,7 +10,9 @@ flock -x 9
 # Shared target builds must see the source of this checkout after lock ownership.
 # Touch every Rust source in this checkout, including unchanged dependency
 # crates. The shared target may otherwise reuse a sibling's newer enum/API.
-rg --files crates services apps tools -g '*.rs' -0 | xargs -0 touch
+find crates services apps tools \
+  -type d \( -name node_modules -o -name target \) -prune -o \
+  -type f -name '*.rs' -exec touch {} +
 # This focused set uses small private DB clones. It is deliberately not the
 # broad suite runner (which needs an explicitly sized 14 GiB filesystem).
 available_kib=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
