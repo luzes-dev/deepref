@@ -186,7 +186,7 @@ test('selects a theme from the Appearance settings control', async ({ page }) =>
 	await page.goto('/settings');
 	await page.getByRole('button', { name: 'Appearance', exact: true }).click();
 
-	const themeSelect = page.getByRole('button', { name: 'Theme', exact: true });
+	const themeSelect = page.getByRole('combobox', { name: 'Theme', exact: true });
 	await expect(themeSelect).toBeVisible();
 	await themeSelect.click();
 	await expect(page.getByRole('option', { name: 'Dark', exact: true })).toBeVisible();
