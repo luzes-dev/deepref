@@ -1185,27 +1185,34 @@ mod tests {
         // A late canonical-command failure happens after report writes and
         // all projection events. The entire command must roll back.
         sqlx::raw_sql("CREATE FUNCTION reject_graph_settle() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'graph command rollback'; END $$; CREATE TRIGGER reject_graph_settle BEFORE UPDATE ON acquisition_items FOR EACH ROW EXECUTE FUNCTION reject_graph_settle();").execute(&pool).await?;
-        assert!(
+        anyhow::ensure!(
             finalize_success(&pool, &refresh, doi, owner, &lease, &changed)
                 .await
-                .is_err()
+                .is_err(),
+            "graph command must fail after the rejection trigger"
         );
         let after = graph_refresh_state(&pool).await?;
         for project in [first.payload.project_id, second.payload.project_id] {
-            assert_eq!(
-                before.iter().find(|row| row.0 == project),
-                after.iter().find(|row| row.0 == project)
+            let old = before.iter().find(|row| row.0 == project);
+            let new = after.iter().find(|row| row.0 == project);
+            anyhow::ensure!(
+                old == new,
+                "failed command must preserve project {project}: before={old:?}, after={new:?}"
             );
-            assert_eq!(
-                deepref_app::get_projection_status(&pool, project)
-                    .await?
-                    .unwrap()
-                    .state,
-                deepref_domain::graph::ProjectionState::Ready
+            let state = deepref_app::get_projection_status(&pool, project)
+                .await?
+                .unwrap()
+                .state;
+            anyhow::ensure!(
+                state == deepref_domain::graph::ProjectionState::Ready,
+                "project {project} must remain Ready after rollback: actual={state:?}"
             );
         }
         let canonical: (Option<i32>,i64) = sqlx::query_as("SELECT publication_year,total_citations FROM reports WHERE id=(SELECT report_id FROM report_identifiers WHERE normalized_value=$1 AND scheme='doi')").bind(doi).fetch_one(&pool).await?;
-        assert_eq!(canonical, (Some(2024), 0));
+        anyhow::ensure!(
+            canonical == (Some(2024), 0),
+            "canonical report must remain (Some(2024), 0) after rollback: actual={canonical:?}"
+        );
         sqlx::query("DROP TRIGGER reject_graph_settle ON acquisition_items")
             .execute(&pool)
             .await?;
@@ -1214,16 +1221,31 @@ mod tests {
         for project in [first.payload.project_id, second.payload.project_id] {
             let old = before.iter().find(|row| row.0 == project).unwrap();
             let new = after.iter().find(|row| row.0 == project).unwrap();
-            assert_eq!(new.1, old.1 + 1);
-            assert_eq!(new.2, old.2 + 1);
+            anyhow::ensure!(
+                new.1 == old.1 + 1,
+                "project {project} revision must advance once: before={}, after={}",
+                old.1,
+                new.1
+            );
+            anyhow::ensure!(
+                new.2 == old.2 + 1,
+                "project {project} outbox count must advance once: before={}, after={}",
+                old.2,
+                new.2
+            );
             let status = deepref_app::get_projection_status(&pool, project)
                 .await?
                 .unwrap();
-            assert_eq!(
-                status.state,
-                deepref_domain::graph::ProjectionState::Lagging
+            anyhow::ensure!(
+                status.state == deepref_domain::graph::ProjectionState::Lagging,
+                "project {project} must become Lagging: actual={:?}",
+                status.state
             );
-            assert_eq!(status.lag, 1);
+            anyhow::ensure!(
+                status.lag == 1,
+                "project {project} must have lag 1: actual={}",
+                status.lag
+            );
         }
         Ok(())
     }
@@ -1263,16 +1285,17 @@ mod tests {
             sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='recompute_metrics'")
                 .fetch_one(&pool)
                 .await?;
-        assert_eq!(
-            count, 0,
-            "command emits outbox; dispatcher owns queue effect"
+        anyhow::ensure!(
+            count == 0,
+            "command emits outbox; dispatcher owns queue effect: expected 0 jobs, actual={count}"
         );
-        assert_eq!(
-            deepref_app::get_projection_status(&pool, project)
-                .await?
-                .unwrap()
-                .state,
-            ProjectionState::Lagging
+        let state = deepref_app::get_projection_status(&pool, project)
+            .await?
+            .unwrap()
+            .state;
+        anyhow::ensure!(
+            state == ProjectionState::Lagging,
+            "project must become Lagging after command: actual={state:?}"
         );
         // Repair is another real producer. With dispatcher/worker stopped,
         // both requests remain durable. Deliver the newer request first.
@@ -1287,7 +1310,11 @@ mod tests {
             10,
         )
         .await?;
-        assert_eq!(events.len(), 2);
+        anyhow::ensure!(
+            events.len() == 2,
+            "command and repair must emit two events: actual={}",
+            events.len()
+        );
         events.sort_by_key(|e| std::cmp::Reverse(e.payload["revision"].as_i64().unwrap()));
         let latest = events[0].clone();
         // The actual registered consumer must roll its receipt back when
@@ -1300,7 +1327,7 @@ mod tests {
         .bind(latest.event_id)
         .fetch_one(&pool)
         .await?;
-        assert!(!delivered, "receipt cannot outlive failed effect");
+        anyhow::ensure!(!delivered, "receipt cannot outlive failed effect");
         sqlx::query("DROP TRIGGER reject_graph_job ON jobs")
             .execute(&pool)
             .await?;
@@ -1338,7 +1365,11 @@ mod tests {
             .await?,
         );
         events.sort_by_key(|e| std::cmp::Reverse(e.payload["revision"].as_i64().unwrap()));
-        assert_eq!(events.len(), 2);
+        anyhow::ensure!(
+            events.len() == 2,
+            "restart must reclaim two events: actual={}",
+            events.len()
+        );
         for e in &events {
             deepref_app::outbox::dispatch_outbox_event(&pool, &restarted, OWNER_LEASE, e).await?;
             let consumer = &e.expected_consumers[0];
@@ -1362,9 +1393,9 @@ mod tests {
                 .fetch_one(&pool)
                 .await?;
         let diagnostics: Vec<(Uuid,serde_json::Value,String,Option<String>)> = sqlx::query_as("SELECT event_id,payload,delivery_state,last_error FROM outbox_events ORDER BY event_id").fetch_all(&pool).await?;
-        assert_eq!(
-            count, 2,
-            "consumer redelivery cannot duplicate queue effects: {diagnostics:?}"
+        anyhow::ensure!(
+            count == 2,
+            "consumer redelivery cannot duplicate queue effects: expected 2 jobs, actual={count}: {diagnostics:?}"
         );
         let non_projection = deepref_app::claim_jobs(
             &pool,
@@ -1378,7 +1409,10 @@ mod tests {
             10,
         )
         .await?;
-        assert!(non_projection.is_empty(), "projection work stays isolated");
+        anyhow::ensure!(
+            non_projection.is_empty(),
+            "projection work stays isolated: actual non-projection jobs={non_projection:?}"
+        );
         let mut jobs = deepref_app::claim_jobs(
             &pool,
             "projection-before-restart",
@@ -1388,7 +1422,11 @@ mod tests {
         )
         .await?;
         jobs.sort_by_key(|j| std::cmp::Reverse(j.payload["revision"].as_i64().unwrap()));
-        assert_eq!(jobs.len(), 2);
+        anyhow::ensure!(
+            jobs.len() == 2,
+            "projection pool must claim two jobs: actual={}",
+            jobs.len()
+        );
         sqlx::raw_sql("CREATE FUNCTION reject_graph_metrics() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'graph compute failure'; END $$; CREATE TRIGGER reject_graph_metrics BEFORE UPDATE ON project_reports FOR EACH ROW EXECUTE FUNCTION reject_graph_metrics();").execute(&pool).await?;
         let error = crate::processor::handle_recompute_metrics_job(&pool, jobs[0].payload.clone())
             .await
@@ -1396,17 +1434,28 @@ mod tests {
         let failed = deepref_app::get_projection_status(&pool, project)
             .await?
             .unwrap();
-        assert_eq!(failed.state, ProjectionState::Failed);
-        assert!(failed.last_error.unwrap().contains("graph compute failure"));
-        assert!(failed.rebuild_state.is_some());
+        anyhow::ensure!(
+            failed.state == ProjectionState::Failed,
+            "rejected computation must become Failed: actual={:?}",
+            failed.state
+        );
+        let last_error = failed.last_error.unwrap();
+        anyhow::ensure!(
+            last_error.contains("graph compute failure"),
+            "failed projection must retain graph compute failure: actual={last_error:?}"
+        );
+        anyhow::ensure!(
+            failed.rebuild_state.is_some(),
+            "failed projection must retain its rebuild state"
+        );
         let snapshots: i64 =
             sqlx::query_scalar("SELECT count(*) FROM metric_snapshots WHERE project_id=$1")
                 .bind(project)
                 .fetch_one(&pool)
                 .await?;
-        assert_eq!(
-            snapshots, 0,
-            "failed compute rolls back all projection output"
+        anyhow::ensure!(
+            snapshots == 0,
+            "failed compute rolls back all projection output: expected 0 snapshots, actual={snapshots}"
         );
         deepref_app::fail_job(
             &pool,
@@ -1426,28 +1475,43 @@ mod tests {
             10,
         )
         .await?;
-        assert_eq!(resumed.len(), 1);
+        anyhow::ensure!(
+            resumed.len() == 1,
+            "restart must reclaim one failed job: actual={}",
+            resumed.len()
+        );
         crate::processor::handle_recompute_metrics_job(&pool, resumed[0].payload.clone()).await?;
-        assert!(
-            deepref_app::complete_job(&pool, &resumed[0].lease("projection-after-restart")).await?
+        anyhow::ensure!(
+            deepref_app::complete_job(&pool, &resumed[0].lease("projection-after-restart")).await?,
+            "resumed projection job completion must retain its exact lease"
         );
         let expected = graph_metric_values(&pool, project).await?;
         // Old event, then exact redelivery after success: every deterministic
         // output must remain identical, even though execution time changes.
         for payload in [jobs[1].payload.clone(), resumed[0].payload.clone()] {
             crate::processor::handle_recompute_metrics_job(&pool, payload).await?;
-            assert_eq!(graph_metric_values(&pool, project).await?, expected);
+            let actual = graph_metric_values(&pool, project).await?;
+            anyhow::ensure!(
+                actual == expected,
+                "old event and exact redelivery must preserve graph metrics: expected={expected:?}, actual={actual:?}"
+            );
         }
-        assert!(
-            deepref_app::complete_job(&pool, &jobs[1].lease("projection-before-restart")).await?
+        anyhow::ensure!(
+            deepref_app::complete_job(&pool, &jobs[1].lease("projection-before-restart")).await?,
+            "predecessor projection job completion must retain its exact lease"
         );
         let ready = deepref_app::get_projection_status(&pool, project)
             .await?
             .unwrap();
-        assert_eq!(ready.state, ProjectionState::Ready);
-        assert_eq!(
-            (ready.requested_revision, ready.applied_revision, ready.lag),
-            (2, 2, 0)
+        anyhow::ensure!(
+            ready.state == ProjectionState::Ready,
+            "successful projection must become Ready: actual={:?}",
+            ready.state
+        );
+        let revisions = (ready.requested_revision, ready.applied_revision, ready.lag);
+        anyhow::ensure!(
+            revisions == (2, 2, 0),
+            "successful projection revisions/lag must be (2, 2, 0): actual={revisions:?}"
         );
         Ok(())
     }
