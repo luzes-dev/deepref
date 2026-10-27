@@ -10,16 +10,12 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$(dirname "$root")/shared-target}" 
 (( $(awk '/MemAvailable:/ {print $2}' /proc/meminfo) >= 6291456 )) || { echo 'fixture memory guard'; exit 1; }
 fixture_id=''
 cleanup() {
- for id in "$fixture_id"; do
-  [[ -z "$id" ]] && continue
-  [[ $(docker inspect --format '{{ index .Config.Labels "deepref.task" }}' "$id") == deepref-account-export-verification ]] || return 1
-  docker inspect "$id" --format 'id={{.Id}} memory={{.HostConfig.Memory}} tmpfs={{json .HostConfig.Tmpfs}}'
-  if [[ "$id" == "$fixture_id" ]]; then
-   docker exec "$id" psql -U postgres -d full11_astra -Atc 'SHOW fsync; SHOW full_page_writes; SHOW synchronous_commit; SHOW max_connections; SELECT datname, pg_database_size(oid) FROM pg_database ORDER BY datname;'
-   docker exec "$id" df -B1 /var/lib/postgresql/data
-  fi
-  docker rm -fv "$id"
- done
+ [[ -z "$fixture_id" ]] && return 0
+ [[ $(docker inspect --format '{{ index .Config.Labels "deepref.task" }}' "$fixture_id") == deepref-account-export-verification ]] || return 1
+ docker inspect "$fixture_id" --format 'id={{.Id}} memory={{.HostConfig.Memory}} tmpfs={{json .HostConfig.Tmpfs}}'
+ docker exec "$fixture_id" psql -U postgres -d full11_astra -Atc 'SHOW fsync; SHOW full_page_writes; SHOW synchronous_commit; SHOW max_connections; SELECT datname, pg_database_size(oid) FROM pg_database ORDER BY datname;'
+ docker exec "$fixture_id" df -B1 /var/lib/postgresql/data
+ docker rm -fv "$fixture_id"
 }
 trap cleanup EXIT
 
