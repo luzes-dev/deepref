@@ -701,8 +701,16 @@ mod tests {
         let first = begin_metrics_attempt(&pool, project).await?;
         record_metrics_failure(&pool, first, &anyhow::anyhow!("first actual failure")).await?;
         let failed = get_projection_status(&pool, project).await?.unwrap();
-        assert_eq!(failed.state, ProjectionState::Failed);
-        assert_eq!(failed.last_error.as_deref(), Some("first actual failure"));
+        anyhow::ensure!(
+            failed.state == ProjectionState::Failed,
+            "first attempt must become Failed: actual={:?}",
+            failed.state
+        );
+        anyhow::ensure!(
+            failed.last_error.as_deref() == Some("first actual failure"),
+            "first attempt must retain its failure: actual={:?}",
+            failed.last_error
+        );
 
         let success = begin_metrics_attempt(&pool, project).await?;
         recompute_project_metrics_once(&pool, success).await?;
@@ -711,35 +719,47 @@ mod tests {
         // can report a delayed failure, neither may replace completed output.
         record_metrics_failure(&pool, success, &anyhow::anyhow!("late same-attempt error")).await?;
         record_metrics_failure(&pool, first, &anyhow::anyhow!("late older-attempt error")).await?;
-        assert_eq!(get_projection_status(&pool, project).await?.unwrap(), ready);
+        let actual = get_projection_status(&pool, project).await?.unwrap();
+        anyhow::ensure!(
+            actual == ready,
+            "late failures must preserve completed output: expected={ready:?}, actual={actual:?}"
+        );
 
         let abandoned = begin_metrics_attempt(&pool, project).await?;
         rebuild_project_projection(&pool, project).await?;
         let rebuilding = get_projection_status(&pool, project).await?.unwrap();
         record_metrics_failure(&pool, abandoned, &anyhow::anyhow!("old generation failure"))
             .await?;
-        assert_eq!(
-            get_projection_status(&pool, project).await?.unwrap(),
-            rebuilding
+        let actual = get_projection_status(&pool, project).await?.unwrap();
+        anyhow::ensure!(
+            actual == rebuilding,
+            "old-generation failure must preserve repair state: expected={rebuilding:?}, actual={actual:?}"
         );
-        assert!(
+        anyhow::ensure!(
             recompute_project_metrics_once(&pool, abandoned)
                 .await
-                .is_err()
+                .is_err(),
+            "old-generation attempt must not recompute the repaired projection"
         );
 
         let repair = begin_metrics_attempt(&pool, project).await?;
         record_metrics_failure(&pool, repair, &anyhow::anyhow!("repair failed")).await?;
         let failed_repair = get_projection_status(&pool, project).await?.unwrap();
-        assert_eq!(failed_repair.state, ProjectionState::Failed);
-        assert_eq!(
-            failed_repair.rebuild_state,
-            Some(ProjectionRebuildState::Rebuilding)
+        anyhow::ensure!(
+            failed_repair.state == ProjectionState::Failed,
+            "rejected repair attempt must become Failed: actual={:?}",
+            failed_repair.state
+        );
+        anyhow::ensure!(
+            failed_repair.rebuild_state == Some(ProjectionRebuildState::Rebuilding),
+            "failed repair must retain rebuilding state: actual={:?}",
+            failed_repair.rebuild_state
         );
         recompute_project_metrics(&pool, project).await?;
-        assert_eq!(
-            get_projection_status(&pool, project).await?.unwrap().state,
-            ProjectionState::Ready
+        let state = get_projection_status(&pool, project).await?.unwrap().state;
+        anyhow::ensure!(
+            state == ProjectionState::Ready,
+            "successful repair must become Ready: actual={state:?}"
         );
         Ok(())
     }
