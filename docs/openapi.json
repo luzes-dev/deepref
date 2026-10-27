@@ -16859,9 +16859,25 @@
         "type": "object",
         "required": [
           "postgresql",
-          "worker"
+          "worker",
+          "object_storage"
         ],
         "properties": {
+          "jetstream": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransportHealth",
+                "description": "Required JetStream diagnostic evidence; absent in valid PostgreSQL mode."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "object_storage": {
+            "$ref": "#/components/schemas/DependencyDetail",
+            "description": "Actual bounded read probe; no write, deletion, or quota guarantee."
+          },
           "postgresql": {
             "$ref": "#/components/schemas/DependencyDetail"
           },
@@ -21905,6 +21921,64 @@
             "format": "int64",
             "description": "Wait up to this long (at most 20000) for the test to finish before answering.",
             "minimum": 0
+          }
+        }
+      },
+      "TransportHealth": {
+        "type": "object",
+        "description": "Counts from diagnostic heartbeats, never a fleet inventory or drain fence.",
+        "required": [
+          "state",
+          "expected_mode",
+          "live_workers",
+          "fresh_ready_workers",
+          "not_ready_workers",
+          "unknown_workers",
+          "stale_workers",
+          "future_workers",
+          "mismatched_workers"
+        ],
+        "properties": {
+          "expected_mode": {
+            "type": "string"
+          },
+          "fresh_ready_workers": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "future_workers": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_observation_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "live_workers": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "mismatched_workers": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "not_ready_workers": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stale_workers": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DependencyState"
+          },
+          "unknown_workers": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

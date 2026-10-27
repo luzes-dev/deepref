@@ -180,6 +180,8 @@ const projection: ProjectionStatusDto = {
 };
 
 const dependencies: DependencyStatus = {
+	object_storage: { state: 'available' },
+	jetstream: null,
 	postgresql: {
 		state: 'available',
 		lag: null,

@@ -18,15 +18,33 @@ pub async fn run(
     pool: PgPool,
     owner: String,
     interval: Duration,
+    shutdown: watch::Receiver<bool>,
+    pool_capacities: Vec<(WorkloadClass, usize)>,
+) {
+    run_with_transport(pool, owner, interval, shutdown, pool_capacities, None).await;
+}
+
+/// A watch snapshot retains the adapter's observation timestamp across ticks.
+pub async fn run_with_transport(
+    pool: PgPool,
+    owner: String,
+    interval: Duration,
     mut shutdown: watch::Receiver<bool>,
     pool_capacities: Vec<(WorkloadClass, usize)>,
+    transport: Option<
+        watch::Receiver<Option<deepref_application::operational_health::TransportReadiness>>,
+    >,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                if let Err(error) = deepref_app::record_worker_heartbeat_with_capacities(&pool, &owner, &pool_capacities).await {
+                let evidence = match &transport {
+                    None => deepref_application::operational_health::WorkerTransportEvidence::Postgres,
+                    Some(receiver) => deepref_application::operational_health::WorkerTransportEvidence::JetStream(*receiver.borrow()),
+                };
+                if let Err(error) = deepref_app::record_worker_heartbeat_with_transport(&pool, &owner, &pool_capacities, evidence).await {
                     tracing::warn!(%error, owner, "worker heartbeat write failed");
                 }
             }

@@ -330,6 +330,7 @@ export * from './studyReportRoleInput.ts';
 export * from './studyToolSuggestionDto.ts';
 export * from './templateDto.ts';
 export * from './testRunRequest.ts';
+export * from './transportHealth.ts';
 export * from './undoScreeningRequest.ts';
 export * from './ungroupedReportDto.ts';
 export * from './updateAiAutonomyRequest.ts';

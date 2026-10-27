@@ -51,6 +51,59 @@ impl TransportObserver for NoopObserver {
     fn observe(&self, _: TransportObservation) {}
 }
 
+/// Metadata only; this is not an execution capability or a business retry.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TerminalAdvisory {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub stream: String,
+    pub consumer: String,
+    pub stream_seq: u64,
+    pub deliveries: u64,
+}
+
+impl TerminalAdvisory {
+    fn decode(bytes: &[u8], expected_stream: &str) -> Result<Self> {
+        anyhow::ensure!(
+            bytes.len() <= 16_384,
+            "terminal advisory metadata exceeds budget"
+        );
+        let value: Self = serde_json::from_slice(bytes)
+            .map_err(|_| anyhow::anyhow!("invalid terminal advisory metadata"))?;
+        anyhow::ensure!(
+            value.kind == "io.nats.jetstream.advisory.v1.max_deliver"
+                && value.stream == expected_stream
+                && value.stream_seq > 0
+                && value.deliveries == MAX_DELIVERIES
+                && !value.consumer.is_empty()
+                && value.consumer.len() <= 128
+                && value
+                    .consumer
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "terminal advisory does not match the configured finite delivery contract"
+        );
+        Ok(value)
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RetainedTerminalAdvisory {
+    pub advisory_sequence: u64,
+    pub advisory: TerminalAdvisory,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TerminalAdvisoryPage {
+    pub retained_first_sequence: u64,
+    pub observed_last_sequence: u64,
+    pub retained_count: u64,
+    pub next_after: u64,
+    pub complete_to_observed_end: bool,
+    pub entries: Vec<RetainedTerminalAdvisory>,
+}
+
 #[derive(Clone, Copy)]
 enum StreamPurpose {
     Work,
@@ -69,6 +122,19 @@ impl JetStream {
     /// Provision absent resources, validate existing resources exactly. A
     /// rolling deployment must never silently mutate retention or ACK policy.
     pub async fn connect(config: NatsConfig) -> Result<Self> {
+        let adapter = Self::connect_client(config).await?;
+        adapter.provision().await?;
+        Ok(adapter)
+    }
+
+    /// Operator access never creates missing streams or consumers.
+    pub async fn connect_existing(config: NatsConfig) -> Result<Self> {
+        let adapter = Self::connect_client(config).await?;
+        adapter.readiness().await?;
+        Ok(adapter)
+    }
+
+    async fn connect_client(config: NatsConfig) -> Result<Self> {
         let mut options = async_nats::ConnectOptions::new()
             .connection_timeout(config.request_timeout)
             .request_timeout(Some(config.request_timeout));
@@ -88,7 +154,6 @@ impl JetStream {
             config,
             observer: Arc::new(NoopObserver),
         };
-        adapter.provision().await?;
         Ok(adapter)
     }
 
@@ -142,45 +207,51 @@ impl JetStream {
             let expected = self.stream_config(kind);
             let actual = self.context.get_or_create_stream(expected.clone()).await?;
             let config = &actual.cached_info().config;
-            anyhow::ensure!(
-                config.name == expected.name
-                    && config.subjects == expected.subjects
-                    && config.retention == expected.retention
-                    && config.storage == expected.storage
-                    && config.discard == expected.discard
-                    && config.num_replicas == expected.num_replicas
-                    && config.max_bytes == expected.max_bytes
-                    && config.max_age == expected.max_age
-                    && config.max_message_size == expected.max_message_size
-                    && !config.no_ack
-                    && !config.sealed
-                    && !config.discard_new_per_subject
-                    && config.max_messages <= 0
-                    && config.max_messages_per_subject <= 0
-                    && config.max_consumers <= 0
-                    && config.template_owner.is_empty()
-                    && config.subject_transform.is_none()
-                    && config.republish.is_none()
-                    && config.mirror.is_none()
-                    && config.sources.as_ref().is_none_or(Vec::is_empty)
-                    && !config.mirror_direct
-                    && !config.allow_direct
-                    && !config.allow_rollup
-                    && !config.deny_delete
-                    && !config.deny_purge
-                    && config.consumer_limits.is_none()
-                    && config.pause_until.is_none()
-                    && !config.allow_message_ttl
-                    && config.subject_delete_marker_ttl.is_none()
-                    && !config.allow_message_schedules
-                    && !config.allow_message_counter
-                    && !config.allow_atomic_publish
-                    && !config.allow_batch_publish
-                    && config.duplicate_window == expected.duplicate_window,
-                "JetStream stream configuration mismatch: {}",
-                expected.name
-            );
+            self.validate_stream(kind, config)?;
         }
+        Ok(())
+    }
+
+    fn validate_stream(&self, kind: StreamPurpose, config: &stream::Config) -> Result<()> {
+        let expected = self.stream_config(kind);
+        anyhow::ensure!(
+            config.name == expected.name
+                && config.subjects == expected.subjects
+                && config.retention == expected.retention
+                && config.storage == expected.storage
+                && config.discard == expected.discard
+                && config.num_replicas == expected.num_replicas
+                && config.max_bytes == expected.max_bytes
+                && config.max_age == expected.max_age
+                && config.max_message_size == expected.max_message_size
+                && !config.no_ack
+                && !config.sealed
+                && !config.discard_new_per_subject
+                && config.max_messages <= 0
+                && config.max_messages_per_subject <= 0
+                && config.max_consumers <= 0
+                && config.template_owner.is_empty()
+                && config.subject_transform.is_none()
+                && config.republish.is_none()
+                && config.mirror.is_none()
+                && config.sources.as_ref().is_none_or(Vec::is_empty)
+                && !config.mirror_direct
+                && !config.allow_direct
+                && !config.allow_rollup
+                && !config.deny_delete
+                && !config.deny_purge
+                && config.consumer_limits.is_none()
+                && config.pause_until.is_none()
+                && !config.allow_message_ttl
+                && config.subject_delete_marker_ttl.is_none()
+                && !config.allow_message_schedules
+                && !config.allow_message_counter
+                && !config.allow_atomic_publish
+                && !config.allow_batch_publish
+                && config.duplicate_window == expected.duplicate_window,
+            "JetStream stream configuration mismatch: {}",
+            expected.name
+        );
         Ok(())
     }
 
@@ -204,6 +275,82 @@ impl JetStream {
             .get_stream(format!("{}_TERMINAL", self.config.stream))
             .await?;
         Ok(stream.cached_info().state.messages)
+    }
+
+    /// Bounded, read-only page of retained metadata advisories. A gap or expired
+    /// cursor is incomplete evidence, never a claim that no failures occurred.
+    pub async fn terminal_advisories(
+        &self,
+        after: u64,
+        limit: u16,
+    ) -> Result<TerminalAdvisoryPage> {
+        anyhow::ensure!(
+            (1..=100).contains(&limit),
+            "terminal advisory limit must be 1..100"
+        );
+        let stream = self
+            .context
+            .get_stream(format!("{}_TERMINAL", self.config.stream))
+            .await?;
+        let state = &stream.cached_info().state;
+        let first = state.first_sequence;
+        let last = state.last_sequence;
+        anyhow::ensure!(
+            after <= last,
+            "terminal advisory cursor is ahead of the observed stream"
+        );
+        let start = if after == 0 {
+            first
+        } else {
+            let next = after
+                .checked_add(1)
+                .context("terminal advisory cursor exhausted")?;
+            anyhow::ensure!(
+                first == 0 || next >= first,
+                "terminal advisory cursor expired; inspect retained first sequence before resuming"
+            );
+            next
+        };
+        let mut entries = Vec::new();
+        let mut cursor = after;
+        if state.messages > 0 && start <= last {
+            for sequence in start..=last {
+                let message = stream
+                    .get_raw_message(sequence)
+                    .await
+                    .context("terminal advisory page incomplete; retained sequence unavailable")?;
+                let advisory = TerminalAdvisory::decode(&message.payload, &self.config.stream)?;
+                entries.push(RetainedTerminalAdvisory {
+                    advisory_sequence: sequence,
+                    advisory,
+                });
+                cursor = sequence;
+                if entries.len() >= usize::from(limit) {
+                    break;
+                }
+            }
+        }
+        Ok(TerminalAdvisoryPage {
+            retained_first_sequence: first,
+            observed_last_sequence: last,
+            retained_count: state.messages,
+            next_after: cursor,
+            complete_to_observed_end: state.messages == 0 || cursor >= last,
+            entries,
+        })
+    }
+
+    pub async fn terminal_advisory(&self, sequence: u64) -> Result<TerminalAdvisory> {
+        anyhow::ensure!(sequence > 0, "terminal advisory sequence must be positive");
+        let stream = self
+            .context
+            .get_stream(format!("{}_TERMINAL", self.config.stream))
+            .await?;
+        let message = stream
+            .get_raw_message(sequence)
+            .await
+            .context("terminal advisory unavailable; no recovery evidence can be inferred")?;
+        TerminalAdvisory::decode(&message.payload, &self.config.stream)
     }
 
     pub fn sequence_identity(&self, consumer: &str, sequence: u64) -> String {
@@ -245,12 +392,16 @@ impl JetStream {
         // Management requests verify all required JetStream resources, not
         // merely the core TCP link. The supervisor bounds the combined sample.
         let result = async {
-            for name in [
-                self.config.stream.clone(),
-                format!("{}_DLQ", self.config.stream),
-                format!("{}_TERMINAL", self.config.stream),
+            for kind in [
+                StreamPurpose::Work,
+                StreamPurpose::DeadLetter,
+                StreamPurpose::TerminalEvidence,
             ] {
-                self.context.get_stream(name).await?;
+                let stream = self
+                    .context
+                    .get_stream(self.stream_config(kind).name)
+                    .await?;
+                self.validate_stream(kind, &stream.cached_info().config)?;
             }
             Ok::<_, anyhow::Error>(())
         }
@@ -487,5 +638,34 @@ impl Delivery {
 impl Drop for Delivery {
     fn drop(&mut self) {
         self.progress.abort();
+    }
+}
+
+#[cfg(test)]
+mod operator_tests {
+    use super::*;
+    #[test]
+    fn advisory_validation_refuses_foreign_contracts_and_redacts_bad_payload() -> Result<()> {
+        let valid = serde_json::json!({"type":"io.nats.jetstream.advisory.v1.max_deliver",
+            "timestamp":chrono::Utc::now(),"stream":"WORK","consumer":"work-documents-v1","stream_seq":7,"deliveries":5});
+        let parsed = TerminalAdvisory::decode(&serde_json::to_vec(&valid)?, "WORK")?;
+        anyhow::ensure!(parsed.stream_seq == 7);
+        for (field, bad) in [
+            ("stream", serde_json::json!("FOREIGN")),
+            ("deliveries", serde_json::json!(6)),
+            ("stream_seq", serde_json::json!(0)),
+            ("consumer", serde_json::json!("secret.invalid")),
+        ] {
+            let mut value = valid.clone();
+            value[field] = bad;
+            anyhow::ensure!(
+                TerminalAdvisory::decode(&serde_json::to_vec(&value)?, "WORK").is_err()
+            );
+        }
+        let error = TerminalAdvisory::decode(br#"{"private-token":"never-print-this"}"#, "WORK")
+            .err()
+            .context("expected malformed metadata refusal")?;
+        anyhow::ensure!(!format!("{error:#}").contains("never-print-this"));
+        Ok(())
     }
 }

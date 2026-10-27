@@ -631,10 +631,38 @@ async fn final_delivery_failure(fail_dlq: bool) -> Result<()> {
         1,
         "retained advisory owns terminal sequence evidence"
     );
-    deepref_worker::jetstream_transport::recover_terminal_sequence(
-        &pool, &broker, "terminal", sequence,
+    let page = broker.terminal_advisories(0, 10).await?;
+    anyhow::ensure!(page.complete_to_observed_end && page.entries.len() == 1);
+    let advisory_sequence = page.entries[0].advisory_sequence;
+    anyhow::ensure!(page.entries[0].advisory.stream_seq == sequence);
+    anyhow::ensure!(broker.terminal_advisories(u64::MAX, 10).await.is_err());
+    let untouched = enqueue(&pool, JobKind::RecomputeMetrics).await?;
+    sqlx::query("UPDATE jobs SET attempts=2 WHERE id=$1")
+        .bind(untouched)
+        .execute(&pool)
+        .await?;
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(j) FROM jobs j WHERE id=$1")
+            .bind(untouched)
+            .fetch_one(&pool)
+            .await?;
+    let result = deepref_worker::transport_operator::recover_terminal_advisory(
+        &pool,
+        &broker,
+        advisory_sequence,
     )
     .await?;
+    anyhow::ensure!(
+        result["business_replayed"] == false && result["delivery_budget_reset"] == false
+    );
+    let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(j) FROM jobs j WHERE id=$1")
+        .bind(untouched)
+        .fetch_one(&pool)
+        .await?;
+    anyhow::ensure!(
+        before == after,
+        "diagnostic recovery must not reset real queued business state"
+    );
     assert_eq!(broker.dead_letter_count().await?, 1);
     let reason: String =
         sqlx::query_scalar("SELECT reason FROM transport_dead_letters WHERE delivery_id=$1")
@@ -643,8 +671,10 @@ async fn final_delivery_failure(fail_dlq: bool) -> Result<()> {
             .await?;
     assert!(!reason.contains("private-terminal"));
     // Recovery is idempotent and never resets/advances the exhausted consumer.
-    deepref_worker::jetstream_transport::recover_terminal_sequence(
-        &pool, &broker, "terminal", sequence,
+    deepref_worker::transport_operator::recover_terminal_advisory(
+        &pool,
+        &broker,
+        advisory_sequence,
     )
     .await?;
     assert_eq!(broker.dead_letter_count().await?, 1);

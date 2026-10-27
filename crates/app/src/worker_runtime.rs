@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use deepref_application::operational_health::WorkerTransportEvidence;
 use deepref_domain::{JobKind, WorkloadClass};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -118,7 +119,7 @@ pub async fn find_missing_acquisition_work(
 /// Upsert `owner`'s liveness row (`worker_heartbeats`), and prune rows of
 /// workers that stopped without a clean shutdown more than a day ago.
 pub async fn record_worker_heartbeat(pool: &PgPool, owner: &str) -> anyhow::Result<()> {
-    record_worker_heartbeat_inner(pool, owner, None).await
+    record_worker_heartbeat_inner(pool, owner, None, None).await
 }
 
 /// Refresh worker liveness and the configured capacities of its served pools.
@@ -128,50 +129,60 @@ pub async fn record_worker_heartbeat_with_capacities(
     owner: &str,
     pool_capacities: &[(WorkloadClass, usize)],
 ) -> anyhow::Result<()> {
-    let mut capacity_json = serde_json::Map::new();
-    for (class, capacity) in pool_capacities {
-        let capacity = i64::try_from(*capacity).unwrap_or(i64::MAX);
-        capacity_json.insert(class.as_str().to_owned(), serde_json::Value::from(capacity));
+    record_worker_heartbeat_inner(pool, owner, Some(capacity_json(pool_capacities)), None).await
+}
+
+/// Copies actual transport evidence unchanged alongside worker liveness.
+pub async fn record_worker_heartbeat_with_transport(
+    pool: &PgPool,
+    owner: &str,
+    pool_capacities: &[(WorkloadClass, usize)],
+    evidence: WorkerTransportEvidence,
+) -> anyhow::Result<()> {
+    record_worker_heartbeat_inner(
+        pool,
+        owner,
+        Some(capacity_json(pool_capacities)),
+        Some(evidence),
+    )
+    .await
+}
+
+fn capacity_json(capacities: &[(WorkloadClass, usize)]) -> serde_json::Value {
+    let mut values = serde_json::Map::new();
+    for (class, capacity) in capacities {
+        values.insert(
+            class.as_str().to_owned(),
+            serde_json::Value::from(i64::try_from(*capacity).unwrap_or(i64::MAX)),
+        );
     }
-    record_worker_heartbeat_inner(pool, owner, Some(serde_json::Value::Object(capacity_json))).await
+    serde_json::Value::Object(values)
 }
 
 async fn record_worker_heartbeat_inner(
     pool: &PgPool,
     owner: &str,
     pool_capacities: Option<serde_json::Value>,
+    evidence: Option<WorkerTransportEvidence>,
 ) -> anyhow::Result<()> {
-    // Diagnostic decoder inventory only: stale or absent heartbeats cannot
-    // prove fleet membership. Job claim/recovery transactions declare their
-    // capabilities separately to the authoritative database fence.
+    let (mode, observation) = match evidence {
+        None => (None, None),
+        Some(WorkerTransportEvidence::Postgres) => (Some("postgres"), None),
+        Some(WorkerTransportEvidence::JetStream(observation)) => (Some("jetstream"), observation),
+    };
     let known_job_kinds = JobKind::known_kinds();
     let mut tx = pool.begin().await?;
-    match pool_capacities {
-        Some(pool_capacities) => {
-            sqlx::query(
-                "INSERT INTO worker_heartbeats (owner,pool_capacities,known_job_kinds) VALUES ($1,$2,$3)
-                 ON CONFLICT (owner) DO UPDATE
-                 SET seen_at=now(), pool_capacities=EXCLUDED.pool_capacities,
-                     known_job_kinds=EXCLUDED.known_job_kinds",
-            )
-            .bind(owner)
-            .bind(pool_capacities)
-            .bind(&known_job_kinds)
-            .execute(&mut *tx)
-            .await?;
-        }
-        None => {
-            sqlx::query(
-                "INSERT INTO worker_heartbeats (owner,known_job_kinds) VALUES ($1,$2)
-                 ON CONFLICT (owner) DO UPDATE
-                 SET seen_at=now(), known_job_kinds=EXCLUDED.known_job_kinds",
-            )
-            .bind(owner)
-            .bind(&known_job_kinds)
-            .execute(&mut *tx)
-            .await?;
-        }
-    }
+    sqlx::query(
+        "INSERT INTO worker_heartbeats (owner,pool_capacities,known_job_kinds,transport_mode,transport_ready,transport_observed_at)
+         VALUES ($1,COALESCE($2,'{}'::jsonb),$3,$4,$5,$6)
+         ON CONFLICT (owner) DO UPDATE SET seen_at=now(),
+             pool_capacities=COALESCE($2,worker_heartbeats.pool_capacities),
+             known_job_kinds=EXCLUDED.known_job_kinds,transport_mode=EXCLUDED.transport_mode,
+             transport_ready=EXCLUDED.transport_ready,transport_observed_at=EXCLUDED.transport_observed_at",
+    )
+    .bind(owner).bind(pool_capacities).bind(&known_job_kinds).bind(mode)
+    .bind(observation.map(|value|value.ready)).bind(observation.map(|value|value.observed_at))
+    .execute(&mut *tx).await?;
     sqlx::query("DELETE FROM worker_heartbeats WHERE seen_at < now() - interval '1 day'")
         .execute(&mut *tx)
         .await?;

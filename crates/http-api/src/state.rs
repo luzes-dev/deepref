@@ -27,6 +27,7 @@ pub struct AppState {
     pub project_count_cache:
         Option<Arc<dyn deepref_application::project_count_cache::ProjectCountCache>>,
     pub started_at: Instant,
+    pub work_transport: deepref_application::operational_health::WorkTransportMode,
     pub document_store: Option<DocumentStore>,
     pub ai_gateway: Arc<dyn AiGateway>,
     pub ai_info: AiRuntimeInfo,
@@ -64,6 +65,7 @@ impl AppState {
             pool,
             billing: None,
             started_at: Instant::now(),
+            work_transport: Default::default(),
             document_store: None,
             ai_gateway: Arc::new(RoutedGateway::default()),
             ai_info: AiRuntimeInfo::default(),
@@ -74,6 +76,18 @@ impl AppState {
             integrations: deepref_config::IntegrationsConfig::default(),
             auth: None,
         }
+    }
+
+    pub fn with_work_transport(mut self, config: &deepref_config::WorkTransportConfig) -> Self {
+        self.work_transport = match config {
+            deepref_config::WorkTransportConfig::Postgres => {
+                deepref_application::operational_health::WorkTransportMode::Postgres
+            }
+            deepref_config::WorkTransportConfig::JetStream(_) => {
+                deepref_application::operational_health::WorkTransportMode::JetStream
+            }
+        };
+        self
     }
 
     pub fn with_rate_limiter(
