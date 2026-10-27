@@ -44,7 +44,7 @@ deepref-app = { workspace = true, features = ["test-support"] }
 deepref-worker = { version = "0.1.0", path = "../../services/worker" }
 rig-core = { workspace = true, features = ["test-utils"] }
 tower.workspace = true
-syn = { version = "2", default-features = false, features = ["full", "parsing", "visit", "derive", "printing"] }
+syn = { version = "3", default-features = false, features = ["full", "parsing", "visit", "derive", "printing"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 opentelemetry.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
