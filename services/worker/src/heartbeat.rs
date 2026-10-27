@@ -41,3 +41,19 @@ pub async fn run(
         tracing::warn!(%error, owner, "worker heartbeat removal failed");
     }
 }
+
+/// Stop heartbeat ownership before closing its reserved pool.
+pub async fn stop(
+    mut task: tokio::task::JoinHandle<()>,
+    signal: watch::Sender<bool>,
+    deadline: Duration,
+) {
+    signal.send_replace(true);
+    if tokio::time::timeout(deadline, &mut task).await.is_err() {
+        task.abort();
+        // Await cancellation: dropping the handle would detach the blocked
+        // query and leave the reserved connection held during pool closure.
+        let _ = task.await;
+        tracing::warn!("worker heartbeat was aborted during shutdown; its row will age out");
+    }
+}
