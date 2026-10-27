@@ -694,7 +694,9 @@
 													}
 												}}
 											>
-												<Select.Trigger disabled={!editable}
+												<Select.Trigger
+													disabled={!editable}
+													aria-label="Framework"
 													>{frameworkLabel(
 														field.state.value
 													)}</Select.Trigger
