@@ -119,6 +119,85 @@ describe('account settings', () => {
 		expect(screen.queryByTestId('issued-api-key')).not.toBeInTheDocument();
 	});
 
+	it.each([
+		{ action: 'create', recoverBeforeResponse: false },
+		{ action: 'rotate', recoverBeforeResponse: false },
+		{ action: 'create', recoverBeforeResponse: true },
+		{ action: 'rotate', recoverBeforeResponse: true }
+	])(
+		'discards a delayed $action secret after failed authorization refresh (recovered=$recoverBeforeResponse)',
+		async ({ action, recoverBeforeResponse }) => {
+			const response = Promise.withResolvers<Response>();
+			let denied = false;
+			let reads = 0;
+			let changes = 0;
+			const { client } = setup('keys', (request) => {
+				if (request.method !== 'GET') {
+					changes++;
+					return response.promise;
+				}
+				reads++;
+				return denied
+					? json({ error: 'not found' }, 404)
+					: json(action === 'rotate' ? [key] : []);
+			});
+			if (action === 'rotate') {
+				await fireEvent.click(await screen.findByRole('button', { name: 'Rotate Reader' }));
+				await fireEvent.click(screen.getByRole('button', { name: 'Confirm rotate' }));
+			} else {
+				await screen.findByText('No API keys in this workspace.');
+				await fireEvent.input(screen.getByLabelText('Key name'), {
+					target: { value: 'Reader' }
+				});
+				await fireEvent.click(screen.getByRole('button', { name: 'Create API key' }));
+			}
+			await waitFor(() => expect(changes).toBe(1));
+			denied = true;
+			await fireEvent.click(screen.getByRole('button', { name: 'Refresh keys' }));
+			await screen.findByRole('alert');
+			await waitFor(() =>
+				expect(screen.getByRole('button', { name: 'Refresh keys' })).toBeEnabled()
+			);
+			await fireEvent.click(screen.getByRole('button', { name: 'Refresh keys' }));
+			await waitFor(() => {
+				expect(reads).toBe(3);
+				expect(screen.getByRole('button', { name: 'Refresh keys' })).toBeEnabled();
+			});
+			if (recoverBeforeResponse) {
+				denied = false;
+				await fireEvent.click(screen.getByRole('button', { name: 'Refresh keys' }));
+				await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+			}
+			const value = action === 'rotate' ? rotated : issued;
+			response.resolve(json({ key, secret: value }, 201));
+			await waitFor(() =>
+				expect(
+					client
+						.getMutationCache()
+						.getAll()
+						.every((entry) => entry.state.status === 'success')
+				).toBe(true)
+			);
+			expect(screen.queryByTestId('issued-api-key')).not.toBeInTheDocument();
+			expect(
+				JSON.stringify(
+					client
+						.getMutationCache()
+						.getAll()
+						.map((entry) => entry.state)
+				)
+			).not.toContain(value);
+			expect(
+				JSON.stringify(
+					client
+						.getQueryCache()
+						.getAll()
+						.map((entry) => entry.state)
+				)
+			).not.toContain(value);
+		}
+	);
+
 	it('opens hosted checkout with explicit contact/closed offering and never caches the link', async () => {
 		const requests: Array<{ path: string; body: unknown }> = [];
 		const link = 'https://test.checkout.dodopayments.com/session/BEARER';

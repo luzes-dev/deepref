@@ -18,6 +18,7 @@
 	const client = useQueryClient();
 	const controller = new AbortController();
 	let alive = true;
+	let authorizationGeneration = 0;
 	let name = $state('');
 	let projectRead = $state(true);
 	let workspaceRead = $state(false);
@@ -29,12 +30,13 @@
 		() => workspaceId,
 		() => ({ query: { retry: false } })
 	);
-	watch(
-		() => keys.isError,
-		(failed) => {
-			if (failed) secret = null;
+	watch([() => keys.isError, () => keys.isFetching], ([failed]) => {
+		if (failed) {
+			// Also fence in-flight responses across repeated failed refreshes.
+			authorizationGeneration++;
+			secret = null;
 		}
-	);
+	});
 	const scopes = $derived([
 		...(projectRead ? ['project:view'] : []),
 		...(workspaceRead ? ['workspace:view'] : [])
@@ -44,6 +46,7 @@
 	// enters cached mutation data, query data, notifications or browser storage.
 	const change = createMutation(() => ({
 		mutationFn: async (command: Command): Promise<void> => {
+			const generation = authorizationGeneration;
 			secret = null;
 			message = '';
 			if (command.kind === 'revoke') {
@@ -65,7 +68,8 @@
 						: await rotateApiKey(workspaceId, command.id, {
 								signal: controller.signal
 							});
-				if (alive) secret = response.data.secret;
+				if (alive && generation === authorizationGeneration && keys.isSuccess)
+					secret = response.data.secret;
 			}
 			if (alive) {
 				confirm = null;
@@ -95,7 +99,7 @@
 			every request.
 		</p>
 	</div>
-	{#if secret}
+	{#if secret && keys.isSuccess}
 		<div
 			class="flex flex-col gap-3 rounded-md border border-border p-4"
 			role="status"
