@@ -848,6 +848,61 @@
         }
       }
     },
+    "/me/workspaces": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "listSettingsWorkspaces",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Exclusive workspace UUID cursor. Ordering is stable by UUID, not name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsWorkspacePage"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
     "/notifications": {
       "get": {
         "tags": [
@@ -21419,6 +21474,54 @@
           "retry_attempts": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "SettingsWorkspace": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "can_manage_keys",
+          "can_manage_billing"
+        ],
+        "properties": {
+          "can_manage_billing": {
+            "type": "boolean",
+            "description": "Advisory UI hint; every billing operation independently reauthorizes."
+          },
+          "can_manage_keys": {
+            "type": "boolean",
+            "description": "Advisory UI hint; every key operation independently reauthorizes."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SettingsWorkspacePage": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingsWorkspace"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Follow to continue. An empty page can still have a cursor after revocation."
           }
         }
       },

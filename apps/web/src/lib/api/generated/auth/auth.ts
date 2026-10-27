@@ -21,7 +21,9 @@ import type {
 	AccountExportResponse,
 	ApiErrorBody,
 	CompleteLoginParams,
+	ListSettingsWorkspacesParams,
 	MeResponse,
+	SettingsWorkspacePage,
 	StartLoginParams
 } from '../models';
 
@@ -1081,6 +1083,136 @@ export const prefetchDownloadAccountExportQuery = async <
 	}
 ): Promise<QueryClient> => {
 	const queryOptions = getDownloadAccountExportQueryOptions(id, options);
+
+	await queryClient.query(queryOptions).catch(() => {});
+
+	return queryClient;
+};
+
+export type listSettingsWorkspacesResponse200 = {
+	data: SettingsWorkspacePage;
+	status: 200;
+};
+
+export type listSettingsWorkspacesResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type listSettingsWorkspacesResponse401 = {
+	data: ApiErrorBody;
+	status: 401;
+};
+
+export type listSettingsWorkspacesResponseSuccess = listSettingsWorkspacesResponse200 & {
+	headers: Headers;
+};
+export type listSettingsWorkspacesResponseError = (
+	listSettingsWorkspacesResponse400 | listSettingsWorkspacesResponse401
+) & {
+	headers: Headers;
+};
+
+export const getListSettingsWorkspacesUrl = (params?: ListSettingsWorkspacesParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/me/workspaces?${stringifiedParams}`
+		: `/api/me/workspaces`;
+};
+
+export const listSettingsWorkspaces = async (
+	params?: ListSettingsWorkspacesParams,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listSettingsWorkspacesResponseSuccess> => {
+	return customFetch<listSettingsWorkspacesResponseSuccess>(
+		getListSettingsWorkspacesUrl(params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListSettingsWorkspacesQueryKey = (params?: ListSettingsWorkspacesParams) => {
+	return [`/api/me/workspaces`, ...(params ? [params] : [])] as const;
+};
+
+export const getListSettingsWorkspacesQueryOptions = <
+	TData = Awaited<ReturnType<typeof listSettingsWorkspaces>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	params?: ListSettingsWorkspacesParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listSettingsWorkspaces>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getListSettingsWorkspacesQueryKey(params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listSettingsWorkspaces>>> = ({
+		signal
+	}) => listSettingsWorkspaces(params, { signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof listSettingsWorkspaces>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListSettingsWorkspacesQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listSettingsWorkspaces>>
+>;
+export type ListSettingsWorkspacesQueryError = ErrorType<ApiErrorBody>;
+
+export function createListSettingsWorkspaces<
+	TData = Awaited<ReturnType<typeof listSettingsWorkspaces>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	params?: () => ListSettingsWorkspacesParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listSettingsWorkspaces>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListSettingsWorkspacesQueryOptions(params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListSettingsWorkspacesQuery = async <
+	TData = Awaited<ReturnType<typeof listSettingsWorkspaces>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	params?: ListSettingsWorkspacesParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listSettingsWorkspaces>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListSettingsWorkspacesQueryOptions(params, options);
 
 	await queryClient.query(queryOptions).catch(() => {});
 
