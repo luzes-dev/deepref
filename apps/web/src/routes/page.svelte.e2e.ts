@@ -1,4 +1,4 @@
-import { expect, test } from '../tests/e2e-test';
+import { expect, readyProjection, test } from '../tests/e2e-test';
 import type { Page } from '@playwright/test';
 import type {
 	AcquisitionDto,
@@ -109,11 +109,7 @@ const availableDependencies = {
 	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null }
 };
 
-const projection = {
-	revision: 42,
-	lag: 0,
-	last_success_at: '2026-01-01T00:00:00Z'
-};
+const projection = readyProjection({ projectId: project.id, revision: 42 });
 
 const pageOf = <T>(items: T[], next_cursor: string | null = null) => ({ items, next_cursor });
 
@@ -162,7 +158,7 @@ async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 		'http://localhost:4173/api/projects/test-project/projection',
 		async (route) => {
 			await route.fulfill({
-				json: { project_id: project.id, state: 'ready', watermark: 42, ...projection }
+				json: projection
 			});
 		}
 	);
@@ -328,6 +324,7 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 	});
 
 	for (const mockedProject of [project, createdProject]) {
+		const projectProjection = readyProjection({ projectId: mockedProject.id, revision: 42 });
 		await page.route(
 			`http://localhost:4173/api/projects/${mockedProject.id}`,
 			async (route) => {
@@ -346,7 +343,7 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			new RegExp(`http://localhost:4173/api/projects/${mockedProject.id}/graph(?:\\?.*)?$`),
 			async (route) => {
 				await route.fulfill({
-					json: { nodes: [], edges: [], projection, truncated: false }
+					json: { nodes: [], edges: [], projection: projectProjection, truncated: false }
 				});
 			}
 		);
@@ -354,7 +351,12 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			`http://localhost:4173/api/projects/${mockedProject.id}/recommendations`,
 			async (route) => {
 				await route.fulfill({
-					json: { foundational: [], core_to_project: [], underexplored: [], projection }
+					json: {
+						foundational: [],
+						core_to_project: [],
+						underexplored: [],
+						projection: projectProjection
+					}
 				});
 			}
 		);
@@ -428,21 +430,30 @@ async function mockProjectManagementWorkspace(
 			return;
 		}
 
+		const projectProjection = readyProjection({ projectId: mockedProject.id, revision: 42 });
+
 		if (resource === 'graph') {
-			await route.fulfill({ json: { nodes: [], edges: [], projection, truncated: false } });
+			await route.fulfill({
+				json: { nodes: [], edges: [], projection: projectProjection, truncated: false }
+			});
 			return;
 		}
 
 		if (resource === 'recommendations') {
 			await route.fulfill({
-				json: { foundational: [], core_to_project: [], underexplored: [], projection }
+				json: {
+					foundational: [],
+					core_to_project: [],
+					underexplored: [],
+					projection: projectProjection
+				}
 			});
 			return;
 		}
 
 		if (resource === 'projection') {
 			await route.fulfill({
-				json: { project_id: projectId, state: 'ready', watermark: 42, ...projection }
+				json: projectProjection
 			});
 			return;
 		}
