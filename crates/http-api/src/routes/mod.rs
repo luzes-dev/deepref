@@ -389,6 +389,8 @@ async fn correlation(mut request: Request, next: Next) -> Response {
     response
 }
 
+pub use projection::ProjectionStatusDto;
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -945,5 +947,3 @@ mod tests {
         }
     }
 }
-
-pub use projection::ProjectionStatusDto;
