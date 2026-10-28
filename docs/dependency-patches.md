@@ -25,7 +25,8 @@ Before applying the backport disposition, the gate:
 1. Verifies the patch bytes, pnpm patch configuration, the only deepmerge package
    version and patched snapshot, and every named dependency edge in the lockfile.
 2. Resolves the actual copy loaded by the Svelte plugin and verifies the version
-   and SHA-256 of all three patched files.
+   and SHA-256 of all three patched files plus the package metadata, and checks
+   that the resolved entrypoint is the verified CommonJS build.
 3. Runs the prototype and ordinary configuration-merge contracts, including
    null-prototype targets, nested null placeholders, target-owned keys and both
    executable builds. It also tests rejection of patch/lockfile drift.

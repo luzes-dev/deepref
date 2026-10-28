@@ -84,13 +84,21 @@ export function checkInstalledPatch() {
 
 	const web = createRequire(join(root, "apps/web/package.json"));
 	const plugin = createRequire(web.resolve("@sveltejs/vite-plugin-svelte"));
-	const directory = dirname(plugin.resolve("deepmerge"));
+	const entrypoint = plugin.resolve("deepmerge");
+	const directory = dirname(entrypoint);
+	assert.equal(
+		entrypoint,
+		join(directory, "cjs.js"),
+		"unchecked package entrypoint",
+	);
 	assert.equal(
 		JSON.parse(readFileSync(join(directory, "../package.json"), "utf8"))
 			.version,
 		VERSION,
 	);
 	const files = {
+		"../package.json":
+			"f56978e7a6da1a3c6edee41abb54f98584a2fa2680458c48db820ae772fef0c9",
 		"../index.js":
 			"4eca846bbb57dee82c76977159300725393dbcab1b16ba80c5e685a515391477",
 		"cjs.js":
