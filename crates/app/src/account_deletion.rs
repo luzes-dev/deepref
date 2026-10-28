@@ -665,7 +665,7 @@ async fn membership_of(
 }
 
 /// What [`finalize_account`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct FinalizeOutcome {
     first_logical: bool,
     physical_pending: bool,
@@ -690,13 +690,14 @@ async fn finalize_account(
     let user = account.user_id;
     let mut tx = pool.begin().await?;
     // Lock order: the request row first, then the user row.
-    if let Some(request_id) = account.request_id {
-        let _request: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM account_deletion_requests WHERE id = $1 FOR UPDATE")
-                .bind(request_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-    }
+    let request_state: Option<String> = if let Some(request_id) = account.request_id {
+        sqlx::query_scalar("SELECT state FROM account_deletion_requests WHERE id = $1 FOR UPDATE")
+            .bind(request_id)
+            .fetch_optional(&mut *tx)
+            .await?
+    } else {
+        None
+    };
     let user_exists =
         sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id = $1 FOR UPDATE")
             .bind(user.as_uuid())
@@ -712,9 +713,21 @@ async fn finalize_account(
     .bind(user.as_uuid())
     .fetch_one(&mut *tx)
     .await?;
-    let (email_hmac_sha256,invitation_cutoff,first_logical):(Vec<String>,chrono::DateTime<chrono::Utc>,bool)=sqlx::query_as(
+    let progress:Option<(Vec<String>,chrono::DateTime<chrono::Utc>,bool)>=sqlx::query_as(
         "SELECT email_hmac_sha256,coalesce(logical_scrubbed_at,clock_timestamp()),logical_scrubbed_at IS NULL FROM account_erasure_progress WHERE user_id=$1 FOR UPDATE")
-        .bind(user.as_uuid()).fetch_one(&mut *tx).await?;
+        .bind(user.as_uuid()).fetch_optional(&mut *tx).await?;
+    let Some((email_hmac_sha256, invitation_cutoff, first_logical)) = progress else {
+        // Another completer may have fulfilled and removed the shared progress
+        // after this run's begin_account. Recheck its committed terminal state
+        // under the request/user locks; absence alone is never a physical ACK.
+        if prior_proof
+            && (account.request_id.is_none() || request_state.as_deref() == Some("completed"))
+        {
+            tx.commit().await?;
+            return Ok(FinalizeOutcome::default());
+        }
+        return Err(sqlx::Error::RowNotFound.into());
+    };
 
     crate::account_export::release_account_exports(&mut tx, user)
         .await

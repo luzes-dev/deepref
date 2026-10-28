@@ -222,7 +222,9 @@ pub(crate) async fn retire_due(
     tx: &mut Transaction<'_, Postgres>,
     keys: &[String],
 ) -> anyhow::Result<()> {
-    sqlx::query("UPDATE object_lifecycle o SET retired_at=coalesce(retired_at,clock_timestamp()),cleanup_after=clock_timestamp() WHERE o.storage_key=ANY($1) AND o.privacy_due_at<=clock_timestamp() AND o.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM documents d WHERE d.object_key=o.storage_key) AND NOT EXISTS(SELECT 1 FROM workflow_files f WHERE f.storage_key=o.storage_key) AND NOT EXISTS(SELECT 1 FROM object_retained_references r WHERE r.storage_key=o.storage_key AND r.expires_at>clock_timestamp())")
+    // Initial retirement bypasses ordinary grace. Replaying a retired target
+    // must preserve a storage failure's already scheduled retry deadline.
+    sqlx::query("UPDATE object_lifecycle o SET retired_at=clock_timestamp(),cleanup_after=clock_timestamp() WHERE o.storage_key=ANY($1) AND o.privacy_due_at<=clock_timestamp() AND o.retired_at IS NULL AND o.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM documents d WHERE d.object_key=o.storage_key) AND NOT EXISTS(SELECT 1 FROM workflow_files f WHERE f.storage_key=o.storage_key) AND NOT EXISTS(SELECT 1 FROM object_retained_references r WHERE r.storage_key=o.storage_key AND r.expires_at>clock_timestamp())")
         .bind(keys).execute(&mut **tx).await?;
     Ok(())
 }

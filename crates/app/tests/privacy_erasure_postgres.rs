@@ -123,6 +123,255 @@ impl Fixture {
     }
 }
 
+async fn completion_pool(pool: &PgPool, application: &str, connections: u32) -> PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(connections)
+        .connect_with(
+            pool.connect_options()
+                .as_ref()
+                .clone()
+                .application_name(application),
+        )
+        .await
+        .unwrap()
+}
+
+async fn wait_for_completers(pool: &PgPool, applications: &[String], statement: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
+                 AND application_name=ANY($1) AND wait_event_type='Lock' AND query LIKE $2",
+            )
+            .bind(applications)
+            .bind(statement)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if blocked == applications.len() as i64 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("all completers must reach the exact database lock boundary");
+}
+
+#[tokio::test]
+async fn overlapping_completers_keep_one_proof_and_continue_to_later_accounts() {
+    let Some(f) = Fixture::new().await else {
+        return;
+    };
+    f.due().await;
+    // Keep the workspace as a deterministic pause after begin_account, but
+    // acknowledge its real object first so finalization can remove progress.
+    sqlx::query("DELETE FROM documents WHERE id=$1")
+        .bind(f.document)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE object_lifecycle SET cleanup_after=clock_timestamp() WHERE storage_key=$1")
+        .bind(ObjectKey::document(f.document).as_str())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(cleanup_objects(&f.pool, &f.store, 1).await.unwrap(), 1);
+    assert!(!f.object_path().exists());
+    let later = UserId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO users(id,workos_user_id,primary_email,status) VALUES($1,$2,'later@example.org','active')")
+        .bind(later.as_uuid()).bind(later.as_uuid().to_string()).execute(&f.pool).await.unwrap();
+    request_account_deletion(&f.pool, later, AUDIT)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE account_deletion_requests SET requested_at=clock_timestamp()-interval '30 days 1 hour' WHERE user_id=$1")
+        .bind(later.as_uuid()).execute(&f.pool).await.unwrap();
+    let applications = [
+        format!("completer-a-{}", f.user.as_uuid()),
+        format!("completer-b-{}", f.user.as_uuid()),
+    ];
+    let control = completion_pool(&f.pool, "completion-control", 3).await;
+    let a = completion_pool(&f.pool, &applications[0], 1).await;
+    let b = completion_pool(&f.pool, &applications[1], 1).await;
+    let mut workspace_block = control.begin().await.unwrap();
+    sqlx::query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE")
+        .bind(f.workspace)
+        .execute(&mut *workspace_block)
+        .await
+        .unwrap();
+    let first =
+        tokio::spawn(async move { complete_account_deletions(&a, DIGEST_KEY, AUDIT).await });
+    let second =
+        tokio::spawn(async move { complete_account_deletions(&b, DIGEST_KEY, AUDIT).await });
+    wait_for_completers(
+        &control,
+        &applications,
+        "SELECT id FROM workspaces WHERE id = $1 FOR UPDATE",
+    )
+    .await;
+    // Both passed progress creation. Queue both on finalization's request lock
+    // before allowing either to publish a proof and delete that shared row.
+    let mut request_block = control.begin().await.unwrap();
+    sqlx::query("SELECT id FROM account_deletion_requests WHERE user_id=$1 FOR UPDATE")
+        .bind(f.user.as_uuid())
+        .execute(&mut *request_block)
+        .await
+        .unwrap();
+    workspace_block.commit().await.unwrap();
+    wait_for_completers(
+        &control,
+        &applications,
+        "SELECT % FROM account_deletion_requests WHERE id = $1 FOR UPDATE",
+    )
+    .await;
+    request_block.commit().await.unwrap();
+    let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(first, second)
+    })
+    .await
+    .expect("both completers must finish after the controlled release");
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert!(
+        first.is_ok() && second.is_ok(),
+        "overlapping completion must be idempotent: {first:?}, {second:?}"
+    );
+    assert_eq!(first.unwrap().completed + second.unwrap().completed, 2);
+    let counts: (i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM fulfilled_account_deletions),
+                (SELECT count(*) FROM admin_audit_events WHERE event_type='account.deletion_completed'),
+                (SELECT count(*) FROM account_erasure_progress)",
+    ).fetch_one(&control).await.unwrap();
+    assert_eq!(
+        counts,
+        (2, 2, 0),
+        "each account gets one proof and completion audit"
+    );
+    control.close().await;
+}
+
+#[tokio::test]
+async fn denied_provider_callback_cannot_change_profile_after_deletion_capture() {
+    use deepref_app::identity::{NewBrowserSession, SignIn, sign_in};
+    use deepref_application::identity::{OpaqueSecret, ProviderProfile, ProviderSession};
+    use deepref_domain::ExternalUserId;
+    let Some(f) = Fixture::new().await else {
+        return;
+    };
+    let other_workspace = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO workspaces(id,kind,name,slug) VALUES($1,'organization','Invitation history',$2)",
+    )
+    .bind(other_workspace)
+    .bind(other_workspace.to_string())
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let old_invite = Uuid::new_v4();
+    let unrelated_invite = Uuid::new_v4();
+    for (id, email) in [
+        (old_invite, "erase@example.org"),
+        (unrelated_invite, "callback-only@example.org"),
+    ] {
+        sqlx::query("INSERT INTO workspace_invitations(id,workspace_id,email,role,invited_by,status,expires_at) VALUES($1,$2,$3,'member',$4,'pending',clock_timestamp()+interval '1 day')")
+            .bind(id).bind(other_workspace).bind(email).bind(f.user.as_uuid()).execute(&f.pool).await.unwrap();
+    }
+    f.due().await;
+    let application = format!("capture-callback-{}", f.user.as_uuid());
+    let control = completion_pool(&f.pool, "capture-control", 2).await;
+    let runner = completion_pool(&f.pool, &application, 1).await;
+    let mut workspace_block = control.begin().await.unwrap();
+    sqlx::query("SELECT id FROM workspaces WHERE id=$1 FOR UPDATE")
+        .bind(f.workspace)
+        .execute(&mut *workspace_block)
+        .await
+        .unwrap();
+    let completion =
+        tokio::spawn(async move { complete_account_deletions(&runner, DIGEST_KEY, AUDIT).await });
+    wait_for_completers(
+        &control,
+        &[application],
+        "SELECT id FROM workspaces WHERE id = $1 FOR UPDATE",
+    )
+    .await;
+    let captured: (String, i64) = sqlx::query_as(
+        "SELECT u.status,(SELECT count(*) FROM account_erasure_progress WHERE user_id=u.id) FROM users u WHERE id=$1",
+    ).bind(f.user.as_uuid()).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(captured, ("deactivated".to_owned(), 1));
+    let sealed = OpaqueSecret::new("fixture sealed provider payload");
+    let result = sign_in(
+        &f.pool,
+        &ProviderSession {
+            session_id: "denied-callback".to_owned(),
+            external_user_id: ExternalUserId::parse(f.user.as_uuid().to_string()).unwrap(),
+        },
+        &ProviderProfile {
+            email: "callback-only@example.org".to_owned(),
+            email_verified: true,
+            display_name: Some("Denied profile update".to_owned()),
+        },
+        NewBrowserSession {
+            token_hash: &[7; 32],
+            sealed_provider_session: &sealed,
+            session_ref: &[8; 32],
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        },
+        AUDIT,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, SignIn::Deactivated);
+    let after_callback: (String, Option<String>) =
+        sqlx::query_as("SELECT primary_email,verified_email FROM users WHERE id=$1")
+            .bind(f.user.as_uuid())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    workspace_block.commit().await.unwrap();
+    completion.await.unwrap().unwrap();
+    // A new registration's invitation is beyond the first logical scrub cutoff.
+    let later_invite = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspace_invitations(id,workspace_id,email,role,invited_by,status,expires_at) VALUES($1,$2,'erase@example.org','member',$3,'pending',clock_timestamp()+interval '1 day')")
+        .bind(later_invite).bind(other_workspace).bind(f.user.as_uuid()).execute(&f.pool).await.unwrap();
+    let finished = deepref_app::account_deletion::complete_account_deletions_with_store(
+        &f.pool, &f.store, DIGEST_KEY, AUDIT,
+    )
+    .await
+    .unwrap();
+    assert_eq!(finished.completed, 1);
+    assert_eq!(
+        after_callback,
+        (
+            "erase@example.org".to_owned(),
+            Some("erase@example.org".to_owned())
+        ),
+        "denied callbacks cannot introduce an address outside the captured deletion digests"
+    );
+    let surviving: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM workspace_invitations WHERE id=ANY($1) ORDER BY id")
+            .bind(vec![old_invite, unrelated_invite, later_invite])
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+    assert!(!surviving.contains(&old_invite));
+    assert!(surviving.contains(&unrelated_invite));
+    assert!(surviving.contains(&later_invite));
+    let proof: Vec<String> = sqlx::query_scalar(
+        "SELECT email_hmac_sha256 FROM fulfilled_account_deletions WHERE user_id=$1",
+    )
+    .bind(f.user.as_uuid())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(proof.len(), 1);
+    assert!(
+        proof
+            .iter()
+            .all(|digest| digest.len() == 64 && !digest.contains('@'))
+    );
+    control.close().await;
+}
+
 #[tokio::test]
 async fn full_thirty_day_cancellation_precedes_any_object_retirement() {
     let Some(f) = Fixture::new().await else {
@@ -222,8 +471,40 @@ async fn storage_refusal_stays_overdue_and_never_publishes_fulfillment() {
     let pending:(bool,i64,bool)=sqlx::query_as("SELECT deleted_at IS NULL,cleanup_attempts,cleanup_after>clock_timestamp() FROM object_lifecycle WHERE storage_key=$1")
         .bind(ObjectKey::document(f.document).as_str()).fetch_one(&f.pool).await.unwrap();
     assert_eq!(pending, (true, 1, true));
+    let retry_at: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT cleanup_after FROM object_lifecycle WHERE storage_key=$1")
+            .bind(ObjectKey::document(f.document).as_str())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
     let report = f.complete().await;
     assert_eq!(report.completed, 0);
+    let after_replay: (chrono::DateTime<chrono::Utc>, i64) = sqlx::query_as(
+        "SELECT cleanup_after,cleanup_attempts FROM object_lifecycle WHERE storage_key=$1",
+    )
+    .bind(ObjectKey::document(f.document).as_str())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after_replay,
+        (retry_at, 1),
+        "logical replay must preserve the storage-error retry deadline"
+    );
+    let operator = deepref_app::account_deletion::complete_account_deletions_with_store(
+        &f.pool, &f.store, DIGEST_KEY, AUDIT,
+    )
+    .await
+    .unwrap();
+    assert_eq!(operator.physical_objects_acknowledged, 0);
+    let after_operator: (chrono::DateTime<chrono::Utc>, i64) = sqlx::query_as(
+        "SELECT cleanup_after,cleanup_attempts FROM object_lifecycle WHERE storage_key=$1",
+    )
+    .bind(ObjectKey::document(f.document).as_str())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(after_operator, (retry_at, 1));
     let overdue:i64=sqlx::query_scalar("SELECT count(*) FROM object_lifecycle WHERE privacy_due_at<clock_timestamp() AND deleted_at IS NULL")
         .fetch_one(&f.pool).await.unwrap();
     assert_eq!(overdue, 1);
@@ -234,6 +515,96 @@ async fn storage_refusal_stays_overdue_and_never_publishes_fulfillment() {
     assert_eq!(cleanup_objects(&f.pool, &f.store, 1).await.unwrap(), 1);
     assert!(!f.object_path().exists());
     assert_eq!(f.complete().await.completed, 1);
+}
+
+#[tokio::test]
+async fn account_archive_storage_failure_backoff_survives_completer_replay() {
+    use deepref_app::object_lifecycle::{ObjectOwner, begin_object_upload};
+    use std::os::unix::fs::PermissionsExt;
+    let Some(f) = Fixture::new().await else {
+        return;
+    };
+    // Isolate an account-owned archive: unlike deleted workspace metadata,
+    // this ownership is reconsidered on every logical completion replay.
+    sqlx::query("DELETE FROM documents WHERE id=$1")
+        .bind(f.document)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE object_lifecycle SET cleanup_after=clock_timestamp() WHERE storage_key=$1")
+        .bind(ObjectKey::document(f.document).as_str())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(cleanup_objects(&f.pool, &f.store, 1).await.unwrap(), 1);
+    f.due().await;
+    let key = ObjectKey::account_export(f.user.as_uuid(), Uuid::new_v4());
+    let upload = begin_object_upload(&f.pool, ObjectOwner::Account(f.user), &key)
+        .await
+        .unwrap();
+    f.store
+        .for_upload(key.clone())
+        .put_stream(futures::stream::iter([Ok::<_, std::io::Error>(
+            Bytes::from_static(b"private archive bytes"),
+        )]))
+        .await
+        .unwrap();
+    upload.commit().await.unwrap();
+    assert_eq!(f.complete().await.completed, 0);
+    let path = f.root.path().join(key.as_str());
+    let directory = path.parent().unwrap().to_owned();
+    let original = std::fs::metadata(&directory).unwrap().permissions();
+    let restore = RestorePermissions(directory.clone(), original.clone());
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(cleanup_objects(&f.pool, &f.store, 1).await.unwrap(), 0);
+    let before: (chrono::DateTime<chrono::Utc>, i64) = sqlx::query_as(
+        "SELECT cleanup_after,cleanup_attempts FROM object_lifecycle WHERE storage_key=$1",
+    )
+    .bind(key.as_str())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(before.1, 1);
+    assert_eq!(f.complete().await.completed, 0);
+    let after: (chrono::DateTime<chrono::Utc>, i64) = sqlx::query_as(
+        "SELECT cleanup_after,cleanup_attempts FROM object_lifecycle WHERE storage_key=$1",
+    )
+    .bind(key.as_str())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    std::fs::set_permissions(&directory, original).unwrap();
+    drop(restore);
+    assert_eq!(
+        after, before,
+        "account archive replay must preserve the storage-error retry deadline"
+    );
+    // Restoring the adapter does not authorize another attempt before backoff.
+    let operator = deepref_app::account_deletion::complete_account_deletions_with_store(
+        &f.pool, &f.store, DIGEST_KEY, AUDIT,
+    )
+    .await
+    .unwrap();
+    assert_eq!(operator.physical_objects_acknowledged, 0);
+    assert!(path.is_file());
+    let unchanged: (chrono::DateTime<chrono::Utc>, i64) = sqlx::query_as(
+        "SELECT cleanup_after,cleanup_attempts FROM object_lifecycle WHERE storage_key=$1",
+    )
+    .bind(key.as_str())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(unchanged, before);
+    sqlx::query("UPDATE object_lifecycle SET cleanup_after=clock_timestamp()-interval '1 second' WHERE storage_key=$1")
+        .bind(key.as_str()).execute(&f.pool).await.unwrap();
+    let due = deepref_app::account_deletion::complete_account_deletions_with_store(
+        &f.pool, &f.store, DIGEST_KEY, AUDIT,
+    )
+    .await
+    .unwrap();
+    assert_eq!(due.physical_objects_acknowledged, 1);
+    assert_eq!(due.completed, 1);
+    assert!(!path.exists());
 }
 
 #[tokio::test]
