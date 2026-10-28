@@ -5,16 +5,14 @@
 //! BUSINESS_DECISIONS retention: 6 months for administrative and security
 //! rows, 5 years without content for the record that a deletion request was
 //! fulfilled (`account.deletion_completed` and `fulfilled_account_deletions`).
-//! The purge is the only delete path the append-only trigger (migration
-//! 0112) ever lets through, and only for rows already past their cutoff.
+//! The restricted retention function (0188) is the maintenance path. The
+//! append-only trigger checks its trusted owner and each row's cutoff.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
-
-use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
 
 /// Retention of administrative and security audit rows (BUSINESS_DECISIONS).
 pub const ADMIN_AUDIT_RETENTION: &str = "6 months";
@@ -28,24 +26,13 @@ pub const DELETION_PROOF_RETENTION: &str = "5 years";
 /// request; after it the sealed provider payload has no purpose and goes.
 pub const SESSION_RETENTION: &str = "30 days";
 
-/// The rows the purge may remove, decided exactly as the trigger in migration
-/// 0112 decides them. Stated twice (count and delete) because `sqlx` only
-/// accepts literal SQL; the purge tests assert both agree with the trigger.
-const PURGEABLE_COUNT_SQL: &str = "SELECT count(*) FROM admin_audit_events
+/// Dry-run count follows the trigger/function retention policy. Actual writes
+/// use the privileged bounded function; SQLx macros are not involved.
+const PURGEABLE_COUNT_SQL: &str = "SELECT count(*) FROM public.admin_audit_events
    WHERE (event_type <> 'account.deletion_completed'
           AND occurred_at < now() - interval '6 months')
       OR (event_type = 'account.deletion_completed'
           AND occurred_at < now() - interval '5 years')";
-
-const PURGEABLE_DELETE_SQL: &str = "DELETE FROM admin_audit_events
-   WHERE id IN (
-     SELECT id FROM admin_audit_events
-     WHERE (event_type <> 'account.deletion_completed'
-            AND occurred_at < now() - interval '6 months')
-        OR (event_type = 'account.deletion_completed'
-            AND occurred_at < now() - interval '5 years')
-     ORDER BY occurred_at, id
-     LIMIT $1)";
 
 /// How many rows one purge statement removes. Bounded so the delete never
 /// holds a long lock or floods WAL in one transaction.
@@ -110,7 +97,7 @@ pub async fn query_admin_audit(
     let mut sql = QueryBuilder::<Postgres>::new(
         "SELECT id, occurred_at, event_type, principal_kind, principal_user_id, target_user_id,
                 workspace_id, project_id, request_id, metadata
-         FROM admin_audit_events WHERE ",
+         FROM public.admin_audit_events WHERE ",
     );
     let mut first = true;
     macro_rules! condition {
@@ -174,16 +161,34 @@ pub struct PurgeReport {
 /// reports what it removed. With `dry_run` nothing is deleted; the report
 /// counts what a real run would remove.
 ///
-/// Every deleting transaction runs with `SET LOCAL deepref.audit_purge = 'on'`,
-/// the only key the append-only trigger (migration 0112) honours, and only
-/// then for rows already past their cutoff. Rows inside retention cannot be
-/// deleted by this function or any other.
+/// Executes the restricted SECURITY DEFINER retention function. One call has
+/// at most 32 audit batches plus one batch each of sessions/fulfilled proofs;
+/// deletion and audit summary commit atomically. Repeat calls handle remaining
+/// eligible rows. A runtime credential cannot invoke this maintenance path.
 pub async fn purge_admin_audit(
     pool: &PgPool,
     dry_run: bool,
     batch_size: Option<i64>,
 ) -> Result<PurgeReport, sqlx::Error> {
-    let batch_size = batch_size.unwrap_or(DEFAULT_PURGE_BATCH).clamp(1, 10_000);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        purge_admin_audit_inner(pool, dry_run, batch_size),
+    )
+    .await
+    .map_err(|_| {
+        sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "audit retention deadline exceeded; inspect committed audit evidence before repeating",
+        ))
+    })?
+}
+
+async fn purge_admin_audit_inner(
+    pool: &PgPool,
+    dry_run: bool,
+    batch_size: Option<i64>,
+) -> Result<PurgeReport, sqlx::Error> {
+    let batch_size = batch_size.unwrap_or(DEFAULT_PURGE_BATCH).clamp(1, 1_000);
     let mut report = PurgeReport {
         dry_run,
         batch_size,
@@ -192,109 +197,69 @@ pub async fn purge_admin_audit(
         fulfilled_deletion_rows_purged: 0,
         session_rows_purged: 0,
     };
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout='3s'")
+        .execute(&mut *tx)
+        .await?;
     if dry_run {
         let pending: i64 = sqlx::query_scalar(PURGEABLE_COUNT_SQL)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?;
         report.audit_rows_purged = u64::try_from(pending).unwrap_or(0);
-        report.fulfilled_deletion_rows_purged = count_purgeable_fulfilled_rows(pool).await?;
-        report.session_rows_purged = count_purgeable_sessions(pool).await?;
+        report.fulfilled_deletion_rows_purged = count_purgeable_fulfilled_rows(&mut tx).await?;
+        report.session_rows_purged = count_purgeable_sessions(&mut tx).await?;
+        tx.commit().await?;
         return Ok(report);
     }
-    loop {
-        let mut tx = pool.begin().await?;
-        sqlx::query("SET LOCAL deepref.audit_purge = 'on'")
-            .execute(&mut *tx)
-            .await?;
-        let deleted = sqlx::query(PURGEABLE_DELETE_SQL)
-            .bind(batch_size)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-        tx.commit().await?;
-        report.batches += 1;
-        report.audit_rows_purged += deleted;
-        if deleted < batch_size as u64 {
-            break;
-        }
-    }
-    report.fulfilled_deletion_rows_purged = purge_fulfilled_rows(pool).await?;
-    report.session_rows_purged = purge_sessions(pool).await?;
-    // Purging the audit is itself an administrative action (11 Part B): each
-    // real run records that it ran and how many rows it removed. A dry run
-    // changes nothing and records nothing.
-    let mut tx = pool.begin().await?;
-    insert_admin_audit(
-        &mut tx,
-        "audit.purged",
-        AuditPrincipal::System,
-        None,
-        None,
-        None,
-        json!({ "rows_purged": report.audit_rows_purged }),
-        AuditRequest::default(),
-    )
-    .await?;
+    let row=sqlx::query("SELECT batches,audit_rows,fulfilled_rows,session_rows FROM public.purge_retention_records($1)")
+        .bind(i32::try_from(batch_size).unwrap_or(1000)).fetch_one(&mut *tx).await?;
+    report.batches = u32::try_from(row.try_get::<i32, _>("batches")?).unwrap_or(0);
+    report.audit_rows_purged = u64::try_from(row.try_get::<i64, _>("audit_rows")?).unwrap_or(0);
+    report.fulfilled_deletion_rows_purged =
+        u64::try_from(row.try_get::<i64, _>("fulfilled_rows")?).unwrap_or(0);
+    report.session_rows_purged = u64::try_from(row.try_get::<i64, _>("session_rows")?).unwrap_or(0);
     tx.commit().await?;
     Ok(report)
 }
 
 /// The fulfilled-deletion log contains pseudonymous address HMACs but no
 /// plaintext; those values are also removed after five years (BUSINESS_DECISIONS).
-async fn count_purgeable_fulfilled_rows(pool: &PgPool) -> Result<u64, sqlx::Error> {
+async fn count_purgeable_fulfilled_rows(
+    connection: &mut sqlx::PgConnection,
+) -> Result<u64, sqlx::Error> {
     let pending: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM fulfilled_account_deletions
+        "SELECT count(*) FROM public.fulfilled_account_deletions
          WHERE completed_at < now() - interval '5 years'",
     )
-    .fetch_one(pool)
+    .fetch_one(connection)
     .await?;
     Ok(u64::try_from(pending).unwrap_or(0))
-}
-
-async fn purge_fulfilled_rows(pool: &PgPool) -> Result<u64, sqlx::Error> {
-    Ok(sqlx::query(
-        "DELETE FROM fulfilled_account_deletions
-         WHERE completed_at < now() - interval '5 years'",
-    )
-    .execute(pool)
-    .await?
-    .rows_affected())
 }
 
 /// Session rows are retained for 30 days after they expired or were revoked
 /// (BUSINESS_DECISIONS), then removed in bounded batches with everything else
 /// in the same daily run. A session row is the only place a sealed provider
 /// payload is kept, so this is also the retention that bounds that data.
-const PURGEABLE_SESSIONS_COUNT_SQL: &str = "SELECT count(*) FROM user_sessions
+const PURGEABLE_SESSIONS_COUNT_SQL: &str = "SELECT count(*) FROM public.user_sessions
    WHERE (revoked_at IS NOT NULL AND revoked_at < now() - interval '30 days')
       OR (expires_at < now() - interval '30 days')";
 
-const PURGEABLE_SESSIONS_DELETE_SQL: &str = "DELETE FROM user_sessions
-   WHERE id IN (
-     SELECT id FROM user_sessions
-     WHERE (revoked_at IS NOT NULL AND revoked_at < now() - interval '30 days')
-        OR (expires_at < now() - interval '30 days')
-     ORDER BY coalesce(revoked_at, expires_at), id
-     LIMIT $1)";
-
-async fn count_purgeable_sessions(pool: &PgPool) -> Result<u64, sqlx::Error> {
+async fn count_purgeable_sessions(connection: &mut sqlx::PgConnection) -> Result<u64, sqlx::Error> {
     let pending: i64 = sqlx::query_scalar(PURGEABLE_SESSIONS_COUNT_SQL)
-        .fetch_one(pool)
+        .fetch_one(connection)
         .await?;
     Ok(u64::try_from(pending).unwrap_or(0))
 }
 
-async fn purge_sessions(pool: &PgPool) -> Result<u64, sqlx::Error> {
-    let mut purged = 0;
-    loop {
-        let deleted = sqlx::query(PURGEABLE_SESSIONS_DELETE_SQL)
-            .bind(DEFAULT_PURGE_BATCH)
-            .execute(pool)
-            .await?
-            .rows_affected();
-        purged += deleted;
-        if deleted < DEFAULT_PURGE_BATCH as u64 {
-            return Ok(purged);
-        }
-    }
+/// Read-only diagnostic after a purge commits. A separate bounded transaction
+/// uses one borrowed connection; no runtime GUC or write authority is needed.
+pub async fn remaining_retention_eligible(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let mut transaction=crate::operational_read::begin(pool).await?;
+        let remaining=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.admin_audit_events WHERE occurred_at<now()-CASE WHEN event_type='account.deletion_completed' THEN interval '5 years' ELSE interval '6 months' END) OR EXISTS(SELECT 1 FROM public.fulfilled_account_deletions WHERE completed_at<now()-interval '5 years') OR EXISTS(SELECT 1 FROM public.user_sessions WHERE revoked_at<now()-interval '30 days' OR expires_at<now()-interval '30 days')")
+            .fetch_one(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(remaining)
+    }).await.map_err(|_| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::TimedOut,
+        "retention remaining-row diagnostic deadline exceeded; inspect committed purge evidence")))?
 }

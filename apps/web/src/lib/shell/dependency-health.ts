@@ -16,7 +16,9 @@ export interface DependencyHealthSummary {
 
 const LABELS: Record<string, string> = {
 	postgresql: 'Database',
-	worker: 'Background jobs'
+	worker: 'Background jobs',
+	object_storage: 'Document storage',
+	jetstream: 'Background delivery'
 };
 
 export function dependencyLabel(name: string): string {
@@ -28,7 +30,9 @@ export interface DependencyHealthOptions {
 	scope?: 'project' | 'workspace';
 }
 
-type IssueDetail = { state: string; backlog?: number | null; recentFailed?: number | null };
+type IssueDetail = Pick<DependencyStatus['worker'], 'state' | 'backlog'> & {
+	recentFailed?: DependencyStatus['worker']['recent_failed'];
+};
 
 function workerMessage(detail: IssueDetail, scope: 'project' | 'workspace'): string {
 	if (detail.state === 'unavailable') return 'Background jobs cannot be checked right now.';
@@ -45,6 +49,16 @@ function workerMessage(detail: IssueDetail, scope: 'project' | 'workspace'): str
 function issueMessage(name: string, detail: IssueDetail, scope: 'project' | 'workspace'): string {
 	const unavailable = detail.state === 'unavailable';
 	if (name === 'worker') return workerMessage(detail, scope);
+	if (name === 'object_storage') {
+		return unavailable
+			? 'Document storage cannot be checked right now. Uploads and downloads may be unavailable.'
+			: 'Document storage health is not confirmed. Uploads and downloads may be delayed.';
+	}
+	if (name === 'jetstream') {
+		return unavailable
+			? 'Background delivery cannot be checked right now.'
+			: 'Background delivery health is not confirmed. Imports and automations may be delayed.';
+	}
 	if (name === 'postgresql') {
 		return unavailable
 			? 'The database is not responding. Changes may not be saved.'
@@ -80,8 +94,10 @@ export function summarizeDependencyHealth(
 	if (!status) return { level: 'ok', issues: [] };
 
 	const issues: DependencyHealthIssue[] = [];
-	for (const [name, detail] of Object.entries(status)) {
-		if (detail.state === 'available') continue;
+	for (const [name, detail] of Object.entries<DependencyStatus[keyof DependencyStatus]>({
+		...status
+	})) {
+		if (!detail || detail.state === 'available') continue;
 		const state = detail.state === 'unavailable' ? 'unavailable' : 'degraded';
 		issues.push({
 			name,
@@ -89,7 +105,11 @@ export function summarizeDependencyHealth(
 			state,
 			message: issueMessage(
 				name,
-				{ state, backlog: detail.backlog, recentFailed: detail.recent_failed },
+				{
+					state,
+					backlog: 'backlog' in detail ? detail.backlog : undefined,
+					recentFailed: 'recent_failed' in detail ? detail.recent_failed : undefined
+				},
 				scope
 			)
 		});

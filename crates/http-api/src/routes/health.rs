@@ -1,3 +1,6 @@
+mod transport;
+pub use transport::TransportHealth;
+
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -68,10 +71,15 @@ pub struct WorkloadPoolDetail {
 pub struct DependencyStatus {
     pub postgresql: DependencyDetail,
     pub worker: DependencyDetail,
+    /// Actual bounded read probe; no write, deletion, or quota guarantee.
+    pub object_storage: DependencyDetail,
+    /// Required JetStream diagnostic evidence; absent in valid PostgreSQL mode.
+    pub jetstream: Option<TransportHealth>,
 }
 
 /// Queued jobs older than this mean the worker is not keeping up.
 const STALE_QUEUE_SECONDS: i64 = 300;
+const PROBE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 /// Jobs that exhausted their retries longer ago than this are history, not an
 /// ongoing worker problem; they stay visible in job listings.
 const RECENT_DEAD_WINDOW_SECONDS: i64 = 30 * 60;
@@ -112,6 +120,7 @@ async fn workload_pool_health(
              FROM worker_heartbeats heartbeat
              CROSS JOIN LATERAL jsonb_each_text(heartbeat.pool_capacities) entry
              WHERE heartbeat.seen_at > now() - make_interval(secs => $2::double precision)
+               AND heartbeat.seen_at <= now()
              GROUP BY entry.key
          )
          SELECT classes.class,
@@ -173,11 +182,15 @@ fn required_schema_version() -> i64 {
 #[utoipa::path(get, path="/health/ready", operation_id="getReadiness", tag="health",
     responses((status=200, body=ReadinessResponse), (status=503, body=ApiErrorBody)))]
 pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessResponse>, ApiError> {
-    let schema_version: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(max(version),0)::bigint FROM _sqlx_migrations WHERE success",
+    let schema_version: i64 = tokio::time::timeout(
+        PROBE_DEADLINE,
+        sqlx::query_scalar(
+            "SELECT COALESCE(max(version),0)::bigint FROM _sqlx_migrations WHERE success",
+        )
+        .fetch_one(&state.pool),
     )
-    .fetch_one(&state.pool)
     .await
+    .map_err(|_| ApiError::Configuration("database readiness deadline exceeded".to_owned()))?
     .map_err(ApiError::Database)?;
     let required = required_schema_version();
     deepref_telemetry::metrics::HttpMetrics::global().schema_version(schema_version, required);
@@ -222,6 +235,43 @@ pub async fn project_dependencies(
 }
 
 async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> DependencyStatus {
+    let database = tokio::time::timeout(PROBE_DEADLINE, database_status(state, project_id));
+    let storage = async {
+        match &state.document_store {
+            Some(store) => {
+                match tokio::time::timeout(PROBE_DEADLINE, store.check_read_health()).await {
+                    Ok(Ok(())) => DependencyDetail {
+                        last_success_at: Some(Utc::now()),
+                        ..available()
+                    },
+                    _ => unavailable(),
+                }
+            }
+            None => unavailable(),
+        }
+    };
+    let (database, object_storage, jetstream) =
+        tokio::join!(database, storage, transport::health(state));
+    let (postgresql, worker) = database.unwrap_or_else(|_| (unavailable(), unavailable()));
+    DependencyStatus {
+        postgresql,
+        worker,
+        object_storage,
+        jetstream,
+    }
+}
+
+fn unavailable() -> DependencyDetail {
+    DependencyDetail {
+        state: DependencyState::Unavailable,
+        ..available()
+    }
+}
+
+async fn database_status(
+    state: &AppState,
+    project_id: Option<Uuid>,
+) -> (DependencyDetail, DependencyDetail) {
     let postgresql = match sqlx::query("SELECT 1").execute(&state.pool).await {
         Ok(_) => available(),
         Err(error) => {
@@ -241,7 +291,7 @@ async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> Depend
                 EXTRACT(EPOCH FROM (now() - min(available_at) FILTER (WHERE state IN ('queued','capability_wait'))))::bigint AS oldest_age_seconds,
                 max(completed_at) AS last_success_at,
                 (SELECT count(*) FROM worker_heartbeats
-                  WHERE seen_at > now() - make_interval(secs => $3::double precision))::bigint
+                  WHERE seen_at > now() - make_interval(secs => $3::double precision) AND seen_at <= now())::bigint
                   AS live_workers,
                 (SELECT max(seen_at) FROM worker_heartbeats) AS last_heartbeat_at
          FROM jobs
@@ -262,13 +312,7 @@ async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> Depend
                 Ok(pools) => pools,
                 Err(error) => {
                     tracing::warn!(%error, "worker workload pool check failed");
-                    return DependencyStatus {
-                        postgresql,
-                        worker: DependencyDetail {
-                            state: DependencyState::Unavailable,
-                            ..available()
-                        },
-                    };
+                    return (postgresql, unavailable());
                 }
             };
             // Work is waiting and no worker is alive to take it.
@@ -297,7 +341,7 @@ async fn dependency_status(state: &AppState, project_id: Option<Uuid>) -> Depend
             }
         }
     };
-    DependencyStatus { postgresql, worker }
+    (postgresql, worker)
 }
 
 #[utoipa::path(get, path="/health", operation_id="getDeprecatedHealth", tag="health",

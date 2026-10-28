@@ -157,6 +157,26 @@ impl DocumentStore {
         }
     }
 
+    /// Read-only reachability/permission probe on a reserved, content-free key.
+    /// First read at most one listing entry, so a missing S3 bucket cannot be
+    /// mistaken for the expected absent sentinel object. Callers bound time.
+    /// This proves neither writes nor quota nor stored-content integrity.
+    pub async fn check_read_health(&self) -> Result<(), DocumentStoreError> {
+        let prefix = Path::from("__deepref_health__/");
+        let mut listing = self.inner.list(Some(&prefix));
+        if let Some(entry) = listing.next().await {
+            entry?;
+        }
+        match self
+            .inner
+            .head(&Path::from("__deepref_health__/read-probe"))
+            .await
+        {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Complete bounded inventory for explicit legacy-orphan reconciliation.
     /// Refuse a truncated inventory, rather than treating missing pages as proof
     /// of absence. Unknown provider keys are preserved and never returned.

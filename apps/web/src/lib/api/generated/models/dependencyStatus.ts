@@ -5,8 +5,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DependencyDetail } from './dependencyDetail.ts';
+import type { TransportHealth } from './transportHealth.ts';
 
 export interface DependencyStatus {
+	jetstream?: TransportHealth | null;
+	/** Actual bounded read probe; no write, deletion, or quota guarantee. */
+	object_storage: DependencyDetail;
 	postgresql: DependencyDetail;
 	worker: DependencyDetail;
 }
