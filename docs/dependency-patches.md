@@ -30,8 +30,12 @@ Before applying the backport disposition, the gate:
 3. Runs the prototype and ordinary configuration-merge contracts, including
    null-prototype targets, nested null placeholders, target-owned keys and both
    executable builds. It also tests rejection of patch/lockfile drift.
-4. Runs the unchanged recursive OSV scan with the existing configuration and
-   preserves its raw output. Only the exact advisory for npm deepmerge 4.3.1 with
+4. Runs the recursive OSV scan with the existing configuration and error-only
+   diagnostic verbosity, preserving raw JSON and error output. Any stderr in
+   this mode blocks disposition, even when OSV returns vulnerability exit 1
+   after an extraction error. It validates required JSON containers and routing
+   scalars before traversal, including empty package containers. Only the exact
+   advisory for npm deepmerge 4.3.1 with
    its matching PURL in this repository's root `pnpm-lock.yaml` is classified as
    locally patched. Other versions, manifests, packages or advisories still fail.
 

@@ -26,7 +26,7 @@ def report():
 
 
 class DependencyPatchTests(unittest.TestCase):
-    def invoke(self, raw, identity=0, contracts=0, scanner=1, today=date(2026, 10, 28)):
+    def invoke(self, raw, identity=0, contracts=0, scanner=1, today=date(2026, 10, 28), scanner_stderr=""):
         calls = []
 
         def run(command, **options):
@@ -36,8 +36,8 @@ class DependencyPatchTests(unittest.TestCase):
             if len(calls) == 2:
                 return subprocess.CompletedProcess(command, contracts)
             self.assertEqual(command, ['osv-scanner', 'scan', 'source', '--recursive', '--config',
-                                       'osv-scanner.toml', '--format=json', '.'])
-            return subprocess.CompletedProcess(command, scanner, json.dumps(raw), '')
+                                       'osv-scanner.toml', '--verbosity=error', '--format=json', '.'])
+            return subprocess.CompletedProcess(command, scanner, json.dumps(raw), scanner_stderr)
 
         output = io.StringIO()
         with redirect_stdout(output), redirect_stderr(io.StringIO()):
@@ -98,6 +98,68 @@ class DependencyPatchTests(unittest.TestCase):
             self.invoke({'results': []})
         with self.assertRaises(KeyError):
             self.invoke({'unknown': []})
+
+    def test_extraction_error_cannot_be_disposed_as_a_patch_only_success(self):
+        for code in (0, 1):
+            with self.subTest(code=code), self.assertRaisesRegex(ValueError, 'error-level'):
+                self.invoke(report(), scanner=code, scanner_stderr='failed to extract a discovered lockfile\n')
+
+    def test_packages_must_be_an_array_even_beside_a_valid_patch(self):
+        raw = report()
+        raw['results'].append({'source': {'path': str(ROOT / 'other/package-lock.json'),
+                                         'type': 'lockfile'}, 'packages': {}})
+        with self.assertRaisesRegex(ValueError, 'packages'):
+            self.invoke(raw)
+
+    def test_malformed_required_containers_and_scalars_alone_or_beside_patch(self):
+        cases = []
+        for value in ({}, '', None, 1):
+            raw = report()
+            raw['results'][0]['packages'] = value
+            cases.append(raw)
+        for field in ('source',):
+            for value in ([], '', None, 1):
+                raw = report()
+                raw['results'][0][field] = value
+                cases.append(raw)
+        for field in ('path', 'type'):
+            for value in ('', [], None):
+                raw = report()
+                raw['results'][0]['source'][field] = value
+                cases.append(raw)
+        for field in ('package', 'vulnerabilities'):
+            raw = report()
+            raw['results'][0]['packages'][0][field] = ''
+            cases.append(raw)
+        for field in ('name', 'version', 'ecosystem', 'purl'):
+            raw = report()
+            raw['results'][0]['packages'][0]['package'][field] = []
+            cases.append(raw)
+        for value in ('', [], None, 1):
+            raw = report()
+            raw['results'][0]['packages'][0]['vulnerabilities'][0] = value
+            cases.append(raw)
+        for value in ('', [], None):
+            raw = report()
+            raw['results'][0]['packages'][0]['vulnerabilities'][0]['id'] = value
+            cases.append(raw)
+        for index, raw in enumerate(cases):
+            for paired in (False, True):
+                for code in (0, 1):
+                    candidate = deepcopy(raw)
+                    if paired:
+                        candidate['results'].append(report()['results'][0])
+                    with self.subTest(case=index, paired=paired, code=code):
+                        with self.assertRaises(ValueError):
+                            self.invoke(candidate, scanner=code)
+        for value in (None, [], '', 1):
+            with self.subTest(root=value), self.assertRaises(ValueError):
+                scan.classify(value, ROOT)
+        for value in ({}, '', None, 1):
+            with self.subTest(results=value), self.assertRaises(ValueError):
+                scan.classify({'results': value}, ROOT)
+        with self.assertRaises(ValueError):
+            scan.classify({'results': [None]}, ROOT)
 
     def test_manifest_runs_guarded_scan_and_original_config_has_no_new_ignore(self):
         manifest = tomllib.loads((ROOT / 'scripts/ci/diagnostics.toml').read_text())

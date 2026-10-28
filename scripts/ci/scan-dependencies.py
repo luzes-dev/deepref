@@ -9,26 +9,46 @@ import sys
 ADVISORY = 'GHSA-gcqx-w48m-w2h4'
 
 
+def expect_object(value, label):
+    if not isinstance(value, dict):
+        raise ValueError('unknown ' + label + ' object shape')
+    return value
+
+
+def expect_array(value, label):
+    if not isinstance(value, list):
+        raise ValueError('unknown ' + label + ' array shape')
+    return value
+
+
+def expect_string(value, label):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('unknown ' + label + ' string shape')
+    return value
+
+
 def classify(report: dict, root: Path) -> tuple[list[dict], list[dict]]:
     remaining, patched = [], []
-    results = report['results']
-    if not isinstance(results, list):
-        raise ValueError('unknown scanner results shape')
-    for result in results:
-        source = result['source']
-        path = Path(source['path'])
+    report = expect_object(report, 'report')
+    for result in expect_array(report['results'], 'results'):
+        result = expect_object(result, 'result')
+        source = expect_object(result['source'], 'source')
+        source_type = expect_string(source['type'], 'source type')
+        source_path = expect_string(source['path'], 'source path')
+        path = Path(source_path)
         path = path if path.is_absolute() else root / path
-        for item in result['packages']:
-            package = item['package']
-            vulnerabilities = item['vulnerabilities']
-            if not isinstance(vulnerabilities, list):
-                raise ValueError('unknown vulnerability results shape')
-            for vulnerability in vulnerabilities:
-                identifier = vulnerability['id']
-                if not isinstance(identifier, str) or not identifier:
-                    raise ValueError('missing vulnerability identity')
-                finding = {'source': source['path'], 'package': package, 'id': identifier}
-                exact = (source['type'] == 'lockfile'
+        for item in expect_array(result['packages'], 'packages'):
+            item = expect_object(item, 'package result')
+            package = expect_object(item['package'], 'package')
+            for field in ('name', 'version', 'ecosystem'):
+                expect_string(package[field], 'package ' + field)
+            if 'purl' in package:
+                expect_string(package['purl'], 'package purl')
+            for vulnerability in expect_array(item['vulnerabilities'], 'vulnerabilities'):
+                vulnerability = expect_object(vulnerability, 'vulnerability')
+                identifier = expect_string(vulnerability['id'], 'vulnerability id')
+                finding = {'source': source_path, 'package': package, 'id': identifier}
+                exact = (source_type == 'lockfile'
                          and path.resolve() == (root / 'pnpm-lock.yaml').resolve()
                          and package['ecosystem'] == 'npm'
                          and package['name'] == 'deepmerge'
@@ -59,7 +79,7 @@ def scan(root: Path, run=subprocess.run, today=None) -> int:
     if contracts.returncode:
         return contracts.returncode
     result = run(
-        ['osv-scanner', 'scan', 'source', '--recursive', '--config', 'osv-scanner.toml', '--format=json', '.'],
+        ['osv-scanner', 'scan', 'source', '--recursive', '--config', 'osv-scanner.toml', '--verbosity=error', '--format=json', '.'],
         cwd=root, text=True, capture_output=True,
     )
     # Preserve unmodified machine-readable results in the probe log, including
@@ -68,6 +88,11 @@ def scan(root: Path, run=subprocess.run, today=None) -> int:
     print(result.stderr, file=sys.stderr, end='', flush=True)
     if result.returncode not in (0, 1):
         return result.returncode
+    # OSV 2.7 can return vulnerability exit 1 even after an extraction error.
+    # Error-only verbosity makes every stderr diagnostic a refusal, without
+    # relying on fragile message prefixes or suppressing incomplete coverage.
+    if result.stderr.strip():
+        raise ValueError('scanner emitted error-level diagnostics; scan is incomplete')
     remaining, patched = classify(json.loads(result.stdout), root)
     if result.returncode == 1 and not remaining and not patched:
         raise ValueError('scanner failed without an explained finding')
