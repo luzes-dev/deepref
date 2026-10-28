@@ -24,6 +24,7 @@ overrides:
 
 patchedDependencies:
   '@tanstack/svelte-store@0.12.2': 4a28d091ba1955bfb982edbc7929520d72c77f073c94278cd6673671cf5f070a
+  deepmerge@4.3.1: 658bcc27776e130ae51c0ad9597d4a3a52ac867af0fc014b78714ff162845fe0
 
 importers:
 
@@ -5957,7 +5958,7 @@ snapshots:
 
   '@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.2(@typescript-eslint/types@8.72.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
-      deepmerge: 4.3.1
+      deepmerge: 4.3.1(patch_hash=658bcc27776e130ae51c0ad9597d4a3a52ac867af0fc014b78714ff162845fe0)
       magic-string: 1.4.3
       obug: 2.2.1
       svelte: 5.57.2(@typescript-eslint/types@8.72.0)
@@ -6669,7 +6670,7 @@ snapshots:
 
   deep-is@0.1.4: {}
 
-  deepmerge@4.3.1: {}
+  deepmerge@4.3.1(patch_hash=658bcc27776e130ae51c0ad9597d4a3a52ac867af0fc014b78714ff162845fe0): {}
 
   default-browser-id@5.0.1: {}
 

@@ -253,16 +253,7 @@ command = ["cargo", "shear", "--deny-warnings"]
 id = "security.osv"
 group = "security-dependencies"
 description = "Scan Cargo.lock and pnpm-lock.yaml with OSV-Scanner."
-command = [
-  "osv-scanner",
-  "scan",
-  "source",
-  "--recursive",
-  "--config",
-  "osv-scanner.toml",
-  "--format=table",
-  ".",
-]
+command = ["python3", "scripts/ci/scan-dependencies.py"]
 
 [[check]]
 id = "security.pnpm-audit"
