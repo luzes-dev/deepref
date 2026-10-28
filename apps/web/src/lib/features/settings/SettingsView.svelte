@@ -1,5 +1,14 @@
 <script lang="ts">
-	import { Database, Maximize2, Minimize2, Palette, Search, Sparkles, X } from '@lucide/svelte';
+	import {
+		Database,
+		UserRound,
+		Maximize2,
+		Minimize2,
+		Palette,
+		Search,
+		Sparkles,
+		X
+	} from '@lucide/svelte';
 	import type { LucideIcon } from '@lucide/svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import type { SettingsDto, UpdateSettings } from '#lib/api/generated/models/index.js';
@@ -18,6 +27,7 @@
 	import * as Select from '@deepref/ui/select';
 	import { setMode, userPrefersMode } from 'mode-watcher';
 	import { page } from '$app/state';
+	import AccountSettings from './AccountSettings.svelte';
 	import AutonomySettings from '#lib/features/ai-autonomy/components/AutonomySettings.svelte';
 	import { Debounced, onCleanup, watch } from 'runed';
 	import { enqueueSettingsSave } from './settings-save-queue';
@@ -41,7 +51,7 @@
 	type ValidationResult =
 		{ ok: true; data: UpdateSettings } | { ok: false; errors: ValidationErrors };
 	type SaveStatus = 'ready' | 'dirty' | 'saving' | 'saved' | 'error' | 'invalid';
-	type SettingsSection = 'ingestion' | 'ai' | 'appearance';
+	type SettingsSection = 'ingestion' | 'ai' | 'appearance' | 'account';
 	type ThemeMode = 'light' | 'dark' | 'system';
 
 	let { presentation = 'page', onclose, onexpand, oncollapse }: SettingsViewProps = $props();
@@ -91,6 +101,14 @@
 		searchText: string;
 		icon: LucideIcon;
 	}[] = [
+		{
+			id: 'account',
+			label: 'Account',
+			description: 'Workspace access, billing and privacy',
+			searchText:
+				'API keys machine access rotate revoke billing checkout portal privacy download export account',
+			icon: UserRound
+		},
 		{
 			id: 'ingestion',
 			label: 'Ingestion',
@@ -423,7 +441,11 @@
 		<div>
 			<h1 id="settings-title" class="text-base font-semibold">Settings</h1>
 			<p class="mt-1 text-xs text-muted-foreground">
-				{activeTab === 'ai' ? 'This project' : 'Application defaults'} · Changes save automatically.
+				{activeTab === 'account'
+					? 'Account and workspace actions'
+					: activeTab === 'ai'
+						? 'This project · Changes save automatically.'
+						: 'Application defaults · Changes save automatically.'}
 			</p>
 		</div>
 		<div class="flex items-center gap-1">
@@ -448,7 +470,7 @@
 		</div>
 	</header>
 	<div class="flex shrink-0 flex-wrap items-center justify-between gap-3 px-4 pb-3 sm:px-6">
-		{@render settingsNavigation('flex items-center gap-1', '')}
+		{@render settingsNavigation('flex flex-wrap items-center gap-1', '')}
 		{@render searchSettings('relative block w-48')}
 	</div>
 	<section
@@ -456,7 +478,8 @@
 		aria-labelledby="settings-title"
 	>
 		<div class="max-w-3xl">
-			{#if isLoading}<div data-testid="settings-loading">
+			{#if activeTab === 'account'}<AccountSettings />
+			{:else if isLoading}<div data-testid="settings-loading">
 					<StatePanel
 						state="loading"
 						title="Loading application settings"

@@ -74,6 +74,9 @@ macro_rules! section_query {
     };
 }
 
+#[path = "scientific.rs"]
+mod scientific;
+
 /// The subquery is a static allowlist. PostgreSQL checks the encoded row size
 /// before sending it; no aggregate JSON value or unbounded fetch_all is used.
 async fn json_section(
@@ -172,7 +175,7 @@ pub(super) async fn collect(
         (
             "records.json",
             section_query!(
-                "SELECT r.id,r.project_id,r.report_id,r.source,r.title,r.abstract_text,r.publication_year,r.created_at FROM records r JOIN projects p ON p.id=r.project_id WHERE p.workspace_id=ANY($1) ORDER BY r.id"
+                "SELECT r.id,r.project_id,r.report_id,r.acquisition_run_id,r.source,r.title,r.abstract_text,r.publication_year,r.created_at FROM records r JOIN projects p ON p.id=r.project_id WHERE p.workspace_id=ANY($1) ORDER BY r.id"
             ),
         ),
         (
@@ -184,7 +187,7 @@ pub(super) async fn collect(
         (
             "studies.json",
             section_query!(
-                "SELECT s.id,s.project_id,s.title,s.design,s.created_at FROM studies s JOIN projects p ON p.id=s.project_id WHERE p.workspace_id=ANY($1) ORDER BY s.id"
+                "SELECT s.id,s.project_id,s.title,s.design,s.design_context,s.study_revision,s.updated_by_actor_kind,s.updated_by_actor_id,s.classified_at,s.created_at FROM studies s JOIN projects p ON p.id=s.project_id WHERE p.workspace_id=ANY($1) ORDER BY s.id"
             ),
         ),
         (
@@ -206,7 +209,10 @@ pub(super) async fn collect(
             ),
         ),
     ];
-    for (name, query) in sections {
+    for (name, query) in sections
+        .into_iter()
+        .chain(scientific::SECTIONS.iter().copied())
+    {
         json_files.push(json_section(tx, dir, name, query, &workspaces, &mut budget).await?);
     }
     // Decode then reserialize the domain projection: arbitrary persisted JSON

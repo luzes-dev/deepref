@@ -1,4 +1,5 @@
 mod account_export;
+mod account_settings;
 mod acquisitions;
 mod actor;
 mod ai;
@@ -63,6 +64,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(health::deprecated_health))
         .routes(routes!(health::project_dependencies))
         .routes(routes!(auth::get_me))
+        .routes(routes!(account_settings::list_workspaces))
         .routes(routes!(auth::login))
         .routes(routes!(auth::callback))
         .routes(routes!(auth::logout))
