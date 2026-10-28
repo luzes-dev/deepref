@@ -22,6 +22,7 @@ use deepref_app::{
     PostgresDurableExecutionStore, disable_ai_usage_export, enable_ai_usage_export, scoped_job,
 };
 use deepref_application::jobs::{DurableExecutionStore, JobScope};
+use deepref_application::{outbox::OutboxMessage, usage_export::AiUsageFact};
 use deepref_config::UsageExportConfig;
 use deepref_domain::{JobKind, UserId, WorkloadClass};
 use deepref_worker::delivery::DeliveryAction;
@@ -185,15 +186,19 @@ async fn the_export_replay_job_emits_retained_usage_facts() {
     .expect("the replay job runs");
     assert_eq!(action, DeliveryAction::Ack);
 
-    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM outbox_events")
-        .fetch_one(&pool)
-        .await
-        .expect("outbox rows counted");
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM outbox_events WHERE message_type=$1")
+            .bind(AiUsageFact::TYPE)
+            .fetch_one(&pool)
+            .await
+            .expect("outbox rows counted");
     assert_eq!(events, 1, "one outbox event per retained fact");
-    let event_id: Uuid = sqlx::query_scalar("SELECT event_id FROM outbox_events")
-        .fetch_one(&pool)
-        .await
-        .expect("outbox row");
+    let event_id: Uuid =
+        sqlx::query_scalar("SELECT event_id FROM outbox_events WHERE message_type=$1")
+            .bind(AiUsageFact::TYPE)
+            .fetch_one(&pool)
+            .await
+            .expect("outbox row");
     assert_eq!(event_id, fact, "the event id is the immutable fact id");
 }
 
@@ -223,10 +228,12 @@ async fn the_export_replay_job_emits_nothing_while_export_is_disabled() {
     .await
     .expect("the replay job runs");
     assert_eq!(action, DeliveryAction::Ack);
-    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM outbox_events")
-        .fetch_one(&pool)
-        .await
-        .expect("outbox rows counted");
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM outbox_events WHERE message_type=$1")
+            .bind(AiUsageFact::TYPE)
+            .fetch_one(&pool)
+            .await
+            .expect("outbox rows counted");
     assert_eq!(events, 0, "disabled export emits nothing and loses nothing");
 }
 

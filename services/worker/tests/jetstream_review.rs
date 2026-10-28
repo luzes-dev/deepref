@@ -5,7 +5,7 @@
     clippy::panic_in_result_fn
 )]
 //! Real broker + disposable PostgreSQL contracts; strict CI runner never skips.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use deepref_app::{
     PostgresDurableExecutionStore, enqueue_job_pool, scoped_job, work_publication as publication,
 };
@@ -479,17 +479,34 @@ async fn blocked_work_intake(kind: &str) -> Result<()> {
         },
     ));
     tokio::time::timeout(Duration::from_secs(2), seen).await??;
-    // Ensure documents intake accepted its first fence before cancellation.
-    for _ in 0..30 {
-        let running: bool = sqlx::query_scalar("SELECT state='running' FROM jobs WHERE id=$1")
-            .bind(first)
-            .fetch_one(&pool)
-            .await?;
-        if running {
-            break;
+    // Prove the partial batch exists before requesting shutdown: the first
+    // fence is committed and the next boundary is actually waiting. A short
+    // unchecked poll can otherwise cancel during setup on a slower runner.
+    let waiting = if kind == "dlq" {
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND state='running')
+           AND EXISTS(SELECT 1 FROM pg_locks WHERE NOT granted
+             AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+             AND locktype='relation' AND relation='transport_dead_letters'::regclass)"
+    } else {
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND state='running')
+           AND EXISTS(SELECT 1 FROM pg_locks WHERE NOT granted
+             AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+             AND locktype='advisory' AND classid=0 AND objid=409705)"
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let ready: bool = sqlx::query_scalar(waiting)
+                .bind(first)
+                .fetch_one(&pool)
+                .await?;
+            if ready {
+                return Ok::<(), sqlx::Error>(());
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
+    })
+    .await
+    .context("first committed claim and blocked next boundary must precede shutdown")??;
     let started = tokio::time::Instant::now();
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_millis(220), worker).await???;
