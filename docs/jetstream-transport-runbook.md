@@ -131,10 +131,26 @@ recovery of the missing diagnostic evidence is not guaranteed.
    ```
 
    The command loads that exact retained server advisory, requires this stream's
-   finite-five contract, and resolves its `consumer` and original `stream_seq`.
-   Foreign streams, malformed names, unexpected delivery budgets and missing
+   finite-five contract and exact advisory subject, then resolves its `consumer`
+   and original `stream_seq`. Before any DB insertion, a read-only consumer INFO
+   request verifies the existing exact events/work filter and finite-five policy.
+   The retained original subject must match that scope; a decodable envelope
+   must also match its work pool or event route. Recovery never creates a missing
+   consumer. Foreign streams, malformed names, unexpected delivery budgets and
+   missing
    advisory/work retention are refused. See the [NATS MaxDeliver advisory
    contract](https://beta-docs.nats.io/reference/2.14/jetstream/advisory/max-deliver).
+
+   If the durable consumer was deleted, default recovery refuses. Inspect
+   retained incident/release evidence, then explicitly declare its historical
+   scope with `--historical-scope events` or `--historical-scope work:documents`
+   (replace documents with the recorded pool). This fallback is allowed only
+   for a broker-confirmed missing consumer, never outages or permission errors;
+   it still checks advisory and retained work routing. Output marks this as
+   `operator_declared_historical`, not a verified historical policy. A live
+   consumer reports `live_consumer`; supplying a historical scope for one is
+   refused. Metadata-only status does not require a live consumer. Record the
+   scope declaration with the incident; it confers no business retry authority.
 
 3. Recovery idempotently commits `transport_dead_letters` evidence before the
    diagnostic DLQ copy, retaining an already committed consumer/reason/count.
@@ -161,9 +177,9 @@ recovery of the missing diagnostic evidence is not guaranteed.
    ACK subject, delete a durable, replay malformed bytes indefinitely, reset
    attempts, or delete the shared original to clear an incident.
 
-The procedure requires a maintenance context linked against these explicit APIs;
-this slice adds no public/admin HTTP endpoint or credential-handling CLI. Real
-service tests cover fifth-delivery DB and full-DLQ failures, absence of a sixth
+The operator CLI uses the configured scoped runtime database credential and
+broker account; there is no public/admin HTTP recovery endpoint. Authored real
+service tests exercise fifth-delivery DB and full-DLQ failures, absence of a sixth
 delivery, retained advisory evidence and idempotent explicit diagnostic recovery.
 
 Transport progress heartbeats prevent healthy slow handlers from exhausting

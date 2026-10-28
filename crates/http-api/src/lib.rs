@@ -177,11 +177,7 @@ pub async fn audit_purge(config: &ApiConfig, dry_run: bool) -> anyhow::Result<St
     )
     .await?;
     let report = deepref_app::audit_admin::purge_admin_audit(&pool, dry_run, None).await?;
-    let remaining: bool = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.admin_audit_events WHERE occurred_at<now()-CASE WHEN event_type='account.deletion_completed' THEN interval '5 years' ELSE interval '6 months' END) OR EXISTS(SELECT 1 FROM public.fulfilled_account_deletions WHERE completed_at<now()-interval '5 years') OR EXISTS(SELECT 1 FROM public.user_sessions WHERE revoked_at<now()-interval '30 days' OR expires_at<now()-interval '30 days')")
-            .fetch_one(&pool),
-    ).await.map_err(|_| anyhow::anyhow!("retention remaining-row diagnostic deadline exceeded; inspect committed purge evidence"))??;
+    let remaining = deepref_app::audit_admin::remaining_retention_eligible(&pool).await?;
     let mut output = serde_json::to_value(report)?;
     output["remaining_eligible"] = serde_json::Value::Bool(remaining);
     Ok(serde_json::to_string_pretty(&output)?)

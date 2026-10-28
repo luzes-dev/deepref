@@ -499,14 +499,19 @@ and the proof that a deletion request was fulfilled (`account.deletion_completed
 and `fulfilled_account_deletions`) 5 years; the fulfillment log contains only
 user/time identifiers and normalized-email HMAC-SHA256 digests, never
 plaintext. The HMACs are pseudonymous, linkable data, not a contentless log,
-per BUSINESS_DECISIONS. Retention is enforced by the append-only trigger
-(migration 0112): only `deepref-server audit purge`, running with the
-transaction-local `deepref.audit_purge` key, can delete, and only rows already
-past their cutoff. The purge runs **daily** (cron or the platform scheduler),
-deletes in bounded batches, is safe to interrupt and rerun, and records each
-real run as `audit.purged`. Details, the incident-response query
-(`deepref-server audit query`) and the account-deletion restore step are in
-[security.md](security.md).
+per BUSINESS_DECISIONS. Migration 0188 enforces separate runtime, migration
+owner and maintenance roles. `deepref-server audit purge` uses the maintenance
+credential and a fixed-path SECURITY DEFINER function; the append-only trigger
+checks the trusted function owner, transaction-local purge setting and row
+cutoff. A runtime setting cannot authorize deletion. Each call commits at most
+32 audit batches plus one batch each for sessions and fulfilled-deletion proofs,
+with its `audit.purged`
+summary, then reports whether eligible rows remain. Run bounded calls daily
+(cron or the platform scheduler), inspecting committed evidence if interrupted.
+Activation, credential rotation, process drain and actual scheduling require
+external deployment evidence; local role tests do not establish those facts.
+See [database-roles-runbook.md](database-roles-runbook.md) for adoption and checks,
+and [security.md](security.md) for incident-response queries and deletion restore.
 
 Account deletion is a request state machine (`account_deletion_requests`:
 `requested`, `cancelled`, `completing`, `completed`). Cancellation and

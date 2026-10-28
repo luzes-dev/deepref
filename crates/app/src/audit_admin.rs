@@ -250,3 +250,16 @@ async fn count_purgeable_sessions(connection: &mut sqlx::PgConnection) -> Result
         .await?;
     Ok(u64::try_from(pending).unwrap_or(0))
 }
+
+/// Read-only diagnostic after a purge commits. A separate bounded transaction
+/// uses one borrowed connection; no runtime GUC or write authority is needed.
+pub async fn remaining_retention_eligible(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let mut transaction=crate::operational_read::begin(pool).await?;
+        let remaining=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM public.admin_audit_events WHERE occurred_at<now()-CASE WHEN event_type='account.deletion_completed' THEN interval '5 years' ELSE interval '6 months' END) OR EXISTS(SELECT 1 FROM public.fulfilled_account_deletions WHERE completed_at<now()-interval '5 years') OR EXISTS(SELECT 1 FROM public.user_sessions WHERE revoked_at<now()-interval '30 days' OR expires_at<now()-interval '30 days')")
+            .fetch_one(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(remaining)
+    }).await.map_err(|_| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::TimedOut,
+        "retention remaining-row diagnostic deadline exceeded; inspect committed purge evidence")))?
+}

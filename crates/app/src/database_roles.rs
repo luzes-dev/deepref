@@ -40,37 +40,52 @@ pub async fn verify_database_role(
 }
 
 async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseRoleCheck> {
+    let mut transaction = crate::operational_read::begin(pool).await?;
     let active: bool = sqlx::query_scalar(
         "SELECT activated_at IS NOT NULL FROM public.database_role_contract WHERE singleton",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await
     .context("read database role activation")?;
     anyhow::ensure!(
         active,
         "database roles are not activated; run the explicit administrator provisioning step"
     );
-    // Verify the canonical protected functions as well as the caller's ACLs.
-    // A correctly named membership cannot conceal owner/search_path or PUBLIC
-    // EXECUTE drift introduced during deployment.
-    let protected_functions: bool = sqlx::query_scalar(
-        "SELECT count(*)=3 AND bool_and(
-            p.proowner='deepref_migration_owner'::regrole
-            AND p.prosecdef=expected.definer
-            AND coalesce(p.proconfig @> ARRAY['search_path=pg_catalog'],false)
-            AND NOT EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
-                WHERE a.grantee=0 AND a.privilege_type='EXECUTE'))
-         FROM (VALUES
-            ('public.purge_retention_records(integer)'::regprocedure,true),
-            ('public.redact_deleted_user_audit(uuid)'::regprocedure,true),
-            ('public.reject_admin_audit_event_changes()'::regprocedure,false)
-         ) expected(oid,definer) JOIN pg_proc p ON p.oid=expected.oid",
+    // Expected source comes from immutable versioned migration bytes, never
+    // from a mutable catalog row or caller-controlled configuration.
+    for expected in PROTECTED_FUNCTIONS {
+        let safe: bool = sqlx::query_scalar(
+            "SELECT p.proowner='deepref_migration_owner'::regrole
+                AND p.prosecdef=$2 AND p.prosrc=$3 AND l.lanname='plpgsql'
+                AND p.proconfig @> $4::text[] AND cardinality(p.proconfig)=cardinality($4::text[])
+                AND NOT EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                    WHERE a.grantee=0 AND a.privilege_type='EXECUTE')
+             FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang
+             WHERE p.oid=$1::regprocedure",
+        )
+        .bind(expected.signature).bind(expected.definer).bind(expected.body()?)
+        .bind(expected.configuration).fetch_one(&mut *transaction).await?;
+        anyhow::ensure!(
+            safe,
+            "protected database function source, language, owner, configuration or EXECUTE grants violate the role contract"
+        );
+    }
+    let triggers_safe: bool = sqlx::query_scalar(
+        "SELECT count(*)=2 AND bool_and(
+            t.tgfoid='public.reject_admin_audit_event_changes()'::regprocedure
+            AND t.tgtype=expected.kind AND t.tgenabled='O' AND NOT t.tgisinternal
+            AND t.tgqual IS NULL AND t.tgnargs=0 AND octet_length(t.tgargs)=0
+            AND cardinality(t.tgattr::smallint[])=0 AND t.tgconstraint=0)
+         FROM (VALUES ('admin_audit_events_append_only_trigger',27),
+                      ('admin_audit_events_no_truncate_trigger',34)) expected(name,kind)
+         JOIN pg_trigger t ON t.tgname=expected.name
+         AND t.tgrelid='public.admin_audit_events'::regclass",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await?;
     anyhow::ensure!(
-        protected_functions,
-        "protected database function ownership, search_path or EXECUTE grants violate the role contract"
+        triggers_safe,
+        "protected audit trigger bindings violate the role contract"
     );
     let role = purpose.capability();
     let row=sqlx::query(
@@ -100,6 +115,20 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
                  OR (c.relname='fulfilled_account_deletions' AND a.attname='completed_at')
                  OR (c.relname='user_sessions' AND a.attname IN('revoked_at','expires_at'))
                  OR c.relname='database_role_contract')) AS maintenance_excess_read,
+           EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault('S',c.relowner))) a
+             WHERE n.nspname='public' AND c.relkind='S' AND a.grantee=0) AS public_sequence_access,
+           EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE n.nspname='public' AND c.relkind='S'
+               AND has_sequence_privilege(session_user,c.oid,'UPDATE')) AS runtime_sequence_mutation,
+           EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE n.nspname='public' AND c.relkind='S'
+               AND has_sequence_privilege(session_user,c.oid,'USAGE,SELECT,UPDATE')) AS maintenance_sequence_access,
+           EXISTS(SELECT 1 FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+             WHERE d.defaclrole='deepref_migration_owner'::regrole AND d.defaclobjtype='S'
+               AND d.defaclnamespace IN(0,'public'::regnamespace)
+               AND (a.grantee IN(0,'deepref_maintenance'::regrole)
+                 OR (a.grantee='deepref_runtime'::regrole AND a.privilege_type='UPDATE'))) AS unsafe_sequence_defaults,
            has_schema_privilege(session_user,'public','CREATE') AS schema_create,
            has_database_privilege(session_user,current_database(),'CREATE') AS database_create,
            has_database_privilege(session_user,current_database(),'TEMPORARY') AS database_temp,
@@ -112,7 +141,7 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
            EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
              WHERE n.nspname='public' AND pg_has_role(session_user,c.relowner,'MEMBER')) AS owns_objects,
            has_function_privilege(session_user,'public.purge_retention_records(integer)','EXECUTE') AS can_purge"
-    ).bind(role).fetch_one(pool).await?;
+    ).bind(role).fetch_one(&mut *transaction).await?;
     anyhow::ensure!(
         row.try_get::<bool, _>("assigned")?
             && row.try_get::<bool, _>("expected_current_role")?
@@ -136,6 +165,9 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
                 "owns_objects",
                 "can_purge",
                 "unsafe_table_grant",
+                "runtime_sequence_mutation",
+                "public_sequence_access",
+                "unsafe_sequence_defaults",
             ] {
                 anyhow::ensure!(
                     !row.try_get::<bool, _>(field)?,
@@ -143,7 +175,7 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
                 );
             }
             let has_dml:bool=sqlx::query_scalar("SELECT has_table_privilege(session_user,'public.jobs','SELECT') AND has_table_privilege(session_user,'public.jobs','INSERT') AND has_table_privilege(session_user,'public.jobs','UPDATE') AND has_table_privilege(session_user,'public.admin_audit_events','INSERT')")
-                .fetch_one(pool).await?;
+                .fetch_one(&mut *transaction).await?;
             anyhow::ensure!(has_dml, "runtime database permissions are incomplete");
         }
         DatabaseRolePurpose::Maintenance => {
@@ -159,6 +191,9 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
                 "owns_objects",
                 "maintenance_mutation",
                 "maintenance_excess_read",
+                "maintenance_sequence_access",
+                "public_sequence_access",
+                "unsafe_sequence_defaults",
             ] {
                 anyhow::ensure!(
                     !row.try_get::<bool, _>(field)?,
@@ -177,7 +212,7 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
                 "migration ownership is incomplete"
             );
             let current: bool = sqlx::query_scalar("SELECT current_user='deepref_migration_owner'")
-                .fetch_one(pool)
+                .fetch_one(&mut *transaction)
                 .await?;
             anyhow::ensure!(
                 current,
@@ -185,12 +220,58 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
             );
         }
     }
+    transaction.commit().await?;
     Ok(DatabaseRoleCheck {
         purpose: role,
         contract_active: true,
         role_verified: true,
     })
 }
+
+struct ProtectedFunction {
+    signature: &'static str,
+    marker: &'static str,
+    source: &'static str,
+    definer: bool,
+    configuration: &'static [&'static str],
+}
+impl ProtectedFunction {
+    fn body(&self) -> Result<&'static str> {
+        self.source
+            .split_once(self.marker)
+            .and_then(|(_, definition)| definition.split_once("AS $$"))
+            .and_then(|(_, body)| body.split_once("$$;"))
+            .map(|(body, _)| body)
+            .context("read embedded canonical database function")
+    }
+}
+const ROLE_SQL: &str =
+    include_str!("../migrations/0188_database_roles_and_bounded_audit_retention.sql");
+const REDACTION_SQL: &str =
+    include_str!("../migrations/0117_authorized_account_redaction_and_address_digests.sql");
+const PROTECTED_FUNCTIONS: &[ProtectedFunction] = &[
+    ProtectedFunction {
+        signature: "public.purge_retention_records(integer)",
+        marker: "CREATE FUNCTION public.purge_retention_records(",
+        source: ROLE_SQL,
+        definer: true,
+        configuration: &["search_path=pg_catalog", "lock_timeout=250ms"],
+    },
+    ProtectedFunction {
+        signature: "public.redact_deleted_user_audit(uuid)",
+        marker: "CREATE FUNCTION redact_deleted_user_audit(",
+        source: REDACTION_SQL,
+        definer: true,
+        configuration: &["search_path=pg_catalog"],
+    },
+    ProtectedFunction {
+        signature: "public.reject_admin_audit_event_changes()",
+        marker: "CREATE OR REPLACE FUNCTION reject_admin_audit_event_changes()",
+        source: ROLE_SQL,
+        definer: false,
+        configuration: &["search_path=pg_catalog"],
+    },
+];
 
 pub async fn provision_database_roles(
     pool: &PgPool,
@@ -226,4 +307,33 @@ pub async fn provision_database_roles(
         .await?;
     transaction.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn canonical_protected_bodies_remain_compatible_with_applied_migrations() -> Result<()> {
+        let corrective = include_str!("../migrations/0205_database_role_contract_repairs.sql");
+        for expected in PROTECTED_FUNCTIONS {
+            let marker = expected
+                .marker
+                .replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION")
+                .replace("FUNCTION reject_", "FUNCTION public.reject_")
+                .replace("FUNCTION redact_", "FUNCTION public.redact_");
+            // Only this pure unit check rewrites a definition marker; production
+            // descriptors and expected bodies are immutable embedded bytes.
+            let body = corrective
+                .split_once(&marker)
+                .and_then(|(_, definition)| definition.split_once("AS $$"))
+                .and_then(|(_, body)| body.split_once("$$;"))
+                .context("read corrective canonical definition")?
+                .0;
+            anyhow::ensure!(
+                body == expected.body()?,
+                "corrective migration changed protected semantics"
+            );
+        }
+        Ok(())
+    }
 }

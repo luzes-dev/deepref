@@ -1,17 +1,23 @@
 //! Explicit finite-delivery diagnostic maintenance. Never claims/replays jobs.
 use anyhow::{Context, Result};
 use deepref_config::{RuntimeConfig, WorkTransportConfig};
-use deepref_integrations::jetstream::JetStream;
+use deepref_integrations::jetstream::{ConsumerScope, JetStream};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportOperatorCommand {
-    Status { after: u64, limit: u16 },
-    RecoverTerminal { advisory_sequence: u64 },
+    Status {
+        after: u64,
+        limit: u16,
+    },
+    RecoverTerminal {
+        advisory_sequence: u64,
+        historical_scope: Option<ConsumerScope>,
+    },
 }
 
-const USAGE: &str = "usage: deepref-server transport terminal-status [--after <advisory-sequence>] [--limit <1..100>] | transport recover-terminal --advisory <positive-advisory-sequence>";
+const USAGE: &str = "usage: deepref-server transport terminal-status [--after <advisory-sequence>] [--limit <1..100>] | transport recover-terminal --advisory <positive-advisory-sequence> [--historical-scope events|work:<pool>]";
 
 impl TransportOperatorCommand {
     pub fn parse(args: &[String]) -> Result<Self> {
@@ -39,10 +45,39 @@ impl TransportOperatorCommand {
                     limit,
                 })
             }
-            [action, flag, value] if action == "recover-terminal" && flag == "--advisory" => {
-                let advisory_sequence = value.parse::<u64>().context(USAGE)?;
-                anyhow::ensure!(advisory_sequence > 0, USAGE);
-                Ok(Self::RecoverTerminal { advisory_sequence })
+            [action, rest @ ..] if action == "recover-terminal" => {
+                let mut advisory_sequence = None;
+                let mut historical_scope = None;
+                let mut flags = rest.iter();
+                while let Some(flag) = flags.next() {
+                    let value = flags.next().context(USAGE)?;
+                    match flag.as_str() {
+                        "--advisory" if advisory_sequence.is_none() => {
+                            advisory_sequence = Some(value.parse::<u64>().context(USAGE)?)
+                        }
+                        "--historical-scope" if historical_scope.is_none() => {
+                            historical_scope = Some(if value == "events" {
+                                ConsumerScope::Events
+                            } else {
+                                ConsumerScope::Work(
+                                    value
+                                        .strip_prefix("work:")
+                                        .context(USAGE)?
+                                        .parse()
+                                        .context(USAGE)?,
+                                )
+                            });
+                        }
+                        _ => anyhow::bail!(USAGE),
+                    }
+                }
+                let advisory_sequence = advisory_sequence
+                    .filter(|value| *value > 0)
+                    .context(USAGE)?;
+                Ok(Self::RecoverTerminal {
+                    advisory_sequence,
+                    historical_scope,
+                })
             }
             _ => anyhow::bail!(USAGE),
         }
@@ -56,18 +91,21 @@ pub async fn recover_terminal_advisory(
     broker: &JetStream,
     sequence: u64,
 ) -> Result<serde_json::Value> {
-    let advisory = broker.terminal_advisory(sequence).await?;
-    super::jetstream_transport::recover_terminal_sequence(
-        pool,
-        broker,
-        &advisory.consumer,
-        advisory.stream_seq,
-    )
-    .await?;
+    recover_terminal_advisory_with_scope(pool, broker, sequence, None).await
+}
+
+pub async fn recover_terminal_advisory_with_scope(
+    pool: &PgPool,
+    broker: &JetStream,
+    sequence: u64,
+    historical_scope: Option<ConsumerScope>,
+) -> Result<serde_json::Value> {
+    let evidence = broker.terminal_recovery(sequence, historical_scope).await?;
+    super::jetstream_transport::recover_terminal_sequence(pool, &evidence).await?;
     Ok(
-        serde_json::json!({"advisory_sequence":sequence,"stream_sequence":advisory.stream_seq,
-        "consumer":advisory.consumer,"database_evidence":"recorded","diagnostic_dlq":"confirmed",
-        "business_replayed":false,"delivery_budget_reset":false}),
+        serde_json::json!({"advisory_sequence":evidence.advisory_sequence(),"stream_sequence":evidence.advisory().stream_seq,
+        "consumer":evidence.advisory().consumer,"consumer_scope":evidence.scope(),"consumer_contract_evidence":evidence.contract(),
+        "database_evidence":"recorded","diagnostic_dlq":"confirmed", "business_replayed":false,"delivery_budget_reset":false}),
     )
 }
 
@@ -82,7 +120,10 @@ pub async fn run(config: RuntimeConfig, command: TransportOperatorCommand) -> Re
             TransportOperatorCommand::Status { after, limit } => {
                 serde_json::to_string_pretty(&broker.terminal_advisories(after, limit).await?)?
             }
-            TransportOperatorCommand::RecoverTerminal { advisory_sequence } => {
+            TransportOperatorCommand::RecoverTerminal {
+                advisory_sequence,
+                historical_scope,
+            } => {
                 let pool = PgPoolOptions::new()
                     .min_connections(0)
                     .max_connections(2)
@@ -96,7 +137,13 @@ pub async fn run(config: RuntimeConfig, command: TransportOperatorCommand) -> Re
                     )
                     .await?;
                 }
-                let recovered = recover_terminal_advisory(&pool, &broker, advisory_sequence).await;
+                let recovered = recover_terminal_advisory_with_scope(
+                    &pool,
+                    &broker,
+                    advisory_sequence,
+                    historical_scope,
+                )
+                .await;
                 super::shutdown::close_control_pool(&pool, Duration::from_secs(2)).await;
                 serde_json::to_string_pretty(&recovered?)?
             }
@@ -129,14 +176,53 @@ mod tests {
             vec!["terminal-status", "--limit", "2", "--limit", "3"],
             vec!["recover-terminal", "--advisory", "0"],
             vec!["reset-business-attempts"],
+            vec![
+                "recover-terminal",
+                "--advisory",
+                "12",
+                "--historical-scope",
+                "*",
+            ],
+            vec![
+                "recover-terminal",
+                "--advisory",
+                "12",
+                "--historical-scope",
+                "work:unknown",
+            ],
+            vec!["recover-terminal", "--historical-scope", "events"],
+            vec![
+                "recover-terminal",
+                "--advisory",
+                "12",
+                "--historical-scope",
+                "events",
+                "--historical-scope",
+                "events",
+            ],
         ] {
             anyhow::ensure!(TransportOperatorCommand::parse(&args(&bad)).is_err());
         }
         anyhow::ensure!(
             TransportOperatorCommand::parse(&args(&["recover-terminal", "--advisory", "12"]))?
                 == TransportOperatorCommand::RecoverTerminal {
-                    advisory_sequence: 12
+                    advisory_sequence: 12,
+                    historical_scope: None
                 }
+        );
+        anyhow::ensure!(
+            TransportOperatorCommand::parse(&args(&[
+                "recover-terminal",
+                "--historical-scope",
+                "work:documents",
+                "--advisory",
+                "12"
+            ]))? == TransportOperatorCommand::RecoverTerminal {
+                advisory_sequence: 12,
+                historical_scope: Some(ConsumerScope::Work(
+                    deepref_domain::WorkloadClass::Documents
+                ))
+            }
         );
         Ok(())
     }

@@ -29,7 +29,7 @@ remain the enforcement boundary. Re-run checks after any privilege change.
 
 1. Use a new disposable database to rehearse. Install required extensions with
    the database administrator and apply the append-only migrations through
-   0188 using `cargo sqlx migrate run --source crates/app/migrations --no-dotenv`
+   0205 using `cargo sqlx migrate run --source crates/app/migrations --no-dotenv`
    with the explicit bootstrap administrator credential. This first adoption
    is an explicit administrator operation, separate from normal production
    `deepref-server migrate`. Never point a test at an existing user database.
@@ -66,15 +66,30 @@ remain the enforcement boundary. Re-run checks after any privilege change.
    explicitly grant any new application function it needs; default function
    execution is not public. Provisioning clears direct LOGIN/PUBLIC column ACLs
    as well as relation ACLs; checks detect later column-level privilege drift.
-   Repeated activation preserves narrower table/function
-   grants declared after first adoption. New maintenance-only tables present at
+   Migration 0205 repairs sequence ACL handling and protected maintenance
+   relation mutations. Checks also compare the three protected functions against
+   embedded versioned bodies/language/configuration and both installed audit
+   trigger bindings. Any source or trigger drift refuses startup.
+   Repeated activation preserves narrower table/function/sequence
+   grants declared after first adoption, except protected-family mutations. It
+   always
+   clears PUBLIC/maintenance sequence access and runtime sequence UPDATE;
+   runtime sequence USAGE/SELECT is supplied only on first adoption. It always
+   resets maintenance relation/column grants on audit, fulfilled deletions,
+   sessions, role activation and migration metadata, then restores the specified
+   retention-column and activation reads. New maintenance-only tables present at
    first adoption need explicit protected-table policy before activation; do not
    assume ordinary runtime default CRUD is appropriate for control tables.
 5. Schedule `deepref-server audit purge` using the maintenance credential. The
    command reports `remaining_eligible`; repeat later while that is true. A dry
    run is read-only. Each real call caps audit batches at 32 and batch size at
-   1000, plus one bounded session/fulfilled-proof batch. A three-second statement
-   deadline and 250ms lock deadline refuse contention; do not disable them to
+   1000, plus one bounded batch each for sessions and fulfilled proofs. A
+   three-second statement
+   deadline bounds the purge; verification and post-purge remaining diagnostics
+   each use a separate read-only transaction with a one-second statement deadline
+   and 250ms lock deadline installed before reads. All statements in each
+   operation borrow that same connection. These budgets refuse contention; do
+   not disable them to
    force a purge. Locked rows skipped by the bounded function remain eligible.
 
 Ordinary/security audit expires after six calendar months; deletion-completed

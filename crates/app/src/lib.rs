@@ -37,6 +37,7 @@ mod legacy_actors;
 pub mod mirrored_concurrency;
 mod notifications;
 pub mod object_lifecycle;
+mod operational_read;
 pub mod outbox;
 mod persistence;
 mod pmid_import;

@@ -64,7 +64,7 @@ pub struct TerminalAdvisory {
 }
 
 impl TerminalAdvisory {
-    fn decode(bytes: &[u8], expected_stream: &str) -> Result<Self> {
+    fn decode(bytes: &[u8], expected_stream: &str, retained_subject: &str) -> Result<Self> {
         anyhow::ensure!(
             bytes.len() <= 16_384,
             "terminal advisory metadata exceeds budget"
@@ -84,7 +84,121 @@ impl TerminalAdvisory {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             "terminal advisory does not match the configured finite delivery contract"
         );
+        anyhow::ensure!(
+            retained_subject
+                == format!(
+                    "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.{}.{}",
+                    value.stream, value.consumer
+                ),
+            "terminal advisory routing does not match retained metadata"
+        );
         Ok(value)
+    }
+}
+
+/// Explicit historical scope is required only if the durable consumer was
+/// deleted. It does not attest a historical live policy or grant work authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "pool", rename_all = "snake_case")]
+pub enum ConsumerScope {
+    Events,
+    Work(WorkloadClass),
+}
+impl ConsumerScope {
+    fn subject(self, prefix: &str) -> String {
+        match self {
+            Self::Events => format!("{prefix}.events"),
+            Self::Work(pool) => format!("{prefix}.jobs.{}", pool.as_str()),
+        }
+    }
+    fn from_subject(subject: &str, prefix: &str) -> Result<Self> {
+        if subject == Self::Events.subject(prefix) {
+            return Ok(Self::Events);
+        }
+        for pool in WorkloadClass::ALL {
+            if subject == Self::Work(pool).subject(prefix) {
+                return Ok(Self::Work(pool));
+            }
+        }
+        anyhow::bail!("consumer routing is outside the configured exact subject contract")
+    }
+    fn validate_retained(
+        self,
+        prefix: &str,
+        subject: &str,
+        envelope: Option<&EventEnvelope>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            subject == self.subject(prefix),
+            "retained work routing does not match the consumer scope"
+        );
+        if let Some(envelope) = envelope {
+            let routed = match self {
+                Self::Events => envelope.message_type != "deepref.work",
+                Self::Work(pool) => envelope
+                    .work()
+                    .is_ok_and(|work| work.workload_class == pool),
+            };
+            anyhow::ensure!(
+                routed,
+                "retained envelope routing does not match the consumer scope"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryContractEvidence {
+    LiveConsumer,
+    OperatorDeclaredHistorical,
+}
+
+/// Only the read-only broker boundary can construct this validated evidence.
+/// Durable insertion accepts this type, never an unchecked consumer/sequence.
+pub struct TerminalRecovery {
+    advisory_sequence: u64,
+    advisory: TerminalAdvisory,
+    envelope: Option<EventEnvelope>,
+    scope: ConsumerScope,
+    contract: RecoveryContractEvidence,
+    broker: JetStream,
+}
+impl TerminalRecovery {
+    pub fn advisory_sequence(&self) -> u64 {
+        self.advisory_sequence
+    }
+    pub fn advisory(&self) -> &TerminalAdvisory {
+        &self.advisory
+    }
+    pub fn envelope(&self) -> Option<&EventEnvelope> {
+        self.envelope.as_ref()
+    }
+    pub fn scope(&self) -> ConsumerScope {
+        self.scope
+    }
+    pub fn contract(&self) -> RecoveryContractEvidence {
+        self.contract
+    }
+    pub fn identity(&self) -> String {
+        self.broker
+            .sequence_identity(&self.advisory.consumer, self.advisory.stream_seq)
+    }
+    pub async fn dead_letter(
+        &self,
+        logical_consumer: &str,
+        deliveries: u64,
+        reason: &str,
+    ) -> Result<()> {
+        self.broker
+            .dead_letter_sequence(
+                logical_consumer,
+                self.advisory.stream_seq,
+                deliveries,
+                reason,
+            )
+            .await
     }
 }
 
@@ -319,7 +433,11 @@ impl JetStream {
                     .get_raw_message(sequence)
                     .await
                     .context("terminal advisory page incomplete; retained sequence unavailable")?;
-                let advisory = TerminalAdvisory::decode(&message.payload, &self.config.stream)?;
+                let advisory = TerminalAdvisory::decode(
+                    &message.payload,
+                    &self.config.stream,
+                    message.subject.as_str(),
+                )?;
                 entries.push(RetainedTerminalAdvisory {
                     advisory_sequence: sequence,
                     advisory,
@@ -350,18 +468,67 @@ impl JetStream {
             .get_raw_message(sequence)
             .await
             .context("terminal advisory unavailable; no recovery evidence can be inferred")?;
-        TerminalAdvisory::decode(&message.payload, &self.config.stream)
+        TerminalAdvisory::decode(
+            &message.payload,
+            &self.config.stream,
+            message.subject.as_str(),
+        )
     }
 
     pub fn sequence_identity(&self, consumer: &str, sequence: u64) -> String {
         format!("{}:{consumer}:{sequence}", self.config.stream)
     }
 
-    /// Distinguish unavailable/expired retained evidence from a malformed body.
-    pub async fn retained_sequence(&self, sequence: u64) -> Result<Option<EventEnvelope>> {
+    /// Read-only evidence validation precedes any database insertion. No
+    /// get-or-create call, fetch/ACK, publish, consumer reset or provisioning.
+    pub async fn terminal_recovery(
+        &self,
+        advisory_sequence: u64,
+        historical_scope: Option<ConsumerScope>,
+    ) -> Result<TerminalRecovery> {
+        let advisory = self.terminal_advisory(advisory_sequence).await?;
         let stream = self.context.get_stream(&self.config.stream).await?;
-        let message = stream.get_raw_message(sequence).await?;
-        Ok(EventEnvelope::decode(&message.payload).ok())
+        let (scope, contract) = match stream.consumer_info(&advisory.consumer).await {
+            Ok(info) => {
+                anyhow::ensure!(
+                    historical_scope.is_none(),
+                    "historical scope is allowed only for a missing consumer"
+                );
+                let scope = ConsumerScope::from_subject(
+                    &info.config.filter_subject,
+                    &self.config.subject_prefix,
+                )?;
+                let pool = match scope {
+                    ConsumerScope::Events => None,
+                    ConsumerScope::Work(pool) => Some(pool),
+                };
+                self.validate_consumer(&advisory.consumer, pool, &info.config)?;
+                (scope, RecoveryContractEvidence::LiveConsumer)
+            }
+            Err(error) if error.kind() == jetstream::context::ConsumerInfoErrorKind::NotFound => {
+                let scope=historical_scope.context("historical consumer is missing; inspect incident evidence and supply an explicit historical scope")?;
+                (scope, RecoveryContractEvidence::OperatorDeclaredHistorical)
+            }
+            Err(error) => return Err(error).context("read existing recovery consumer contract"),
+        };
+        let message = stream
+            .get_raw_message(advisory.stream_seq)
+            .await
+            .context("retained original work unavailable; recovery routing cannot be inferred")?;
+        let envelope = EventEnvelope::decode(&message.payload).ok();
+        scope.validate_retained(
+            &self.config.subject_prefix,
+            message.subject.as_str(),
+            envelope.as_ref(),
+        )?;
+        Ok(TerminalRecovery {
+            advisory_sequence,
+            advisory,
+            envelope,
+            scope,
+            contract,
+            broker: self.clone(),
+        })
     }
 
     /// Maintenance recovery after final-delivery failure. The caller must
@@ -420,10 +587,21 @@ impl JetStream {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             "invalid durable consumer name"
         );
+        let config = self.consumer_config(name, pool);
+        let stream = self.context.get_stream(&self.config.stream).await?;
+        let inner: PullConsumer = stream.get_or_create_consumer(name, config).await?;
+        self.validate_consumer(name, pool, &inner.cached_info().config)?;
+        Ok(Consumer {
+            inner,
+            progress_interval: self.config.ack_wait / 3,
+        })
+    }
+
+    fn consumer_config(&self, name: &str, pool: Option<WorkloadClass>) -> consumer::pull::Config {
         let subject = pool
             .map(|pool| self.work_subject(pool))
             .unwrap_or_else(|| format!("{}.events", self.config.subject_prefix));
-        let config = consumer::pull::Config {
+        consumer::pull::Config {
             durable_name: Some(name.into()),
             filter_subject: subject,
             ack_policy: consumer::AckPolicy::Explicit,
@@ -435,10 +613,16 @@ impl JetStream {
             max_expires: Duration::from_secs(1),
             num_replicas: self.config.replicas,
             ..Default::default()
-        };
-        let stream = self.context.get_stream(&self.config.stream).await?;
-        let inner: PullConsumer = stream.get_or_create_consumer(name, config.clone()).await?;
-        let actual = &inner.cached_info().config;
+        }
+    }
+
+    fn validate_consumer(
+        &self,
+        name: &str,
+        pool: Option<WorkloadClass>,
+        actual: &consumer::Config,
+    ) -> Result<()> {
+        let config = self.consumer_config(name, pool);
         anyhow::ensure!(
             actual.durable_name == config.durable_name
                 && actual.filter_subject == config.filter_subject
@@ -468,10 +652,7 @@ impl JetStream {
                 && actual.priority_groups.is_empty(),
             "JetStream consumer configuration mismatch: {name}"
         );
-        Ok(Consumer {
-            inner,
-            progress_interval: self.config.ack_wait / 3,
-        })
+        Ok(())
     }
 
     /// Successful return means broker persistence ACK, never handler delivery.
@@ -648,7 +829,11 @@ mod operator_tests {
     fn advisory_validation_refuses_foreign_contracts_and_redacts_bad_payload() -> Result<()> {
         let valid = serde_json::json!({"type":"io.nats.jetstream.advisory.v1.max_deliver",
             "timestamp":chrono::Utc::now(),"stream":"WORK","consumer":"work-documents-v1","stream_seq":7,"deliveries":5});
-        let parsed = TerminalAdvisory::decode(&serde_json::to_vec(&valid)?, "WORK")?;
+        let parsed = TerminalAdvisory::decode(
+            &serde_json::to_vec(&valid)?,
+            "WORK",
+            "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.WORK.work-documents-v1",
+        )?;
         anyhow::ensure!(parsed.stream_seq == 7);
         for (field, bad) in [
             ("stream", serde_json::json!("FOREIGN")),
@@ -659,13 +844,85 @@ mod operator_tests {
             let mut value = valid.clone();
             value[field] = bad;
             anyhow::ensure!(
-                TerminalAdvisory::decode(&serde_json::to_vec(&value)?, "WORK").is_err()
+                TerminalAdvisory::decode(
+                    &serde_json::to_vec(&value)?,
+                    "WORK",
+                    "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.WORK.work-documents-v1"
+                )
+                .is_err()
             );
         }
-        let error = TerminalAdvisory::decode(br#"{"private-token":"never-print-this"}"#, "WORK")
-            .err()
-            .context("expected malformed metadata refusal")?;
+        for subject in [
+            "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.OTHER.work-documents-v1",
+            "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.WORK.other-consumer",
+            "prefix.$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.WORK.work-documents-v1",
+        ] {
+            anyhow::ensure!(
+                TerminalAdvisory::decode(&serde_json::to_vec(&valid)?, "WORK", subject).is_err()
+            );
+        }
+        let error = TerminalAdvisory::decode(
+            br#"{"private-token":"never-print-this"}"#,
+            "WORK",
+            "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.WORK.work-documents-v1",
+        )
+        .err()
+        .context("expected malformed metadata refusal")?;
         anyhow::ensure!(!format!("{error:#}").contains("never-print-this"));
+        Ok(())
+    }
+    #[test]
+    fn retained_work_routing_is_exact_and_envelope_consistent() -> Result<()> {
+        let scope = ConsumerScope::Work(WorkloadClass::Documents);
+        scope.validate_retained("fixture.ops", "fixture.ops.jobs.documents", None)?;
+        for subject in [
+            "other.jobs.documents",
+            "fixture.ops.jobs.ai",
+            "fixture.ops.events",
+            "fixture.ops.jobs.*",
+        ] {
+            anyhow::ensure!(
+                scope
+                    .validate_retained("fixture.ops", subject, None)
+                    .is_err()
+            );
+        }
+        for subject in ["fixture.ops.jobs.*", "fixture.ops.>", "other.events"] {
+            anyhow::ensure!(ConsumerScope::from_subject(subject, "fixture.ops").is_err());
+        }
+        let work = EventEnvelope {
+            envelope_version: 1,
+            event_id: uuid::Uuid::new_v4(),
+            publication_epoch: 0,
+            message_type: "deepref.work".into(),
+            message_version: 1,
+            occurred_at: chrono::Utc::now(),
+            trace_id: None,
+            payload: serde_json::json!({"job_id":uuid::Uuid::new_v4(),"generation":1,"workload_class":"documents"}),
+        };
+        scope.validate_retained("fixture.ops", "fixture.ops.jobs.documents", Some(&work))?;
+        anyhow::ensure!(
+            ConsumerScope::Events
+                .validate_retained("fixture.ops", "fixture.ops.events", Some(&work))
+                .is_err()
+        );
+        anyhow::ensure!(
+            ConsumerScope::Work(WorkloadClass::Ai)
+                .validate_retained("fixture.ops", "fixture.ops.jobs.ai", Some(&work))
+                .is_err()
+        );
+        let mut event = work;
+        event.message_type = "typed.event".into();
+        anyhow::ensure!(
+            scope
+                .validate_retained("fixture.ops", "fixture.ops.jobs.documents", Some(&event))
+                .is_err()
+        );
+        ConsumerScope::Events.validate_retained(
+            "fixture.ops",
+            "fixture.ops.events",
+            Some(&event),
+        )?;
         Ok(())
     }
 }

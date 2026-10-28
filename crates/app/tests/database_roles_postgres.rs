@@ -148,7 +148,7 @@ async fn prove_role_contract(
         pools.push(
             PgPoolOptions::new()
                 .min_connections(0)
-                .max_connections(2)
+                .max_connections(1)
                 .after_connect(move |connection, _| {
                     Box::pin(async move {
                         if is_migration {
@@ -170,6 +170,7 @@ async fn prove_role_contract(
     }
     let (runtime, migration, maintenance) = (&pools[0], &pools[1], &pools[2]);
     verify_database_role(runtime, Purpose::Runtime).await?;
+    prove_review_corrections(admin, runtime, maintenance, names).await?;
     // Deployment checks inspect the actual canonical function contracts.
     sqlx::query("ALTER FUNCTION public.purge_retention_records(integer) RESET search_path")
         .execute(admin)
@@ -477,5 +478,365 @@ async fn prove_role_contract(
         remaining == 8,
         "one operator call must not run an unbounded purge loop"
     );
+    Ok(())
+}
+
+// These are trusted immutable migration fragments, never SQL obtained from the
+// live catalog or operator input. Display is a closed fixture-only DDL seam.
+#[derive(Clone, Copy)]
+enum ProtectedFixtureFunction {
+    Guard,
+    Purge,
+    Redaction,
+}
+impl std::fmt::Display for ProtectedFixtureFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (source, marker) = match self {
+            Self::Guard => (
+                include_str!("../migrations/0188_database_roles_and_bounded_audit_retention.sql"),
+                "CREATE OR REPLACE FUNCTION reject_admin_audit_event_changes()",
+            ),
+            Self::Purge => (
+                include_str!("../migrations/0188_database_roles_and_bounded_audit_retention.sql"),
+                "CREATE FUNCTION public.purge_retention_records(",
+            ),
+            Self::Redaction => (
+                include_str!(
+                    "../migrations/0117_authorized_account_redaction_and_address_digests.sql"
+                ),
+                "CREATE FUNCTION redact_deleted_user_audit(",
+            ),
+        };
+        let definition = source.split_once(marker).ok_or(std::fmt::Error)?.1;
+        let (definition, _) = definition.split_once("$$;").ok_or(std::fmt::Error)?;
+        write!(
+            f,
+            "CREATE OR REPLACE FUNCTION{}{}$$;",
+            marker.split_once("FUNCTION").ok_or(std::fmt::Error)?.1,
+            definition
+        )
+    }
+}
+
+async fn backend_has_stopped(admin: &PgPool, name: &FixtureLogin) -> Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock')")
+                .bind(name.as_str()).fetch_one(admin).await?;
+            if !waiting { return Ok::<(), anyhow::Error>(()); }
+            tokio::task::yield_now().await;
+        }
+    }).await.context("backend still waiting while blocker remains held")??;
+    Ok(())
+}
+
+async fn prove_review_corrections(
+    admin: &PgPool,
+    runtime: &PgPool,
+    maintenance: &PgPool,
+    names: [&FixtureLogin; 3],
+) -> Result<()> {
+    let mut failures = Vec::new();
+    prove_sequence_repairs(admin, runtime, maintenance, names, &mut failures).await?;
+    prove_protected_definitions(admin, runtime, &mut failures).await?;
+    prove_bounded_operational_reads(admin, runtime, maintenance, names, &mut failures).await?;
+    anyhow::ensure!(failures.is_empty(), "review regressions: {failures:#?}");
+    Ok(())
+}
+
+async fn prove_sequence_repairs(
+    admin: &PgPool,
+    runtime: &PgPool,
+    maintenance: &PgPool,
+    names: [&FixtureLogin; 3],
+    failures: &mut Vec<String>,
+) -> Result<()> {
+    let [runtime_name, migration_name, maintenance_name] = names;
+    // Exact relation in this UUID-isolated database, never an existing service.
+    sqlx::query("CREATE SEQUENCE public.role_sequence_fixture")
+        .execute(admin)
+        .await?;
+    // Every injected drift is restored before recording failure, so one old
+    // omission does not hide independent baseline regressions or poison cleanup.
+    for (grant, revoke, purpose, pool) in [
+        (
+            "GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO PUBLIC",
+            "REVOKE USAGE ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC",
+            Purpose::Runtime,
+            runtime,
+        ),
+        (
+            "GRANT UPDATE ON ALL SEQUENCES IN SCHEMA public TO PUBLIC",
+            "REVOKE UPDATE ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC",
+            Purpose::Runtime,
+            runtime,
+        ),
+        (
+            "GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO deepref_maintenance",
+            "REVOKE USAGE ON ALL SEQUENCES IN SCHEMA public FROM deepref_maintenance",
+            Purpose::Maintenance,
+            maintenance,
+        ),
+        (
+            "GRANT UPDATE ON ALL SEQUENCES IN SCHEMA public TO deepref_runtime",
+            "REVOKE UPDATE ON ALL SEQUENCES IN SCHEMA public FROM deepref_runtime",
+            Purpose::Runtime,
+            runtime,
+        ),
+    ] {
+        // There need not be a serial column in today's schema; an actual
+        // owner-created sequence exercises the separate ACL family explicitly.
+        sqlx::query(grant).execute(admin).await?;
+        let refused = verify_database_role(pool, purpose).await.is_err();
+        sqlx::query(revoke).execute(admin).await?;
+        if !refused {
+            failures.push(format!("sequence drift accepted: {grant}"));
+        }
+    }
+    sqlx::query("ALTER SEQUENCE public.role_sequence_fixture OWNER TO deepref_migration_owner")
+        .execute(admin)
+        .await?;
+    sqlx::query("GRANT SELECT ON SEQUENCE public.role_sequence_fixture TO deepref_runtime")
+        .execute(admin)
+        .await?;
+    sqlx::query(
+        "REVOKE USAGE,UPDATE ON SEQUENCE public.role_sequence_fixture FROM deepref_runtime",
+    )
+    .execute(admin)
+    .await?;
+    sqlx::query(
+        "GRANT USAGE,UPDATE ON SEQUENCE public.role_sequence_fixture TO PUBLIC,deepref_maintenance",
+    )
+    .execute(admin)
+    .await?;
+    sqlx::query("ALTER DEFAULT PRIVILEGES FOR ROLE deepref_migration_owner IN SCHEMA public REVOKE USAGE ON SEQUENCES FROM deepref_runtime").execute(admin).await?;
+    sqlx::query("ALTER DEFAULT PRIVILEGES FOR ROLE deepref_migration_owner GRANT UPDATE ON SEQUENCES TO PUBLIC").execute(admin).await?;
+    let defaults_refused = verify_database_role(runtime, Purpose::Runtime)
+        .await
+        .is_err();
+    if !defaults_refused {
+        failures.push("unsafe future sequence default accepted".into());
+    }
+    // Protected-family repair must apply after activation, not just initially.
+    sqlx::query("GRANT INSERT,UPDATE,DELETE ON public.user_sessions,public.database_role_contract,public._sqlx_migrations TO deepref_maintenance").execute(admin).await?;
+    provision_database_roles(
+        admin,
+        runtime_name.as_str(),
+        migration_name.as_str(),
+        maintenance_name.as_str(),
+    )
+    .await?;
+    for (pool, statement) in [
+        (runtime, "SELECT nextval('public.role_sequence_fixture')"),
+        (runtime, "SELECT setval('public.role_sequence_fixture',99)"),
+        (
+            maintenance,
+            "SELECT nextval('public.role_sequence_fixture')",
+        ),
+        (
+            maintenance,
+            "SELECT setval('public.role_sequence_fixture',99)",
+        ),
+        (maintenance, "DELETE FROM public.user_sessions WHERE false"),
+        (
+            maintenance,
+            "UPDATE public.database_role_contract SET activated_at=NULL WHERE false",
+        ),
+        (
+            maintenance,
+            "DELETE FROM public._sqlx_migrations WHERE false",
+        ),
+    ] {
+        if let Err(error) = deny(pool, statement).await {
+            failures.push(format!("repair {statement}: {error}"));
+        }
+    }
+    // Create through the actual migration identity, including SET ROLE, so the
+    // default ACL subject is the canonical owner rather than the administrator.
+    let migration_options = (*admin.connect_options())
+        .clone()
+        .username(migration_name.as_str())
+        .password("deepref-role-fixture-only");
+    let future_migration = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(migration_options)
+        .await?;
+    let mut owner = future_migration.begin().await?;
+    sqlx::query("SET LOCAL ROLE deepref_migration_owner")
+        .execute(&mut *owner)
+        .await?;
+    sqlx::query("CREATE SEQUENCE public.role_owner_future_sequence_fixture")
+        .execute(&mut *owner)
+        .await?;
+    owner.commit().await?;
+    future_migration.close().await;
+    if let Err(error) = deny(
+        runtime,
+        "SELECT nextval('public.role_owner_future_sequence_fixture')",
+    )
+    .await
+    {
+        failures.push(format!("future narrowed runtime grant: {error}"));
+    }
+    if let Err(error) = deny(
+        maintenance,
+        "SELECT setval('public.role_owner_future_sequence_fixture',99)",
+    )
+    .await
+    {
+        failures.push(format!("future unsafe default: {error}"));
+    }
+    let narrowed: bool=sqlx::query_scalar("SELECT has_sequence_privilege(session_user,'public.role_sequence_fixture','SELECT') AND NOT has_sequence_privilege(session_user,'public.role_sequence_fixture','USAGE,UPDATE')").fetch_one(runtime).await?;
+    if !narrowed {
+        failures.push("reactivation widened later SELECT-only sequence grant".into());
+    }
+    sqlx::query("ALTER DEFAULT PRIVILEGES FOR ROLE deepref_migration_owner REVOKE UPDATE ON SEQUENCES FROM PUBLIC").execute(admin).await?;
+    sqlx::query("REVOKE ALL ON SEQUENCE public.role_owner_future_sequence_fixture FROM PUBLIC,deepref_maintenance").execute(admin).await?;
+    sqlx::query(
+        "REVOKE UPDATE ON SEQUENCE public.role_owner_future_sequence_fixture FROM deepref_runtime",
+    )
+    .execute(admin)
+    .await?;
+    // Reset baseline omissions before independent function/lock checks.
+    sqlx::query(
+        "REVOKE ALL ON SEQUENCE public.role_sequence_fixture FROM PUBLIC,deepref_maintenance",
+    )
+    .execute(admin)
+    .await?;
+    sqlx::query(
+        "REVOKE USAGE,UPDATE ON SEQUENCE public.role_sequence_fixture FROM deepref_runtime",
+    )
+    .execute(admin)
+    .await?;
+    sqlx::query("REVOKE INSERT,UPDATE,DELETE ON public.user_sessions,public.database_role_contract,public._sqlx_migrations FROM deepref_maintenance").execute(admin).await?;
+    Ok(())
+}
+
+async fn prove_protected_definitions(
+    admin: &PgPool,
+    runtime: &PgPool,
+    failures: &mut Vec<String>,
+) -> Result<()> {
+    for (function, drift) in [
+        (
+            ProtectedFixtureFunction::Guard,
+            "CREATE OR REPLACE FUNCTION public.reject_admin_audit_event_changes() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $$ BEGIN RETURN NEW; END; $$",
+        ),
+        (
+            ProtectedFixtureFunction::Purge,
+            "CREATE OR REPLACE FUNCTION public.purge_retention_records(p_batch integer) RETURNS TABLE(batches integer,audit_rows bigint,fulfilled_rows bigint,session_rows bigint) LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog SET lock_timeout='250ms' AS $$ BEGIN RETURN; END; $$",
+        ),
+        (
+            ProtectedFixtureFunction::Redaction,
+            "CREATE OR REPLACE FUNCTION public.redact_deleted_user_audit(p_user_id uuid) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$ BEGIN RETURN 0; END; $$",
+        ),
+        (
+            ProtectedFixtureFunction::Redaction,
+            "CREATE OR REPLACE FUNCTION public.redact_deleted_user_audit(p_user_id uuid) RETURNS bigint LANGUAGE SQL SECURITY DEFINER SET search_path=pg_catalog AS 'SELECT 0::bigint'",
+        ),
+    ] {
+        let before: serde_json::Value = sqlx::query_scalar("SELECT jsonb_agg(jsonb_build_array(oid,proowner,prosecdef,proconfig,proacl) ORDER BY oid) FROM pg_proc WHERE oid IN('public.reject_admin_audit_event_changes()'::regprocedure,'public.purge_retention_records(integer)'::regprocedure,'public.redact_deleted_user_audit(uuid)'::regprocedure)").fetch_one(admin).await?;
+        sqlx::query(drift).execute(admin).await?;
+        let after: serde_json::Value = sqlx::query_scalar("SELECT jsonb_agg(jsonb_build_array(oid,proowner,prosecdef,proconfig,proacl) ORDER BY oid) FROM pg_proc WHERE oid IN('public.reject_admin_audit_event_changes()'::regprocedure,'public.purge_retention_records(integer)'::regprocedure,'public.redact_deleted_user_audit(uuid)'::regprocedure)").fetch_one(admin).await?;
+        let refused = verify_database_role(runtime, Purpose::Runtime)
+            .await
+            .is_err();
+        QueryBuilder::<Postgres>::new("")
+            .push(function)
+            .build()
+            .execute(admin)
+            .await?;
+        sqlx::query(
+            "ALTER FUNCTION public.redact_deleted_user_audit(uuid) SET search_path=pg_catalog",
+        )
+        .execute(admin)
+        .await?;
+        anyhow::ensure!(
+            before == after,
+            "drift test changed previously checked attributes"
+        );
+        if !refused {
+            failures.push(format!("protected source/language drift accepted: {drift}"));
+        }
+    }
+    sqlx::query("CREATE FUNCTION public.role_wrong_trigger_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$").execute(admin).await?;
+    for (drift, restore) in [
+        (
+            "ALTER TABLE public.admin_audit_events DISABLE TRIGGER admin_audit_events_append_only_trigger",
+            "ALTER TABLE public.admin_audit_events ENABLE TRIGGER admin_audit_events_append_only_trigger",
+        ),
+        (
+            "CREATE OR REPLACE TRIGGER admin_audit_events_append_only_trigger BEFORE UPDATE ON public.admin_audit_events FOR EACH ROW EXECUTE FUNCTION public.reject_admin_audit_event_changes()",
+            "CREATE OR REPLACE TRIGGER admin_audit_events_append_only_trigger BEFORE UPDATE OR DELETE ON public.admin_audit_events FOR EACH ROW EXECUTE FUNCTION public.reject_admin_audit_event_changes()",
+        ),
+        (
+            "CREATE OR REPLACE TRIGGER admin_audit_events_no_truncate_trigger BEFORE TRUNCATE ON public.admin_audit_events FOR EACH STATEMENT EXECUTE FUNCTION public.role_wrong_trigger_fixture()",
+            "CREATE OR REPLACE TRIGGER admin_audit_events_no_truncate_trigger BEFORE TRUNCATE ON public.admin_audit_events FOR EACH STATEMENT EXECUTE FUNCTION public.reject_admin_audit_event_changes()",
+        ),
+    ] {
+        sqlx::query(drift).execute(admin).await?;
+        let refused = verify_database_role(runtime, Purpose::Runtime)
+            .await
+            .is_err();
+        sqlx::query(restore).execute(admin).await?;
+        if !refused {
+            failures.push(format!("trigger drift accepted: {drift}"));
+        }
+    }
+    Ok(())
+}
+
+async fn prove_bounded_operational_reads(
+    admin: &PgPool,
+    runtime: &PgPool,
+    maintenance: &PgPool,
+    names: [&FixtureLogin; 3],
+    failures: &mut Vec<String>,
+) -> Result<()> {
+    let [runtime_name, _, maintenance_name] = names;
+    let mut blocker = admin.begin().await?;
+    sqlx::query("LOCK TABLE public.database_role_contract IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await?;
+    let refusal = verify_database_role(runtime, Purpose::Runtime).await;
+    let stopped = backend_has_stopped(admin, runtime_name).await;
+    blocker.rollback().await?;
+    let backend_refusal = refusal.as_ref().err().is_some_and(|error| {
+        error.chain().any(|cause| {
+            cause
+                .downcast_ref::<sqlx::Error>()
+                .and_then(sqlx::Error::as_database_error)
+                .and_then(|error| error.code())
+                .is_some_and(|code| code == "55P03" || code == "57014")
+        })
+    });
+    if !backend_refusal || stopped.is_err() {
+        failures.push(format!(
+            "role verification backend not bounded: {refusal:?}, {stopped:?}"
+        ));
+    }
+    verify_database_role(runtime, Purpose::Runtime).await?;
+    // This new app entry point has no old public counterpart: this is green
+    // server-cancellation coverage, not a claimed baseline behavioral red.
+    let mut blocker = admin.begin().await?;
+    sqlx::query("LOCK TABLE public.admin_audit_events IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await?;
+    let remaining = deepref_app::audit_admin::remaining_retention_eligible(maintenance).await;
+    let stopped = backend_has_stopped(admin, maintenance_name).await;
+    blocker.rollback().await?;
+    let backend_refusal = remaining
+        .as_ref()
+        .err()
+        .and_then(sqlx::Error::as_database_error)
+        .and_then(|error| error.code())
+        .is_some_and(|code| code == "55P03" || code == "57014");
+    if !backend_refusal || stopped.is_err() {
+        failures.push(format!(
+            "remaining-query backend not bounded: {remaining:?}, {stopped:?}"
+        ));
+    }
+    // The max-one maintenance pool is immediately reusable after cancellation.
+    deepref_app::audit_admin::remaining_retention_eligible(maintenance).await?;
     Ok(())
 }
