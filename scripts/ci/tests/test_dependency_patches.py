@@ -104,6 +104,13 @@ class DependencyPatchTests(unittest.TestCase):
             with self.subTest(code=code), self.assertRaisesRegex(ValueError, 'error-level'):
                 self.invoke(report(), scanner=code, scanner_stderr='failed to extract a discovered lockfile\n')
 
+    def test_whitespace_only_stderr_also_refuses_disposition(self):
+        for code in (0, 1):
+            for diagnostic in (' ', '\n', '\t', ' \t\r\n'):
+                with self.subTest(code=code, diagnostic=repr(diagnostic)):
+                    with self.assertRaisesRegex(ValueError, 'error-level'):
+                        self.invoke(report(), scanner=code, scanner_stderr=diagnostic)
+
     def test_packages_must_be_an_array_even_beside_a_valid_patch(self):
         raw = report()
         raw['results'].append({'source': {'path': str(ROOT / 'other/package-lock.json'),

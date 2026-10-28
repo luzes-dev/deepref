@@ -91,7 +91,7 @@ def scan(root: Path, run=subprocess.run, today=None) -> int:
     # OSV 2.7 can return vulnerability exit 1 even after an extraction error.
     # Error-only verbosity makes every stderr diagnostic a refusal, without
     # relying on fragile message prefixes or suppressing incomplete coverage.
-    if result.stderr.strip():
+    if result.stderr:
         raise ValueError('scanner emitted error-level diagnostics; scan is incomplete')
     remaining, patched = classify(json.loads(result.stdout), root)
     if result.returncode == 1 and not remaining and not patched:
