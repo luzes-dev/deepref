@@ -13,15 +13,14 @@ use std::time::Duration;
 
 use deepref_app::account_deletion::{
     AccountDeletionError, DeletionCancellationOutcome, DeletionRequestOutcome, FORMER_MEMBER_LABEL,
-    PII_METADATA_KEYS, REDACTED, WorkspaceOutcome, cancel_account_deletion,
-    complete_account_deletions, complete_workspace, request_account_deletion, workos_tombstone,
-    workspace_candidates,
+    PII_METADATA_KEYS, REDACTED, WorkspaceOutcome, cancel_account_deletion, complete_workspace,
+    request_account_deletion, workos_tombstone, workspace_candidates,
 };
 use deepref_app::identity::{AuditRequest, record_logout};
 use deepref_app::workspaces::MIGRATION_WORKSPACE_ID;
 use deepref_app::{map_legacy_actor, record_legacy_actor_non_identity};
 use deepref_domain::{UserId, WorkspaceId};
-use sqlx::{PgPool, Row};
+use sqlx::{Column, PgPool, Row};
 use uuid::Uuid;
 
 const AUDIT: AuditRequest<'_> = AuditRequest {
@@ -29,6 +28,29 @@ const AUDIT: AuditRequest<'_> = AuditRequest {
     session_ref: None,
 };
 const TEST_DELETION_DIGEST_KEY: &str = "deepref-test-deletion-digest-key-32-bytes";
+
+// Existing logical/provenance assertions now use the real operator path.
+// Every test owns a fresh database with no legacy writers; absent fixture
+// objects receive actual NotFound acknowledgements from a private empty store.
+async fn complete_account_deletions(
+    pool: &PgPool,
+    key: &str,
+    audit: AuditRequest<'_>,
+) -> Result<deepref_app::account_deletion::CompletionReport, AccountDeletionError> {
+    deepref_app::privacy_erasure::activate(
+        pool,
+        deepref_app::privacy_erasure::ERASURE_DRAIN_ATTESTATION,
+    )
+    .await
+    .map_err(AccountDeletionError::Erasure)?;
+    let root = deepref_app::account_export::zip::Staging::new()
+        .map_err(|error| AccountDeletionError::Erasure(error.into()))?;
+    let config = deepref_documents::StoreConfig::local(root.path())
+        .map_err(|error| AccountDeletionError::Erasure(error.into()))?;
+    let store = deepref_documents::DocumentStore::new(config, 1024 * 1024);
+    deepref_app::account_deletion::complete_account_deletions_with_store(pool, &store, key, audit)
+        .await
+}
 
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
@@ -567,7 +589,22 @@ async fn completion_erases_the_personal_data_and_keeps_history() {
         .await
         .unwrap();
     let logged = logged.expect("fulfillment logged");
-    assert_eq!(logged.columns().len(), 3);
+    let mut columns: Vec<_> = logged.columns().iter().map(Column::name).collect();
+    columns.sort_unstable();
+    assert_eq!(
+        columns,
+        [
+            "completed_at",
+            "email_hmac_sha256",
+            "logical_scrubbed_at",
+            "physical_verified_at",
+            "user_id",
+        ],
+        "only pseudonymous identifiers, keyed digests and logical/physical timestamps are retained"
+    );
+    let logical: chrono::DateTime<chrono::Utc> = logged.get("logical_scrubbed_at");
+    let physical: chrono::DateTime<chrono::Utc> = logged.get("physical_verified_at");
+    assert!(logical <= physical);
     let email_hmac_sha256: Vec<String> = logged.get("email_hmac_sha256");
     assert_eq!(
         email_hmac_sha256,

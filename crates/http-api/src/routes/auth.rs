@@ -377,6 +377,7 @@ fn deletion_error(error: AccountDeletionError) -> ApiError {
             ApiError::NotFound("resource not found".to_owned())
         }
         AccountDeletionError::Workspace(error) => ApiError::Internal(anyhow::anyhow!(error)),
+        AccountDeletionError::Erasure(error) => ApiError::Internal(error),
         AccountDeletionError::DeletionDigest => {
             ApiError::Internal(anyhow::anyhow!("account deletion digest failed"))
         }

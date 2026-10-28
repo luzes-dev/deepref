@@ -900,6 +900,18 @@ pub(crate) async fn delete_workspace_rows(
     workspace_id: WorkspaceId,
     audit: AuditRequest<'_>,
 ) -> Result<(), WorkspaceError> {
+    lock_workspace_deletion_users(tx, actor, workspace_id).await?;
+
+    delete_locked_workspace_rows(tx, actor, workspace_id, audit).await
+}
+
+/// Acquire audit-FK user locks before invitations, memberships or cross-account
+/// export rows. These KEY SHARE locks remain compatible with export readers.
+pub(crate) async fn lock_workspace_deletion_users(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    workspace_id: WorkspaceId,
+) -> Result<(), WorkspaceError> {
     // Audit inserts below carry the acting user and every affected member as
     // foreign keys. Lock those user rows before invitations so this path
     // follows finalization's user-before-invitation order and cannot hold an
@@ -922,6 +934,15 @@ pub(crate) async fn delete_workspace_rows(
             .fetch_all(&mut **tx)
             .await?;
 
+    Ok(())
+}
+
+async fn delete_locked_workspace_rows(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: UserId,
+    workspace_id: WorkspaceId,
+    audit: AuditRequest<'_>,
+) -> Result<(), WorkspaceError> {
     // Pending invitations end as revoked (audited); every invitation row is
     // then deleted with the workspace, its history living in the audit trail.
     let pending = sqlx::query(

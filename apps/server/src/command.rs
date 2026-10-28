@@ -56,6 +56,10 @@ pub enum AuditCommand {
 pub enum AccountsCommand {
     /// Completes account deletions whose 30-day window has passed.
     CompleteDeletions,
+    /// Reports pending/overdue physical erasure and unknown upload outcomes.
+    ErasureStatus,
+    /// Enables physical proofs after actual legacy writer/staging cleanup.
+    ActivateErasure { confirm_drained: String },
     /// Activates retained object references for account data exports after confirming eager-deleting binaries are drained.
     ActivateExportRetention { confirm_drained: String },
 }
@@ -504,6 +508,18 @@ impl Command {
             [command, action] if command == "accounts" && action == "complete-deletions" => {
                 Ok(Self::Accounts(AccountsCommand::CompleteDeletions))
             }
+            [command, action] if command == "accounts" && action == "erasure-status" => {
+                Ok(Self::Accounts(AccountsCommand::ErasureStatus))
+            }
+            [command, action, flag, token]
+                if command == "accounts"
+                    && action == "activate-erasure"
+                    && flag == "--confirm-drained" =>
+            {
+                Ok(Self::Accounts(AccountsCommand::ActivateErasure {
+                    confirm_drained: token.clone(),
+                }))
+            }
             [command, action, rest @ ..]
                 if command == "accounts" && action == "activate-export-retention" =>
             {
@@ -566,7 +582,7 @@ impl Command {
                 Ok(Self::Audit(AuditCommand::Query(params)))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|projection status <project-uuid>|projection rebuild <project-uuid>|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|projection status <project-uuid>|projection rebuild <project-uuid>|accounts complete-deletions|accounts erasure-status|accounts activate-erasure --confirm-drained <token>|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
             ),
         }
     }
@@ -873,6 +889,34 @@ mod tests {
                 "00000000-0000-0000-0000-000000000001",
                 "extra",
             ],
+        ] {
+            assert!(Command::parse(args.into_iter().map(String::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn parses_erasure_operator_commands() {
+        assert_eq!(
+            Command::parse(["accounts".into(), "erasure-status".into()]).unwrap(),
+            Command::Accounts(AccountsCommand::ErasureStatus)
+        );
+        assert_eq!(
+            Command::parse([
+                "accounts".into(),
+                "activate-erasure".into(),
+                "--confirm-drained".into(),
+                "operator-attestation".into()
+            ])
+            .unwrap(),
+            Command::Accounts(AccountsCommand::ActivateErasure {
+                confirm_drained: "operator-attestation".into()
+            })
+        );
+        for args in [
+            vec!["accounts", "activate-erasure"],
+            vec!["accounts", "activate-erasure", "--confirm-drained"],
+            vec!["accounts", "activate-erasure", "--other", "token"],
+            vec!["accounts", "erasure-status", "extra"],
         ] {
             assert!(Command::parse(args.into_iter().map(String::from)).is_err());
         }

@@ -99,6 +99,69 @@ async fn test_export_cancel() {
     let (_, body) = h.json(&a, Method::GET, "/me/export", "").await;
     assert_eq!(body["status"], "cancelled");
 }
+
+#[tokio::test]
+async fn cancelled_export_cannot_continue_an_already_prepared_download_with_one_connection() {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 1).await
+    else {
+        return;
+    };
+    let store = deepref_documents::DocumentStore::memory();
+    let h = Harness::with_state(pool, |state| state.with_document_store(store.clone()));
+    let user = h.sign_in("prepared-download", "download@example.org").await;
+    activate_export_retention(&h.pool, EXPORT_ATTESTATION_TOKEN)
+        .await
+        .unwrap();
+    let (_, requested) = h.json(&user, Method::POST, "/me/export", "").await;
+    let id = requested["id"].as_str().unwrap();
+    let jobs = deepref_app::claim_jobs(
+        &h.pool,
+        "http-download",
+        std::time::Duration::from_secs(3600),
+        &[],
+        1,
+    )
+    .await
+    .unwrap();
+    assert_eq!(jobs.len(), 1);
+    deepref_app::account_export::process_export_job(
+        &h.pool,
+        &store,
+        &json!({"export_id":id}),
+        &jobs[0].lease("http-download"),
+    )
+    .await
+    .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/me/export/{id}/download"))
+                .header(
+                    header::COOKIE,
+                    format!("{}={}", support::SESSION_COOKIE, user.cookie),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    // The response has acquired the real object and written its access audit,
+    // but no body has been polled. Cancellation must fence that next read.
+    assert_eq!(
+        h.send(&user, Method::DELETE, &format!("/me/export/{id}"), None)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await;
+    assert!(
+        bytes.is_err(),
+        "a prepared response cannot stream a cancelled archive"
+    );
+}
 #[tokio::test]
 async fn machine_credentials_cannot_reach_any_export_route() {
     let Some(h) = Harness::new().await else {
