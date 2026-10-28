@@ -190,13 +190,29 @@ pub async fn complete_account_deletions(
     deletion_digest: &deepref_config::DeletionDigestConfig,
 ) -> anyhow::Result<String> {
     let pool = database_pool(config).await?;
-    let report = deepref_app::account_deletion::complete_account_deletions(
+    let store = deepref_documents::DocumentStore::from_config(&config.documents)?;
+    let report = deepref_app::account_deletion::complete_account_deletions_with_store(
         &pool,
+        &store,
         deletion_digest.expose_secret(),
         deepref_app::identity::AuditRequest::default(),
     )
     .await?;
     Ok(serde_json::to_string_pretty(&report)?)
+}
+
+/// Read-only physical-erasure obligations, including overdue or unknown effects.
+pub async fn account_erasure_status(config: &ApiConfig) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    Ok(serde_json::to_string_pretty(
+        &deepref_app::privacy_erasure::report(&pool).await?,
+    )?)
+}
+
+/// The caller must actually drain older writers and remove untracked staging.
+pub async fn activate_account_erasure(config: &ApiConfig, attestation: &str) -> anyhow::Result<()> {
+    let pool = database_pool(config).await?;
+    deepref_app::privacy_erasure::activate(&pool, attestation).await
 }
 
 /// Read-only reconciliation report for AI reservations. The durable

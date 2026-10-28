@@ -21,7 +21,7 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 | Require | 143 |
 | RequireIfPresent | 1 |
 | **Total HTTP** | **181** |
-| **Non-HTTP paths** | **12** |
+| **Non-HTTP paths** | **14** |
 
 ## HTTP routes
 
@@ -213,6 +213,8 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 
 | Kind | Path | Control | Test |
 | --- | --- | --- | --- |
+| Operator CLI | accounts complete-deletions and erasure-status | Trusted deployment operator with database/storage credentials. Thirty-day request eligibility is rechecked under locks. Physical fulfillment waits for actual storage and staging acknowledgements; unknown upload outcomes stay pending. No HTTP tenant principal is inferred. | privacy_erasure_postgres::full_thirty_day_cancellation_precedes_any_object_retirement |
+| Operator CLI | accounts activate-erasure --confirm-drained <token> | Default-false physical proof gate. Exact operator attestation requires actual older-writer drain and untracked staging cleanup; an elapsed deadline is never cleanup evidence. Restrict shell/database access to trusted operators. | deepref-server command::tests::parses_erasure_operator_commands |
 | Operator CLI | projection status <project_uuid> | Trusted deployment operator with database credentials; no tenant HTTP principal is inferred. Scoped UUID reads projection metadata only; no mutations or tenant authority inferred. Restrict shell/database access to operators. | deepref-server command::tests::parses_projection_commands |
 | Operator CLI | projection rebuild <project_uuid> | Trusted deployment operator with database credentials; scoped UUID starts a fenced repair generation through the durable outbox. Restrict shell/database access to operators; ordinary user HTTP requests use central PDP/PEP. | deepref-server command::tests::parses_projection_commands |
 | SSE stream | Assistant run events (`GET /projects/{project_id}/assistant/runs/{run_id}/events`) | PEP requires `project:view` on connect. A resume is a new request (`after_seq`), so it is authorized again. An open stream re-checks `project:view` every `stream_recheck` (20 s by default) and ends when denied. The run is loaded with its `project_id` and a run of another project is a 404. | authz_sse::revoked_member_stream_closes_and_resume_is_refused |

@@ -455,6 +455,33 @@ struct PreparedArchive<'a> {
     retained_until: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy)]
+enum UploadEvidence {
+    NotStarted,
+    Dispatched,
+    Acknowledged,
+}
+#[derive(Clone)]
+struct UploadObservation(tokio::sync::watch::Sender<UploadEvidence>);
+impl UploadObservation {
+    fn new() -> Self {
+        Self(tokio::sync::watch::channel(UploadEvidence::NotStarted).0)
+    }
+    fn dispatched(&self) {
+        self.0.send_replace(UploadEvidence::Dispatched);
+    }
+    fn acknowledged(&self) {
+        self.0.send_replace(UploadEvidence::Acknowledged);
+    }
+    fn final_state(&self) -> &'static str {
+        match *self.0.borrow() {
+            UploadEvidence::NotStarted => "not_started",
+            UploadEvidence::Dispatched => "unresolved",
+            UploadEvidence::Acknowledged => "acknowledged",
+        }
+    }
+}
+
 pub async fn process_export_job(
     pool: &PgPool,
     store: &DocumentStore,
@@ -474,19 +501,72 @@ pub async fn process_export_job(
     let work_store = store.clone();
     let work_attempt = attempt.clone();
     let work_lease = lease.clone();
-    let result = generation::run(
+    let work_upload = UploadObservation::new();
+    let receipt_upload = work_upload.clone();
+    let receipt_pool = pool.clone();
+    let receipt_attempt = attempt.id;
+    let receipt_owner = lease.owner.clone();
+    let receipt_seq = lease.claim_seq;
+    let result = generation::run_staged(
+        attempt.id,
         std::time::Duration::from_secs(600),
-        move |budget| async move {
-            build_attempt(&work_pool, &work_store, &work_attempt, &work_lease, &budget).await
+        move |budget, staging| async move {
+            // Persist the maintained tempfile's actual private directory before
+            // any scientific writes. No transaction/connection is held here.
+            let directory = staging.to_str().context("non-UTF8 staging directory")?;
+            let recorded=sqlx::query("UPDATE account_export_writers SET staging_directory=$2 WHERE attempt_id=$1 AND writer_owner=$3 AND claim_seq=$4 AND stopped_at IS NULL")
+                .bind(work_attempt.id).bind(directory).bind(&work_lease.owner).bind(work_lease.claim_seq)
+                .execute(&work_pool).await?.rows_affected();
+            ensure!(
+                recorded == 1,
+                "export writer directory journal no longer current"
+            );
+            build_attempt(
+                &work_pool,
+                &work_store,
+                &work_attempt,
+                &work_lease,
+                &budget,
+                &staging,
+                &work_upload,
+            )
+            .await
         },
-    )
-    .await;
+        move || async move {
+            let acknowledged=sqlx::query("UPDATE account_export_writers SET stopped_at=clock_timestamp(),upload_outcome=$4,upload_acknowledged_at=CASE WHEN $4='acknowledged' THEN clock_timestamp() END WHERE attempt_id=$1 AND writer_owner=$2 AND claim_seq=$3 AND stopped_at IS NULL")
+                .bind(receipt_attempt).bind(receipt_owner).bind(receipt_seq).bind(receipt_upload.final_state()).execute(&receipt_pool).await?.rows_affected();
+            ensure!(
+                acknowledged == 1,
+                "export writer cleanup acknowledgement was not recorded"
+            );
+            Ok(())
+        },
+    );
+    tokio::pin!(result);
+    let result = loop {
+        tokio::select! {
+            result=&mut result=>break result,
+            _=tokio::time::sleep(std::time::Duration::from_secs(1))=>{
+                let check=sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM account_data_exports WHERE id=$1 AND status='processing' AND attempt_id=$2 AND claim_owner=$3 AND claim_seq=$4)")
+                    .bind(attempt.export).bind(attempt.id).bind(&lease.owner).bind(lease.claim_seq).fetch_one(pool);
+                tokio::select! {
+                    finished=&mut result=>break finished,
+                    current=check=>if !current? {return Ok(())},
+                }
+            }
+        }
+    };
     match result {
         Ok(()) => Ok(()),
         Err(error) => {
             // Persist a closed category, never an upstream response or source
             // value which might contain credentials. A newer attempt is untouched.
-            fail_attempt(pool, &attempt, lease, "export_generation_failed").await?;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                fail_attempt(pool, &attempt, lease, "export_generation_failed"),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("export failure persistence is pending"))??;
             Err(error)
         }
     }
@@ -531,6 +611,8 @@ async fn start_attempt(
     }
     sqlx::query("UPDATE account_data_exports SET status='processing',attempt_id=$2,claim_owner=$3,claim_seq=$4,processing_started_at=now(),captured_workspaces='{}' WHERE id=$1")
         .bind(attempt.export).bind(attempt.id).bind(&lease.owner).bind(lease.claim_seq).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO account_export_writers(attempt_id,user_id,writer_owner,claim_seq,export_id,archive_key) VALUES($1,$2,$3,$4,$5,$6)")
+        .bind(attempt.id).bind(user.as_uuid()).bind(&lease.owner).bind(lease.claim_seq).bind(attempt.export).bind(attempt.key.as_str()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Some(attempt))
 }
@@ -541,11 +623,12 @@ async fn build_attempt(
     attempt: &Attempt,
     lease: &JobLease,
     budget: &generation::GenerationBudget,
+    staging: &std::path::Path,
+    upload: &UploadObservation,
 ) -> anyhow::Result<()> {
     budget.check()?;
-    let staging = zip::Staging::new()?;
-    let (inventory, until) = prepare_attempt(pool, attempt, lease, staging.path(), budget).await?;
-    let summary = zip::package(store, &inventory, staging.path(), attempt.user, budget).await?;
+    let (inventory, until) = prepare_attempt(pool, attempt, lease, staging, budget).await?;
+    let summary = zip::package(store, &inventory, staging, attempt.user, budget).await?;
     budget.check()?;
     publish_attempt(
         pool,
@@ -558,8 +641,45 @@ async fn build_attempt(
             retained_until: until,
         },
         budget,
+        upload,
     )
     .await
+}
+
+/// Pin the scope durably before any scientific staging writes. The RR
+/// collector rechecks this entire scope and fails on lost ownership. This
+/// journal survives rollback, a new attempt on the same request and a crash.
+async fn capture_attempt_scope(
+    pool: &PgPool,
+    attempt: &Attempt,
+    lease: &JobLease,
+) -> anyhow::Result<Vec<Uuid>> {
+    let mut tx = pool.begin().await?;
+    ensure!(
+        lock_scope(&mut tx, attempt.user, &[]).await?,
+        "account inactive"
+    );
+    let scope:Vec<Uuid>=sqlx::query_scalar("SELECT workspace_id FROM workspace_memberships WHERE user_id=$1 AND role='owner' AND status='active' ORDER BY workspace_id LIMIT $2")
+        .bind(attempt.user.as_uuid()).bind(i64::try_from(collector::MAX_WORKSPACES+1)?).fetch_all(&mut *tx).await?;
+    ensure!(
+        scope.len() <= collector::MAX_WORKSPACES,
+        "workspace budget exceeded"
+    );
+    ensure!(
+        lock_scope(&mut tx, attempt.user, &scope).await?,
+        "ownership lost"
+    );
+    fence_attempt(&mut tx, attempt, lease).await?;
+    let changed=sqlx::query("UPDATE account_export_writers SET captured_workspaces=$2 WHERE attempt_id=$1 AND writer_owner=$3 AND claim_seq=$4 AND stopped_at IS NULL")
+        .bind(attempt.id).bind(&scope).bind(&lease.owner).bind(lease.claim_seq).execute(&mut *tx).await?.rows_affected();
+    ensure!(changed == 1, "export writer journal no longer current");
+    sqlx::query("UPDATE account_data_exports SET captured_workspaces=$2 WHERE id=$1")
+        .bind(attempt.export)
+        .bind(&scope)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(scope)
 }
 
 async fn prepare_attempt(
@@ -576,6 +696,7 @@ async fn prepare_attempt(
         &attempt.key,
     )
     .await?;
+    let scope = capture_attempt_scope(pool, attempt, lease).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         .execute(&mut *tx)
@@ -584,18 +705,8 @@ async fn prepare_attempt(
         .execute(&mut *tx)
         .await?;
     ensure!(
-        lock_scope(&mut tx, attempt.user, &[]).await?,
-        "account inactive"
-    );
-    let scope: Vec<Uuid> = sqlx::query_scalar("SELECT workspace_id FROM workspace_memberships WHERE user_id=$1 AND role='owner' AND status='active' ORDER BY workspace_id LIMIT $2")
-        .bind(attempt.user.as_uuid()).bind(i64::try_from(collector::MAX_WORKSPACES + 1)?).fetch_all(&mut *tx).await?;
-    ensure!(
-        scope.len() <= collector::MAX_WORKSPACES,
-        "workspace budget exceeded"
-    );
-    ensure!(
         lock_scope(&mut tx, attempt.user, &scope).await?,
-        "ownership lost"
+        "captured ownership lost"
     );
     fence_attempt(&mut tx, attempt, lease).await?;
     let inventory = collector::collect(&mut tx, attempt.user, scope, staging, budget).await?;
@@ -634,6 +745,30 @@ async fn prepare_attempt(
     Ok((inventory, until))
 }
 
+/// Durable intent precedes external effects, including an ambiguous failed
+/// multipart completion. A process crash leaves this state unresolved.
+async fn record_upload_intent(
+    pool: &PgPool,
+    attempt: &Attempt,
+    lease: &JobLease,
+    scope: &[Uuid],
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let authorized = lock_scope(&mut tx, attempt.user, scope).await?;
+    fence_attempt(&mut tx, attempt, lease).await?;
+    if !authorized {
+        terminalize(&mut tx, attempt.export, "failed", Some("ownership_lost")).await?;
+        tx.commit().await?;
+        return Ok(false);
+    }
+    object_lifecycle::lock_object_for_upload(&mut tx, &attempt.key).await?;
+    let changed=sqlx::query("UPDATE account_export_writers SET upload_outcome='dispatched',upload_intent_at=clock_timestamp() WHERE attempt_id=$1 AND writer_owner=$2 AND claim_seq=$3 AND stopped_at IS NULL AND upload_outcome='not_started'")
+        .bind(attempt.id).bind(&lease.owner).bind(lease.claim_seq).execute(&mut *tx).await?.rows_affected();
+    ensure!(changed == 1, "export upload intent no longer current");
+    tx.commit().await?;
+    Ok(true)
+}
+
 async fn publish_attempt(
     pool: &PgPool,
     store: &DocumentStore,
@@ -641,6 +776,7 @@ async fn publish_attempt(
     lease: &JobLease,
     archive: PreparedArchive<'_>,
     budget: &generation::GenerationBudget,
+    upload: &UploadObservation,
 ) -> anyhow::Result<()> {
     budget.check()?;
     let PreparedArchive {
@@ -648,6 +784,9 @@ async fn publish_attempt(
         summary,
         retained_until: until,
     } = archive;
+    if !record_upload_intent(pool, attempt, lease, &inventory.workspaces).await? {
+        return Ok(());
+    }
     let mut tx = pool.begin().await?;
     let authorized = lock_scope(&mut tx, attempt.user, &inventory.workspaces).await?;
     fence_attempt(&mut tx, attempt, lease).await?;
@@ -659,10 +798,14 @@ async fn publish_attempt(
     object_lifecycle::lock_object_for_upload(&mut tx, &attempt.key).await?;
     let file = tokio::fs::File::open(&summary.path).await?;
     let stream = zip::file_stream(file);
+    upload.dispatched();
     let stored = store
         .for_upload(attempt.key.clone())
         .put_stream(stream)
         .await?;
+    // Record actual adapter success locally even if a later lease/commit check
+    // fails. Cleanup receipt persists it after the real writer stops.
+    upload.acknowledged();
     budget.check()?;
     ensure!(
         stored.byte_size as u64 == summary.total_bytes && stored.sha256 == summary.sha256_hex,
@@ -682,8 +825,12 @@ async fn publish_attempt(
         until,
     )
     .await?;
-    sqlx::query("UPDATE account_data_exports SET status='completed',completed_at=now(),storage_key=$2,size_bytes=$3,sha256=$4,scope_manifest=$5,claim_owner=NULL,claim_seq=NULL WHERE id=$1")
-        .bind(attempt.export).bind(attempt.key.as_str()).bind(i64::try_from(summary.total_bytes)?).bind(&summary.sha256_hex).bind(&summary.manifest).execute(&mut *tx).await?;
+    let completed=sqlx::query("UPDATE account_data_exports SET status='completed',completed_at=now(),storage_key=$2,size_bytes=$3,sha256=$4,scope_manifest=$5,claim_owner=NULL,claim_seq=NULL WHERE id=$1 AND clock_timestamp()<processing_started_at+interval '10 minutes'")
+        .bind(attempt.export).bind(attempt.key.as_str()).bind(i64::try_from(summary.total_bytes)?).bind(&summary.sha256_hex).bind(&summary.manifest).execute(&mut *tx).await?.rows_affected();
+    ensure!(
+        completed == 1,
+        "export generation deadline exceeded before publication"
+    );
     tx.commit().await?;
     Ok(())
 }
@@ -791,7 +938,57 @@ pub async fn authorize_download(
     Ok(record)
 }
 
-async fn release_export_references(
+/// Hold live scope, exact artifact and registry fences through one actual
+/// object read. Callers release this before acquiring another pool connection.
+/// An already authorized response must stop on cancellation/retirement rather
+/// than use its original authorization for the remainder of five minutes.
+pub async fn lock_download_read(
+    pool: &PgPool,
+    user: UserId,
+    id: Uuid,
+    storage_key: &str,
+) -> Result<Transaction<'static, Postgres>, ExportError> {
+    let mut tx = pool.begin().await?;
+    let scope: Option<Vec<Uuid>> = sqlx::query_scalar(
+        "SELECT captured_workspaces FROM account_data_exports WHERE id=$1 AND user_id=$2",
+    )
+    .bind(id)
+    .bind(user.as_uuid())
+    .fetch_optional(&mut *tx)
+    .await?;
+    let scope = scope.ok_or(ExportError::NotFound)?;
+    if !lock_scope(&mut tx, user, &scope).await? {
+        return Err(ExportError::NotFound);
+    }
+    let current: Option<bool> = sqlx::query_scalar(
+        "SELECT status='completed' AND storage_key=$3 AND captured_workspaces=$4
+           AND retained_until>clock_timestamp()
+         FROM account_data_exports WHERE id=$1 AND user_id=$2 FOR SHARE",
+    )
+    .bind(id)
+    .bind(user.as_uuid())
+    .bind(storage_key)
+    .bind(&scope)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current != Some(true) {
+        return Err(ExportError::NotFound);
+    }
+    let live: Option<bool> = sqlx::query_scalar(
+        "SELECT retired_at IS NULL AND deleted_at IS NULL
+           AND (privacy_due_at IS NULL OR privacy_due_at>clock_timestamp())
+         FROM object_lifecycle WHERE storage_key=$1 FOR SHARE",
+    )
+    .bind(storage_key)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if live != Some(true) {
+        return Err(ExportError::NotFound);
+    }
+    Ok(tx)
+}
+
+pub(crate) async fn release_export_references(
     tx: &mut Transaction<'_, Postgres>,
     export: Uuid,
 ) -> anyhow::Result<()> {
@@ -814,8 +1011,19 @@ pub(crate) async fn release_account_exports(
 ) -> anyhow::Result<()> {
     let exports: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM account_data_exports WHERE user_id=$1 AND status IN ('requested','processing','completed') ORDER BY id FOR UPDATE")
         .bind(user.as_uuid()).fetch_all(&mut **tx).await?;
-    sqlx::query("SELECT storage_key FROM object_lifecycle WHERE storage_key IN (SELECT r.storage_key FROM object_retained_references r JOIN account_data_exports e ON e.attempt_id=r.reference_id WHERE e.id=ANY($1)) ORDER BY storage_key FOR UPDATE")
-        .bind(&exports).execute(&mut **tx).await?;
+    // Lock the whole union once: account artifacts sort before retained
+    // project sources, and old attempts survive a request's latest-pointer move.
+    sqlx::query("SELECT storage_key FROM object_lifecycle WHERE user_id=$2 OR storage_key IN (SELECT storage_key FROM object_retained_references WHERE reference_id IN(SELECT attempt_id FROM account_data_exports WHERE id=ANY($1)) OR reference_id IN(SELECT attempt_id FROM account_export_writers WHERE user_id=$2)) ORDER BY storage_key FOR UPDATE")
+        .bind(&exports).bind(user.as_uuid()).execute(&mut **tx).await?;
+    let old_attempts: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT attempt_id FROM account_export_writers WHERE user_id=$1 ORDER BY attempt_id",
+    )
+    .bind(user.as_uuid())
+    .fetch_all(&mut **tx)
+    .await?;
+    for attempt in old_attempts {
+        object_lifecycle::release_object_reference(tx, attempt).await?;
+    }
     for export in exports {
         release_export_references(tx, export).await?;
         sqlx::query("UPDATE account_data_exports SET status='cancelled',cancelled_at=now(),claim_owner=NULL,claim_seq=NULL WHERE id=$1")
@@ -826,3 +1034,14 @@ pub(crate) async fn release_account_exports(
 
 #[cfg(test)]
 mod tests;
+
+/// Workspace erasure already holds the workspace then export row locks.
+pub(crate) async fn cancel_for_erasure(
+    tx: &mut Transaction<'_, Postgres>,
+    export: Uuid,
+) -> anyhow::Result<()> {
+    release_export_references(tx, export).await?;
+    sqlx::query("UPDATE account_data_exports SET status='cancelled',cancelled_at=coalesce(cancelled_at,now()),claim_owner=NULL,claim_seq=NULL WHERE id=$1 AND status IN ('requested','processing','completed')")
+        .bind(export).execute(&mut **tx).await?;
+    Ok(())
+}

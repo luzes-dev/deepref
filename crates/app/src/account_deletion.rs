@@ -13,10 +13,11 @@
 //! * deletes the session rows (they hold the sealed provider payload),
 //!   scrubs invitation addresses from persisted digests, redacts native
 //!   legacy-decision sources, and redacts the PII in audit metadata;
-//! * writes the audit rows and the deletion-proof `account.deletion_completed`
-//!   row, logs the fulfillment in `fulfilled_account_deletions` (user id, time,
-//!   and normalized-address HMAC-SHA256 digests, never plaintext email), and moves
-//!   the request to its terminal `completed` state.
+//! * keeps the request `completing` while actual object deletion or writer-owned
+//!   staging cleanup remains unacknowledged; only then writes the deletion-proof
+//!   `account.deletion_completed` row and `fulfilled_account_deletions` record
+//!   (user id, time and normalized-address HMAC-SHA256 digests, never plaintext
+//!   email), and moves the request to its terminal `completed` state.
 //!
 //! # State machine and locking
 //!
@@ -49,8 +50,6 @@
 //! from migration 0111, which covers N-1 SQL and restores independently of the
 //! five-year `fulfilled_account_deletions` log.
 
-use std::collections::BTreeSet;
-
 use deepref_domain::{MembershipStatus, ProjectId, UserId, WorkspaceId, WorkspaceRole};
 use serde::Serialize;
 use serde_json::json;
@@ -58,13 +57,12 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::deletion_digest::hmac_normalized_email;
 use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
 use crate::project_audit::record_project_deleted;
 use crate::project_deletion::delete_project_in_transaction;
 use crate::workspaces::{
     MIGRATION_WORKSPACE_ID, WorkspaceError, delete_workspace_rows, lock_workspace,
-    normalize_invitation_emails, remove_membership_in_transaction, scrub_user_invitations,
+    lock_workspace_deletion_users, remove_membership_in_transaction, scrub_user_invitations,
 };
 
 /// What the anonymized account keeps showing where a name is due
@@ -109,6 +107,8 @@ pub enum AccountDeletionError {
     AlreadyCompleted,
     #[error("could not compute the account's deletion-address digest")]
     DeletionDigest,
+    #[error("physical account erasure failed")]
+    Erasure(#[source] anyhow::Error),
 }
 
 /// The state one deletion request is in (migration 0111).
@@ -322,17 +322,26 @@ pub struct CompletionReport {
     /// Workspaces kept but left without an owner, for the operator recovery
     /// flow (03a leaves them ownerless rather than blocking the removal).
     pub workspaces_left_ownerless: Vec<Uuid>,
+    /// Accounts scrubbed logically for the first time during this run.
+    pub logically_anonymized: u64,
+    /// Successful delete or NotFound storage acknowledgements in this run.
+    pub physical_objects_acknowledged: u64,
+    /// Requests still waiting for actual object/staging acknowledgements.
+    pub physically_pending: u64,
+    /// Logical completion never proves object-store or staging removal.
+    pub physical_erasure: crate::privacy_erasure::ErasureReport,
 }
 
 /// Completes every deletion request that has aged out its 30 days, and replays
 /// the cleanup of every already-fulfilled deletion (a restore can bring rows
 /// back). Safe to interrupt and rerun: the request is claimed before any
-/// destructive work, the fulfillment log is written in the same transaction as
-/// the anonymization, and every step before it is idempotent.
+/// destructive work. Logical anonymization commits before physical cleanup;
+/// the fulfillment log requires durable storage and staging acknowledgements.
+/// Every step is idempotent.
 ///
-/// The audit rows are written only when a deletion is fulfilled for the first
-/// time; a re-application of the same logged deletion is a restore remedy, not
-/// a second deletion (docs/security.md, "Restore step").
+/// Deactivation is audited at first logical scrub; completion is audited only
+/// after physical acknowledgements. A re-application of a logged deletion is a
+/// restore remedy, not a second deletion (docs/security.md, "Restore step").
 pub async fn complete_account_deletions(
     pool: &PgPool,
     deletion_digest_key: &str,
@@ -344,6 +353,7 @@ pub async fn complete_account_deletions(
             // Cancelled between the scan and the claim: nothing is destroyed.
             continue;
         }
+        crate::privacy_erasure::begin_account(pool, account.user_id, deletion_digest_key).await?;
         let mut changed = false;
         for workspace in workspace_candidates(pool, account.user_id).await? {
             match complete_workspace(pool, account.user_id, workspace, audit).await? {
@@ -362,14 +372,49 @@ pub async fn complete_account_deletions(
             }
         }
         let finalized = finalize_account(pool, &account, deletion_digest_key, audit).await?;
+        if finalized.first_logical {
+            report.logically_anonymized += 1;
+        }
+        if finalized.physical_pending {
+            report.physically_pending += 1;
+        }
         if finalized.newly_fulfilled {
             report.completed += 1;
-        } else if changed || finalized.changed {
+        } else if account.logged && (changed || finalized.changed) {
             // A replay that found something to undo. One that found nothing
             // changes nothing and is not counted.
             report.re_applied += 1;
         }
     }
+    report.physical_erasure = crate::privacy_erasure::report(pool).await?;
+    Ok(report)
+}
+
+/// Operator path: due logical work, a finite immediate storage batch, then
+/// proof publication for accounts whose real objects and writers acknowledged
+/// removal. A partial/failed storage batch remains visible and retryable.
+pub async fn complete_account_deletions_with_store(
+    pool: &PgPool,
+    store: &deepref_documents::DocumentStore,
+    deletion_digest_key: &str,
+    audit: AuditRequest<'_>,
+) -> Result<CompletionReport, AccountDeletionError> {
+    let mut report = complete_account_deletions(pool, deletion_digest_key, audit).await?;
+    report.physical_objects_acknowledged =
+        crate::object_lifecycle::cleanup_due_privacy_objects(pool, store, 1000)
+            .await
+            .map_err(AccountDeletionError::Erasure)?;
+    let after = complete_account_deletions(pool, deletion_digest_key, audit).await?;
+    report.completed += after.completed;
+    report.re_applied += after.re_applied;
+    report.logically_anonymized += after.logically_anonymized;
+    report.workspaces_deleted += after.workspaces_deleted;
+    report.projects_deleted += after.projects_deleted;
+    report
+        .workspaces_left_ownerless
+        .extend(after.workspaces_left_ownerless);
+    report.physically_pending = after.physically_pending;
+    report.physical_erasure = after.physical_erasure;
     Ok(report)
 }
 
@@ -539,6 +584,20 @@ pub async fn complete_workspace(
         *role == WorkspaceRole::Owner && *status == MembershipStatus::Active
     }) && other_active == 0;
     if solely_owned && workspace != MIGRATION_WORKSPACE_ID {
+        // Preserve workspace -> sorted audit-FK users -> export rows. Taking an
+        // actor UPDATE lock before the workspace would invert membership writers;
+        // taking other users after export rows could invert their finalization.
+        lock_workspace_deletion_users(&mut tx, actor, workspace).await?;
+        let due:chrono::DateTime<chrono::Utc>=sqlx::query_scalar("SELECT coalesce((SELECT min(requested_at)+interval '30 days' FROM account_deletion_requests WHERE user_id=$1 AND state IN ('completing','completed')),clock_timestamp())")
+            .bind(actor.as_uuid()).fetch_one(&mut *tx).await?;
+        let erasure_keys = crate::privacy_erasure::release_workspace_exports(
+            &mut tx,
+            actor.as_uuid(),
+            workspace.as_uuid(),
+            due,
+        )
+        .await
+        .map_err(AccountDeletionError::Erasure)?;
         let mut projects = 0;
         let project_ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM projects WHERE workspace_id = $1 ORDER BY created_at, id",
@@ -554,6 +613,9 @@ pub async fn complete_workspace(
             }
         }
         delete_workspace_rows(&mut tx, actor, workspace, audit).await?;
+        crate::privacy_erasure::retire_due(&mut tx, &erasure_keys)
+            .await
+            .map_err(AccountDeletionError::Erasure)?;
         tx.commit().await?;
         return Ok(WorkspaceOutcome::Deleted { projects });
     }
@@ -603,8 +665,10 @@ async fn membership_of(
 }
 
 /// What [`finalize_account`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct FinalizeOutcome {
+    first_logical: bool,
+    physical_pending: bool,
     /// This run fulfilled the deletion for the first time (audit rows written).
     newly_fulfilled: bool,
     /// This run found something to undo and changed it (a replay).
@@ -613,10 +677,10 @@ struct FinalizeOutcome {
 
 /// Erases and deactivates one account in one transaction: the PII goes (the
 /// WorkOS link becomes a tombstone), the sessions go, the invitation addresses
-/// are scrubbed, the PII in audit metadata is redacted, the request reaches its
-/// terminal `completed` state and the fulfillment is logged. Returns whether
-/// this run fulfilled the deletion for the first time; only then are the audit
-/// rows written.
+/// are scrubbed and the PII in audit metadata is redacted. The request reaches
+/// terminal `completed` and fulfillment is logged only after every physical
+/// target and writer cleanup is acknowledged. Logical and physical outcomes
+/// are reported separately.
 async fn finalize_account(
     pool: &PgPool,
     account: &DueAccount,
@@ -626,81 +690,54 @@ async fn finalize_account(
     let user = account.user_id;
     let mut tx = pool.begin().await?;
     // Lock order: the request row first, then the user row.
-    if let Some(request_id) = account.request_id {
-        let _request: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM account_deletion_requests WHERE id = $1 FOR UPDATE")
-                .bind(request_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-    }
-    let row =
-        sqlx::query("SELECT id, primary_email, verified_email FROM users WHERE id = $1 FOR UPDATE")
+    let request_state: Option<String> = if let Some(request_id) = account.request_id {
+        sqlx::query_scalar("SELECT state FROM account_deletion_requests WHERE id = $1 FOR UPDATE")
+            .bind(request_id)
+            .fetch_optional(&mut *tx)
+            .await?
+    } else {
+        None
+    };
+    let user_exists =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id = $1 FOR UPDATE")
             .bind(user.as_uuid())
             .fetch_optional(&mut *tx)
             .await?;
-    let Some(row) = row else {
+    if user_exists.is_none() {
         return Err(AccountDeletionError::UnknownUser);
-    };
-    let addresses = {
-        let mut addresses = Vec::new();
-        addresses.push(row.try_get::<String, _>("primary_email")?);
-        if let Some(verified) = row.try_get::<Option<String>, _>("verified_email")? {
-            addresses.push(verified);
-        }
-        addresses
-    };
-    // A replay uses the first completion's keyed digests and timestamp, not
-    // whichever profile is present after a restore. The HMAC key remains in
-    // process memory; only HMAC outputs are persisted.
-    let stored_email_hmacs: Option<(Vec<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT email_hmac_sha256, completed_at
-             FROM fulfilled_account_deletions WHERE user_id = $1",
+    }
+    // User lock is held throughout scrub, targeting and proof gate.
+    let prior_proof: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM fulfilled_account_deletions WHERE user_id=$1)",
     )
     .bind(user.as_uuid())
-    .fetch_optional(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
-    let (newly_fulfilled, email_hmac_sha256, completed_at) =
-        if let Some((digests, completed_at)) = stored_email_hmacs {
-            (false, digests, completed_at)
-        } else {
-            let normalized_addresses = normalize_invitation_emails(&addresses);
-            let digests: Vec<String> = normalized_addresses
-                .iter()
-                .map(|email| {
-                    hmac_normalized_email(email, deletion_digest_key.as_bytes())
-                        .map_err(|_| AccountDeletionError::DeletionDigest)
-                })
-                .collect::<Result<BTreeSet<_>, _>>()?
-                .into_iter()
-                .collect();
-            let inserted: Option<(Vec<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-                "INSERT INTO fulfilled_account_deletions (user_id, email_hmac_sha256)
-                     VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING
-                     RETURNING email_hmac_sha256, completed_at",
-            )
-            .bind(user.as_uuid())
-            .bind(&digests)
-            .fetch_optional(&mut *tx)
-            .await?;
-            match inserted {
-                Some((stored, completed_at)) => (true, stored, completed_at),
-                None => {
-                    let (stored, completed_at): (Vec<String>, chrono::DateTime<chrono::Utc>) =
-                        sqlx::query_as(
-                            "SELECT email_hmac_sha256, completed_at
-                         FROM fulfilled_account_deletions WHERE user_id = $1",
-                        )
-                        .bind(user.as_uuid())
-                        .fetch_one(&mut *tx)
-                        .await?;
-                    (false, stored, completed_at)
-                }
-            }
-        };
+    let progress:Option<(Vec<String>,chrono::DateTime<chrono::Utc>,bool)>=sqlx::query_as(
+        "SELECT email_hmac_sha256,coalesce(logical_scrubbed_at,clock_timestamp()),logical_scrubbed_at IS NULL FROM account_erasure_progress WHERE user_id=$1 FOR UPDATE")
+        .bind(user.as_uuid()).fetch_optional(&mut *tx).await?;
+    let Some((email_hmac_sha256, invitation_cutoff, first_logical)) = progress else {
+        // Another completer may have fulfilled and removed the shared progress
+        // after this run's begin_account. Recheck its committed terminal state
+        // under the request/user locks; absence alone is never a physical ACK.
+        if prior_proof
+            && (account.request_id.is_none() || request_state.as_deref() == Some("completed"))
+        {
+            tx.commit().await?;
+            return Ok(FinalizeOutcome::default());
+        }
+        return Err(sqlx::Error::RowNotFound.into());
+    };
 
     crate::account_export::release_account_exports(&mut tx, user)
         .await
-        .map_err(|error| sqlx::Error::Protocol(format!("export release failed: {error}")))?;
+        .map_err(AccountDeletionError::Erasure)?;
+
+    let physical_due:chrono::DateTime<chrono::Utc>=sqlx::query_scalar("SELECT coalesce((SELECT min(requested_at)+interval '30 days' FROM account_deletion_requests WHERE user_id=$1 AND state IN ('completing','completed')),$2)")
+        .bind(user.as_uuid()).bind(invitation_cutoff).fetch_one(&mut *tx).await?;
+    crate::privacy_erasure::target_account(&mut tx, user.as_uuid(), physical_due)
+        .await
+        .map_err(AccountDeletionError::Erasure)?;
 
     // Machine credentials may contain free-text names. Erase their verifiers
     // and names even in shared workspaces, retaining lifecycle audit facts.
@@ -757,7 +794,7 @@ async fn finalize_account(
         &mut tx,
         user,
         &email_hmac_sha256,
-        completed_at,
+        invitation_cutoff,
         deletion_digest_key,
         audit,
     )
@@ -790,10 +827,19 @@ async fn finalize_account(
         .fetch_one(&mut *tx)
         .await?;
 
-    // The request reaches its terminal state in the same transaction as the
-    // fulfillment, so it is never due again.
+    sqlx::query("UPDATE account_erasure_progress SET logical_scrubbed_at=coalesce(logical_scrubbed_at,$2) WHERE user_id=$1")
+        .bind(user.as_uuid()).bind(invitation_cutoff).execute(&mut *tx).await?;
+    let physical_ready = crate::privacy_erasure::physical_ready(&mut tx, user.as_uuid()).await?;
+    let newly_fulfilled = if physical_ready && !prior_proof {
+        sqlx::query("INSERT INTO fulfilled_account_deletions(user_id,email_hmac_sha256,physical_verified_at,logical_scrubbed_at) VALUES($1,$2,clock_timestamp(),$3) ON CONFLICT DO NOTHING")
+            .bind(user.as_uuid()).bind(&email_hmac_sha256).bind(invitation_cutoff).execute(&mut *tx).await?.rows_affected()>0
+    } else {
+        false
+    };
+    // The thirty-day policy is unchanged; a due but physically incomplete
+    // request remains completing. A timestamp or retry is never a delete ACK.
     let mut request_completed = false;
-    if let Some(request_id) = account.request_id {
+    if let Some(request_id) = account.request_id.filter(|_| physical_ready) {
         request_completed = sqlx::query(
             "UPDATE account_deletion_requests
              SET state = 'completed', resolved_at = now()
@@ -806,7 +852,7 @@ async fn finalize_account(
             > 0;
     }
 
-    if newly_fulfilled {
+    if first_logical && !prior_proof {
         for session_ref in &session_refs {
             insert_admin_audit(
                 &mut tx,
@@ -834,8 +880,9 @@ async fn finalize_account(
             audit,
         )
         .await?;
-        // The deletion-proof compliance record (BUSINESS_DECISIONS: kept five
-        // years, no content).
+    }
+    if newly_fulfilled {
+        // Physical acknowledgements now permit the five-year fulfillment proof.
         insert_admin_audit(
             &mut tx,
             "account.deletion_completed",
@@ -848,8 +895,16 @@ async fn finalize_account(
         )
         .await?;
     }
+    if physical_ready {
+        sqlx::query("DELETE FROM account_erasure_progress WHERE user_id=$1")
+            .bind(user.as_uuid())
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(FinalizeOutcome {
+        first_logical,
+        physical_pending: !physical_ready,
         newly_fulfilled,
         changed: keys_deleted > 0
             || users_changed > 0

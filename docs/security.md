@@ -109,30 +109,30 @@ Every administrative and security action in the code, and where its audit row
 is written. "Bound" marks events whose volume is attacker-influenced and
 therefore sampled (section 4).
 
-| Action | Event | Written in | Bound |
-| --- | --- | --- | --- |
-| Sign-in succeeds | `auth.login` | `deepref_app::identity::sign_in` | |
-| First sign-in provisions a user | `user.provisioned` | `identity::sign_in`, `identity::ensure_development_principal` | |
-| Sign-out | `auth.logout`, `auth.session_revoked` (`user_logout`) | `identity::record_logout` | |
-| Session rejected (malformed, unknown/expired/revoked, mismatched identity, invalid) | `auth.rejected` (stage `session`) | `deepref_http_api::auth::session` | yes |
-| Session refresh ends the session | `auth.rejected` (stage `refresh`) | `auth::session::refresh_expired` / `refresh_and_persist` | yes |
-| Sign-in callback refused | `auth.rejected` (stage `callback`) | `routes/auth.rs::callback_failure` | yes |
-| Cross-origin cookie-authenticated request refused | `auth.rejected` (stage `origin`) | `origin_guard.rs` | yes |
-| Authorization denied (route unlisted, platform-operator route, missing permission) | `authorization.denied` | `deepref_app::authorization::DenialAuditor` (03b) | yes |
-| Provider reports the user deleted (04a seam) | `user.deactivated` (`provider_event`), `auth.session_revoked` (`user_deactivated`) | `identity::apply_provider_user_deleted`, `identity::deactivate_user` | |
-| Account deletion requested | `account.deletion_requested` | `account_deletion::request_account_deletion` | |
-| Account deletion cancelled | `account.deletion_cancelled` | `account_deletion::cancel_account_deletion` | |
-| Account deletion completed (30 days later) | `account.deletion_completed`, `user.deactivated` (`account_deletion`), `auth.session_revoked` (`user_deactivated`) | `account_deletion::finalize_account` | |
-| Workspace created | `workspace.created` | `workspaces::create_personal_workspace`, `apply_organization_snapshot` | |
-| Workspace renamed | `workspace.renamed` | `workspaces::rename_workspace` | |
-| Workspace deleted | `workspace.deleted`, `membership.removed`, `invitation.revoked` | `workspaces::delete_workspace` | |
-| Membership added / role changed / activated / removed | `membership.created` / `.role_changed` / `.status_changed` / `.removed` | `workspaces::{add_workspace_member, change_membership_role, set_membership_status, remove_membership}`, invitation acceptance, WorkOS reconciliation | |
-| Project access granted / role changed / revoked | `project_access.granted` / `.role_changed` / `.removed` | `workspaces::{grant_project_access, change_project_access_role, revoke_project_access}` | |
-| Invitation created / accepted / revoked / expired | `invitation.created` / `.accepted` / `.revoked` / `.expired` | `workspaces::invite_to_workspace`, `accept_in_transaction`, `revoke_invitation` | |
-| Project created | `project.created` | `routes/projects.rs::create_project` (via `record_project_created`) | |
-| Project deleted (and its content) | `project.deleted` | `routes/projects.rs::delete_project`, `account_deletion::complete_workspace` (via `record_project_deleted`) | |
-| Legacy actor mapped / denied (operator CLI) | `legacy_actor.mapped` / `.non_identity_recorded` | `legacy_actors::{map_legacy_actor, record_legacy_actor_non_identity}` (03c) | |
-| Retention purge run | `audit.purged` | `audit_admin::purge_admin_audit` | |
+| Action                                                                              | Event                                                                                                                                                               | Written in                                                                                                                                           | Bound                                       |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Sign-in succeeds                                                                    | `auth.login`                                                                                                                                                        | `deepref_app::identity::sign_in`                                                                                                                     |                                             |
+| First sign-in provisions a user                                                     | `user.provisioned`                                                                                                                                                  | `identity::sign_in`, `identity::ensure_development_principal`                                                                                        |                                             |
+| Sign-out                                                                            | `auth.logout`, `auth.session_revoked` (`user_logout`)                                                                                                               | `identity::record_logout`                                                                                                                            |                                             |
+| Session rejected (malformed, unknown/expired/revoked, mismatched identity, invalid) | `auth.rejected` (stage `session`)                                                                                                                                   | `deepref_http_api::auth::session`                                                                                                                    | yes                                         |
+| Session refresh ends the session                                                    | `auth.rejected` (stage `refresh`)                                                                                                                                   | `auth::session::refresh_expired` / `refresh_and_persist`                                                                                             | yes                                         |
+| Sign-in callback refused                                                            | `auth.rejected` (stage `callback`)                                                                                                                                  | `routes/auth.rs::callback_failure`                                                                                                                   | yes                                         |
+| Cross-origin cookie-authenticated request refused                                   | `auth.rejected` (stage `origin`)                                                                                                                                    | `origin_guard.rs`                                                                                                                                    | yes                                         |
+| Authorization denied (route unlisted, platform-operator route, missing permission)  | `authorization.denied`                                                                                                                                              | `deepref_app::authorization::DenialAuditor` (03b)                                                                                                    | yes                                         |
+| Provider reports the user deleted (04a seam)                                        | `user.deactivated` (`provider_event`), `auth.session_revoked` (`user_deactivated`)                                                                                  | `identity::apply_provider_user_deleted`, `identity::deactivate_user`                                                                                 |                                             |
+| Account deletion requested                                                          | `account.deletion_requested`                                                                                                                                        | `account_deletion::request_account_deletion`                                                                                                         |                                             |
+| Account deletion cancelled                                                          | `account.deletion_cancelled`                                                                                                                                        | `account_deletion::cancel_account_deletion`                                                                                                          |                                             |
+| Account deletion after the full 30-day window                                       | `user.deactivated` (`account_deletion`), `auth.session_revoked` (`user_deactivated`) at logical scrub; `account.deletion_completed` after physical acknowledgements | `account_deletion::finalize_account`                                                                                                                 | See [physical erasure](account-erasure.md). |
+| Workspace created                                                                   | `workspace.created`                                                                                                                                                 | `workspaces::create_personal_workspace`, `apply_organization_snapshot`                                                                               |                                             |
+| Workspace renamed                                                                   | `workspace.renamed`                                                                                                                                                 | `workspaces::rename_workspace`                                                                                                                       |                                             |
+| Workspace deleted                                                                   | `workspace.deleted`, `membership.removed`, `invitation.revoked`                                                                                                     | `workspaces::delete_workspace`                                                                                                                       |                                             |
+| Membership added / role changed / activated / removed                               | `membership.created` / `.role_changed` / `.status_changed` / `.removed`                                                                                             | `workspaces::{add_workspace_member, change_membership_role, set_membership_status, remove_membership}`, invitation acceptance, WorkOS reconciliation |                                             |
+| Project access granted / role changed / revoked                                     | `project_access.granted` / `.role_changed` / `.removed`                                                                                                             | `workspaces::{grant_project_access, change_project_access_role, revoke_project_access}`                                                              |                                             |
+| Invitation created / accepted / revoked / expired                                   | `invitation.created` / `.accepted` / `.revoked` / `.expired`                                                                                                        | `workspaces::invite_to_workspace`, `accept_in_transaction`, `revoke_invitation`                                                                      |                                             |
+| Project created                                                                     | `project.created`                                                                                                                                                   | `routes/projects.rs::create_project` (via `record_project_created`)                                                                                  |                                             |
+| Project deleted (and its content)                                                   | `project.deleted`                                                                                                                                                   | `routes/projects.rs::delete_project`, `account_deletion::complete_workspace` (via `record_project_deleted`)                                          |                                             |
+| Legacy actor mapped / denied (operator CLI)                                         | `legacy_actor.mapped` / `.non_identity_recorded`                                                                                                                    | `legacy_actors::{map_legacy_actor, record_legacy_actor_non_identity}` (03c)                                                                          |                                             |
+| Retention purge run                                                                 | `audit.purged`                                                                                                                                                      | `audit_admin::purge_admin_audit`                                                                                                                     |                                             |
 
 ### Gaps closed in 11 Part B
 
@@ -189,10 +189,10 @@ enforced across processes by a unique index, inserted with
 `INSERT ... ON CONFLICT DO NOTHING`. A flood stores a handful of rows, never a
 row per request.
 
-| Event | Key | Index |
-| --- | --- | --- |
-| `authorization.denied` | (user, permission, resource type, window) | `admin_audit_denial_window_idx` (0100) |
-| `auth.rejected` | (stage, reason, target user, window) | `admin_audit_auth_rejection_window_idx` (0113) |
+| Event                  | Key                                       | Index                                          |
+| ---------------------- | ----------------------------------------- | ---------------------------------------------- |
+| `authorization.denied` | (user, permission, resource type, window) | `admin_audit_denial_window_idx` (0100)         |
+| `auth.rejected`        | (stage, reason, target user, window)      | `admin_audit_auth_rejection_window_idx` (0113) |
 
 An `auth.rejected` target is a user id read from a stored session row, never
 from the request, so an attacker's random cookies share one anonymous key
@@ -206,10 +206,10 @@ error by its own audit.
 
 BUSINESS_DECISIONS fixes retention:
 
-| Rows | Retention |
-| --- | --- |
-| Administrative and security audit (`admin_audit_events`) | 6 months |
-| `account.deletion_completed` (proof a deletion request was fulfilled) | 5 years, no content |
+| Rows                                                                                           | Retention                                            |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Administrative and security audit (`admin_audit_events`)                                       | 6 months                                             |
+| `account.deletion_completed` (proof a deletion request was fulfilled)                          | 5 years, no content                                  |
 | `fulfilled_account_deletions` (user id, completion time, normalized-email HMAC-SHA256 digests) | 5 years; pseudonymous keyed data, no plaintext email |
 
 Archival is not needed: the rows are the record, and the purge removes them
@@ -277,7 +277,7 @@ That operator route remains follow-up. Human account exports use the separate
 ## 7. Audit never leaks into research exports
 
 The eleven research export kinds (`crates/http-api/src/routes/exports*`) read
-project-scoped scientific tables only; `audit.csv` is the *scientific* audit
+project-scoped scientific tables only; `audit.csv` is the _scientific_ audit
 export (`deepref_app::audit_export`, built from `screening_events`,
 `study_events`, `appraisal_events`, `ai_runs`, …) and has no administrative
 rows. Proven by `exports_admin_audit_exclusion::no_research_export_carries_administrative_audit_data`
@@ -308,7 +308,8 @@ Per BUSINESS_DECISIONS and handoff 11:
      writers and workspace deletion use) and re-check under it that the user
      is an active `owner`, that no other active membership exists, and that
      it is not the migration workspace. Then, in ONE transaction, delete the
-     projects and their content, revoke pending invitations (audited) and
+     projects and their content, cancel exports containing those bytes (including
+     historical cross-account attempts), revoke pending invitations (audited) and
      delete the workspace. If any check fails, only the user's membership is
      removed; a shared workspace whose last owner leaves is left ownerless for
      the operator recovery flow (as with 03a's global deactivation) and is
@@ -327,11 +328,13 @@ Per BUSINESS_DECISIONS and handoff 11:
      delete pending invitations addressed to the user's normalized-address
      digests and rewrite the address of the other matching invitation rows to
      `deleted-<invitation id>@invalid`, redact native legacy-decision sources
-     and the PII in audit metadata (below), log
-     `fulfilled_account_deletions`, move the request to `completed`, and
+     and the PII in audit metadata (below), retain keyed progress digests, and
      write `user.deactivated` (`source: account_deletion`),
-     `auth.session_revoked` (`user_deactivated`) and the deletion-proof
-     `account.deletion_completed`;
+     `auth.session_revoked` (`user_deactivated`). The request stays `completing`
+     until actual storage deletion and writer-owned staging removal are
+     acknowledged and uploads are resolved. Only then log
+     `fulfilled_account_deletions`, move the request to `completed`, and write
+     the deletion-proof `account.deletion_completed`;
    - **keeps** the stable `UserId`, every scientific provenance reference
      (contributions in shared workspaces stay attributed to the anonymized
      "former member") and the whole audit history.
@@ -344,8 +347,9 @@ requested --claim-->  completing --> completed (terminal; never due again)
 ```
 
 Cancellation and completion take the same locks in the same order: **request
-row, then user row** (workspace completion takes the workspace lock on its own,
-never while holding either). Completion is due only from `requested` past 30
+row, then user row**. Workspace completion is a separate transaction taking
+the workspace lock, then sorted affected-user `KEY SHARE` locks before export,
+registry, invitation and membership rows. Completion is due only from `requested` past 30
 days, or resuming `completing`; `completed` is never due, whatever happens to
 the five-year proof row.
 
@@ -390,7 +394,9 @@ then session/invitation rows; it never holds a workspace lock.
   store and inject it only into the completion/replay command. The key is
   never sent to PostgreSQL. Replay computes invitation HMACs in process and
   matches only invitation rows with `created_at` before the stored
-  `fulfilled_account_deletions.completed_at`, so a later registration using
+  `fulfilled_account_deletions.logical_scrubbed_at` (historical records fall
+  back to `completed_at`), so delayed physical completion cannot move that
+  cutoff and a later registration using
   the same address keeps its invitations.
 - Retired keys make existing digests unmatchable. If key rotation is needed,
   retain a protected list of old keys so operators can replay earlier records;
@@ -403,10 +409,11 @@ then session/invitation rows; it never holds a workspace lock.
 - Sessions are also purged 30 days after expiry or revocation
   (`deepref-server audit purge`, `session_rows_purged`).
 
-The completion command is idempotent and safe to interrupt: every step before
-the finalize is idempotent and the fulfillment is recorded in the same
-transaction as the anonymization. Audit rows are written only when a deletion
-is fulfilled for the first time.
+The completion command is idempotent and safe to interrupt. Logical scrub and
+physical fulfillment are separate. Pending progress survives scrub; fulfillment
+requires the [physical-erasure acknowledgements and rollout gate](account-erasure.md).
+Deactivation and completion audits are each written once at their respective
+transition. Failed cleanup, unknown uploads and overdue work remain visible.
 
 ### Restore step
 
@@ -415,7 +422,8 @@ Backups roll over 35 days; a restore can bring deleted personal data back.
 copy in the ops records, including the address digests and no plaintext):
 
 1. Restore the backup as usual.
-2. Make sure the restore carries the `fulfilled_account_deletions` log
+2. Make sure the restore carries pending `account_erasure_progress` and target
+   maps as well as the `fulfilled_account_deletions` log
    (re-import the ops copy if the restored point predates it).
 3. Run `deepref-server accounts complete-deletions`.
 

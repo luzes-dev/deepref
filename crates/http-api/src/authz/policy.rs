@@ -1322,6 +1322,18 @@ pub struct NonHttpRow {
 pub static NON_HTTP: &[NonHttpRow] = &[
     NonHttpRow {
         kind: "Operator CLI",
+        name: "accounts complete-deletions and erasure-status",
+        control: "Trusted deployment operator with database/storage credentials. Thirty-day request eligibility is rechecked under locks. Physical fulfillment waits for actual storage and staging acknowledgements; unknown upload outcomes stay pending. No HTTP tenant principal is inferred.",
+        test: "privacy_erasure_postgres::full_thirty_day_cancellation_precedes_any_object_retirement",
+    },
+    NonHttpRow {
+        kind: "Operator CLI",
+        name: "accounts activate-erasure --confirm-drained <token>",
+        control: "Default-false physical proof gate. Exact operator attestation requires actual older-writer drain and untracked staging cleanup; an elapsed deadline is never cleanup evidence. Restrict shell/database access to trusted operators.",
+        test: "deepref-server command::tests::parses_erasure_operator_commands",
+    },
+    NonHttpRow {
+        kind: "Operator CLI",
         name: "projection status <project_uuid>",
         control: "Trusted deployment operator with database credentials; no tenant HTTP principal is inferred. Scoped UUID reads projection metadata only; no mutations or tenant authority inferred. Restrict shell/database access to operators.",
         test: "deepref-server command::tests::parses_projection_commands",
