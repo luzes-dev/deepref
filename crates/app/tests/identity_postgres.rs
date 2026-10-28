@@ -93,6 +93,78 @@ async fn sign_in(
     .await
 }
 
+#[tokio::test]
+async fn successful_sign_in_records_fresh_human_evidence_with_one_connection() -> anyhow::Result<()>
+{
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 1).await
+    else {
+        return Ok(());
+    };
+    let provider_session = session("human-evidence", "human-first-session");
+    let provider_profile = profile("human@example.org", Some("Researcher"));
+    let SignIn::Active { user, .. } = sign_in(
+        &pool,
+        &provider_session,
+        &provider_profile,
+        AuditRequest::default(),
+    )
+    .await?
+    else {
+        anyhow::bail!("new human sign-in must be active");
+    };
+    let first: Option<(uuid::Uuid, chrono::DateTime<chrono::Utc>, String)> = sqlx::query_as(
+        "SELECT generation,occurred_at,evidence_kind FROM account_human_activity WHERE user_id=$1",
+    )
+    .bind(user.id.as_uuid())
+    .fetch_optional(&pool)
+    .await?;
+    let Some((first_generation, first_at, first_kind)) = first else {
+        anyhow::bail!("successful human sign-in produced no durable activity evidence");
+    };
+    anyhow::ensure!(
+        first_kind == "sign_in",
+        "unexpected evidence kind: {first_kind}"
+    );
+    let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
+        .await?;
+    anyhow::ensure!(
+        first_at <= now && first_at > now - chrono::Duration::minutes(1),
+        "human evidence must use actual database time: evidence={first_at}, now={now}"
+    );
+
+    // A real later sign-in replaces old evidence; it never derives activity
+    // from the profile's unchanged updated_at or an older browser session.
+    sqlx::query("UPDATE account_human_activity SET occurred_at=clock_timestamp()-interval '23 months' WHERE user_id=$1")
+        .bind(user.id.as_uuid()).execute(&pool).await?;
+    let replay = sign_in(
+        &pool,
+        &session("human-evidence", "human-second-session"),
+        &provider_profile,
+        AuditRequest::default(),
+    )
+    .await?;
+    anyhow::ensure!(
+        matches!(replay, SignIn::Active { .. }),
+        "active user must sign in"
+    );
+    let (generation, occurred_at): (uuid::Uuid, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "SELECT generation,occurred_at FROM account_human_activity WHERE user_id=$1",
+    )
+    .bind(user.id.as_uuid())
+    .fetch_one(&pool)
+    .await?;
+    anyhow::ensure!(
+        generation != first_generation,
+        "new human sign-in must replace its evidence generation"
+    );
+    anyhow::ensure!(
+        occurred_at >= first_at,
+        "new human sign-in must refresh its actual activity time"
+    );
+    Ok(())
+}
+
 #[derive(Default)]
 struct FakeProvider {
     sessions: Vec<String>,

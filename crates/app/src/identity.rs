@@ -396,6 +396,27 @@ pub async fn sign_in(
             .execute(&mut *tx)
             .await?;
     }
+    // Only this successful interactive sign-in creates human activity. Session
+    // reads/refreshes, metrics and workers never call this write. The account
+    // row is already locked above; recheck its live state rather than copying
+    // a profile/session timestamp or relying on the earlier unlocked read.
+    let activity: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO account_human_activity(user_id,generation,occurred_at,evidence_kind)
+         SELECT id,$2,clock_timestamp(),'sign_in' FROM users
+         WHERE id=$1 AND status='active' AND deleted_at IS NULL
+           AND NOT EXISTS(SELECT 1 FROM fulfilled_account_deletions f WHERE f.user_id=users.id)
+         ON CONFLICT(user_id) DO UPDATE SET generation=EXCLUDED.generation,
+           occurred_at=EXCLUDED.occurred_at,evidence_kind=EXCLUDED.evidence_kind
+         RETURNING user_id",
+    )
+    .bind(user.id.as_uuid())
+    .bind(Uuid::new_v4())
+    .fetch_optional(&mut *tx)
+    .await?;
+    if activity.is_none() {
+        tx.commit().await?;
+        return Ok(SignIn::Deactivated);
+    }
     sqlx::query(
         "INSERT INTO user_sessions
            (id, user_id, session_token_hash, sealed_provider_session, session_ref, expires_at)
