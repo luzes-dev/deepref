@@ -520,3 +520,63 @@ async fn receipt_commit_failure_rolls_back_invalidation_and_audit_shape_is_close
         assert!(sqlx::query("INSERT INTO admin_audit_events(id,event_type,principal_kind,workspace_id,metadata) VALUES($1,'billing.changed','system',$2,$3)").bind(Uuid::new_v4()).bind(w.as_uuid()).bind(metadata).execute(&pool).await.is_err());
     }
 }
+
+/// 08c starts at real workspace deletion. Active personal/provider mapping is
+/// detached by the existing0167 trigger; restricted closure context must not
+/// be irretrievably lost before provider/manual responsibilities can be met.
+#[tokio::test]
+async fn workspace_deletion_preserves_original_restricted_closure_context() -> anyhow::Result<()> {
+    let Some((pool, owner, workspace, _, service)) = setup().await else {
+        return Ok(());
+    };
+    provision(&service, owner, workspace).await;
+    service.reconcile_workspace(workspace).await?;
+    let (account, scope, customer, subscription): (Uuid, String, String, Option<String>) =
+        sqlx::query_as("SELECT id,provider_scope,customer_ref,subscription_ref FROM billing_accounts WHERE workspace_id=$1")
+            .bind(workspace.as_uuid()).fetch_one(&pool).await?;
+    let (_, other_workspace) = seed(&pool).await;
+    // The second mapping has a different customer in the same provider scope.
+    // It must not be captured, cleared or claimed by the first tenant's delete.
+    sqlx::query("INSERT INTO billing_accounts(id,workspace_id,provider_scope,operation_id,customer_ref,provisioning) VALUES($1,$2,$3,$4,'cus_unrelated','mapped')")
+        .bind(Uuid::new_v4()).bind(other_workspace.as_uuid()).bind(&scope)
+        .bind(Uuid::new_v4()).execute(&pool).await?;
+    deepref_app::workspaces::delete_workspace(
+        &pool,
+        owner,
+        workspace,
+        deepref_app::identity::AuditRequest::default(),
+    )
+    .await?;
+    // to_jsonb permits a meaningful baseline RED with the real current schema:
+    // an absent future retained field is NULL, never a missing-column/setup error.
+    let row = sqlx::query("SELECT workspace_id,customer_ref,subscription_ref,provisioning,to_jsonb(b)->>'closure_customer_ref' AS retained_customer,to_jsonb(b)->>'closure_subscription_ref' AS retained_subscription FROM billing_accounts b WHERE id=$1")
+        .bind(account).fetch_one(&pool).await?;
+    anyhow::ensure!(
+        row.try_get::<Option<Uuid>, _>("workspace_id")?.is_none()
+            && row.try_get::<Option<String>, _>("customer_ref")?.is_none()
+            && row
+                .try_get::<Option<String>, _>("subscription_ref")?
+                .is_none()
+            && row.try_get::<String, _>("provisioning")? == "detached",
+        "existing active mapping detachment must remain intact"
+    );
+    anyhow::ensure!(
+        row.try_get::<Option<String>, _>("retained_customer")?
+            .as_deref()
+            == Some(customer.as_str())
+            && row.try_get::<Option<String>, _>("retained_subscription")? == subscription,
+        "workspace deletion lost original restricted provider closure context"
+    );
+    let unrelated: String = sqlx::query_scalar(
+        "SELECT customer_ref FROM billing_accounts WHERE workspace_id=$1 AND provider_scope=$2",
+    )
+    .bind(other_workspace.as_uuid())
+    .bind(scope)
+    .fetch_one(&pool)
+    .await?;
+    anyhow::ensure!(
+        unrelated == "cus_unrelated",
+        "another tenant's mapping was changed"
+    );
+    Ok(())
+}
