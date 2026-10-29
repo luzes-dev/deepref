@@ -178,7 +178,9 @@ pub(crate) async fn enforce(
         _ => (Permission::ProjectView, ResourceFrom::PathParam(""), false),
     };
     match row.rule {
-        Rule::Open | Rule::Authenticated | Rule::Handler(_) => next.run(request).await,
+        Rule::Open | Rule::Authenticated | Rule::Handler(_) => {
+            run_authorized(&pep.state, session.as_ref(), row, request, next).await
+        }
         Rule::PlatformOperator => {
             deny(
                 &pep.state,
@@ -206,7 +208,7 @@ pub(crate) async fn enforce(
                 }),
             };
             if optional && raw.is_none() {
-                return next.run(request).await;
+                return run_authorized(&pep.state, session.as_ref(), row, request, next).await;
             }
             let id = raw.and_then(|value| Uuid::parse_str(&value).ok());
             let Some(id) = id else {
@@ -225,7 +227,7 @@ pub(crate) async fn enforce(
                 .require(&principal, permission, Resource::Project(project))
                 .await
             {
-                Ok(()) => next.run(request).await,
+                Ok(()) => run_authorized(&pep.state, session.as_ref(), row, request, next).await,
                 Err(AuthzError::Denied(_)) => {
                     if matches!(principal, deepref_domain::Principal::Service(_)) {
                         pep.state
@@ -246,6 +248,40 @@ pub(crate) async fn enforce(
                 Err(AuthzError::Store(error)) => store_failure(&error),
             }
         }
+    }
+}
+
+/// Only explicitly classified authenticated commands produce evidence. The
+/// short receipt transaction ends before a handler acquires a connection.
+async fn run_authorized(
+    state: &AppState,
+    session: Option<&SessionContext>,
+    row: &policy::RouteRule,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !policy::human_command_attempt(row) {
+        return next.run(request).await;
+    }
+    let Some(session) = session else {
+        return ApiError::Auth(AuthFailure::Unauthenticated).into_response();
+    };
+    let deepref_domain::Principal::User(user) = session.principal else {
+        return ApiError::Auth(AuthFailure::Unauthenticated).into_response();
+    };
+    match deepref_app::account_activity::record_product_command_attempt(
+        &state.pool,
+        user.user_id,
+        session.session_id,
+    )
+    .await
+    {
+        Ok(true) => next.run(request).await,
+        Ok(false) => ApiError::Auth(AuthFailure::Unauthenticated).into_response(),
+        Err(error) => ApiError::Internal(
+            anyhow::Error::new(error).context("could not record human product activity"),
+        )
+        .into_response(),
     }
 }
 
@@ -420,6 +456,7 @@ mod tests {
         let id = UserId::new(Uuid::new_v4());
         SessionContext {
             principal: deepref_domain::Principal::user(id),
+            session_id: Uuid::new_v4(),
             user: UserRecord {
                 id,
                 external_user_id: ExternalUserId::parse("user_x").unwrap(),
