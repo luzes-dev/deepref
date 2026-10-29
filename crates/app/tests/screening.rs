@@ -16,7 +16,7 @@ use deepref_application::{
     UndoScreeningCommand,
 };
 use deepref_domain::{Actor, ActorKind, ScreeningDecision, ScreeningStage, ScreeningStatus};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
