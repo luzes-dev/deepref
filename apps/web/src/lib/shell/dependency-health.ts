@@ -67,6 +67,29 @@ function issueMessage(name: string, detail: IssueDetail, scope: 'project' | 'wor
 	return unavailable ? 'Not responding.' : 'Running with reduced capacity.';
 }
 
+function dependencyIssue(
+	name: string,
+	detail: DependencyStatus[keyof DependencyStatus],
+	scope: 'project' | 'workspace'
+): DependencyHealthIssue | undefined {
+	if (!detail || detail.state === 'available') return;
+	const state = detail.state === 'unavailable' ? 'unavailable' : 'degraded';
+	return {
+		name,
+		label: dependencyLabel(name),
+		state,
+		message: issueMessage(
+			name,
+			{
+				state,
+				backlog: 'backlog' in detail ? detail.backlog : undefined,
+				recentFailed: 'recent_failed' in detail ? detail.recent_failed : undefined
+			},
+			scope
+		)
+	};
+}
+
 /**
  * Reduce the dependency probe to what a researcher needs to know. Only
  * non-available dependencies (or an unreachable status endpoint) surface;
@@ -97,22 +120,8 @@ export function summarizeDependencyHealth(
 	for (const [name, detail] of Object.entries<DependencyStatus[keyof DependencyStatus]>({
 		...status
 	})) {
-		if (!detail || detail.state === 'available') continue;
-		const state = detail.state === 'unavailable' ? 'unavailable' : 'degraded';
-		issues.push({
-			name,
-			label: dependencyLabel(name),
-			state,
-			message: issueMessage(
-				name,
-				{
-					state,
-					backlog: 'backlog' in detail ? detail.backlog : undefined,
-					recentFailed: 'recent_failed' in detail ? detail.recent_failed : undefined
-				},
-				scope
-			)
-		});
+		const issue = dependencyIssue(name, detail, scope);
+		if (issue) issues.push(issue);
 	}
 	const level = issues.some((issue) => issue.state === 'unavailable')
 		? 'unavailable'
