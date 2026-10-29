@@ -188,6 +188,16 @@ pub fn machine_safe(row: &RouteRule) -> bool {
         )
 }
 
+/// Explicit product-command activity coverage, independent of permission.
+/// This first tracer covers study creation only; other routes are not yet
+/// inactivity evidence. Never derive activity from method or actor UUID alone.
+pub fn human_command_attempt(row: &RouteRule) -> bool {
+    matches!(
+        (row.method, row.path),
+        (Verb::Post, "/projects/{project_id}/studies")
+    )
+}
+
 pub static ROUTES: &[RouteRule] = &[
     tested(
         handler(

@@ -108,6 +108,9 @@ fn is_machine_hook(path: &str) -> bool {
 pub struct SessionContext {
     pub principal: Principal,
     pub user: UserRecord,
+    /// Actual local session identity for transactional activity/revocation
+    /// checks. It is not a cookie, provider credential or public response DTO.
+    pub session_id: Uuid,
 }
 
 /// Extractor for the request's principal. Rejects with 401 when the request
@@ -546,6 +549,7 @@ fn context(stored: StoredBrowserSession) -> SessionContext {
     SessionContext {
         principal: Principal::user(stored.user.id),
         user: stored.user,
+        session_id: stored.id,
     }
 }
 
