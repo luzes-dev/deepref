@@ -188,14 +188,168 @@ pub fn machine_safe(row: &RouteRule) -> bool {
         )
 }
 
-/// Explicit product-command activity coverage, independent of permission.
-/// This first tracer covers study creation only; other routes are not yet
-/// inactivity evidence. Never derive activity from method or actor UUID alone.
+/// Human-activity provenance is independent of authorization. Only an
+/// explicitly listed authenticated command attempt can refresh evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanActivity {
+    CommandAttempt,
+    ReadOnly,
+    DerivedRequest,
+    Acknowledgement,
+    MachineDelivery,
+    SessionLifecycle,
+    Operator,
+    Unclassified,
+}
+
+impl HumanActivity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CommandAttempt => "authenticated command attempt",
+            Self::ReadOnly => "excluded: read/status/poll",
+            Self::DerivedRequest => "excluded: derived query/validation/metrics",
+            Self::Acknowledgement => "excluded: notification acknowledgement",
+            Self::MachineDelivery => "excluded: machine delivery",
+            Self::SessionLifecycle => "excluded: session lifecycle",
+            Self::Operator => "excluded: platform operator",
+            Self::Unclassified => "UNCLASSIFIED: dispatch refused",
+        }
+    }
+}
+
+/// GET/HEAD never invent evidence; genuine read-only browser interaction
+/// needs its separate trusted-event contract. Mutations are enumerated below,
+/// never inferred from an HTTP verb or a scientific actor UUID. A new write
+/// remains Unclassified until its product semantics are reviewed explicitly.
+pub fn human_activity(row: &RouteRule) -> HumanActivity {
+    if row.method == Verb::Get {
+        return HumanActivity::ReadOnly;
+    }
+    match (row.method, row.path) {
+        (
+            Verb::Post,
+            "/hooks/billing/dodo" | "/hooks/email/{token}" | "/hooks/workflows/{token}",
+        ) => HumanActivity::MachineDelivery,
+        (Verb::Post, "/auth/logout") => HumanActivity::SessionLifecycle,
+        (Verb::Patch, "/settings") => HumanActivity::Operator,
+        (Verb::Post, "/notifications/mark-read") => HumanActivity::Acknowledgement,
+        (
+            Verb::Post,
+            "/projects/{project_id}/metrics/recompute"
+            | "/projects/{project_id}/appraisal-definitions/{definition_id}/{version}/judgment-suggestion"
+            | "/projects/{project_id}/automations/block-details"
+            | "/projects/{project_id}/automations/workflows/{workflow_id}/validate",
+        ) => HumanActivity::DerivedRequest,
+        (Verb::Post, "/workspaces/{workspace_id}/billing/customer")
+        | (Verb::Post, "/workspaces/{workspace_id}/billing/checkout")
+        | (Verb::Post, "/workspaces/{workspace_id}/billing/portal")
+        | (Verb::Post, "/workspaces/{workspace_id}/api-keys")
+        | (Verb::Delete, "/workspaces/{workspace_id}/api-keys/{key_id}")
+        | (Verb::Post, "/workspaces/{workspace_id}/api-keys/{key_id}/rotate")
+        | (Verb::Post, "/projects/{project_id}/scientific-assignments")
+        | (Verb::Delete, "/projects/{project_id}/scientific-assignments/{user_id}/{role}")
+        | (Verb::Delete, "/me/deletion-request")
+        | (Verb::Post, "/me/deletion-request")
+        | (Verb::Post, "/me/export")
+        | (Verb::Delete, "/me/export/{id}")
+        | (Verb::Post, "/projects")
+        | (Verb::Delete, "/projects/{project_id}")
+        | (Verb::Patch, "/projects/{project_id}")
+        | (Verb::Post, "/projects/{project_id}/acquisitions")
+        | (Verb::Post, "/projects/{project_id}/acquisitions/{acquisition_id}/cancel")
+        | (Verb::Post, "/projects/{project_id}/acquisitions/{acquisition_id}/refresh")
+        | (Verb::Post, "/projects/{project_id}/ai/activity/batches/{batch_id}/undo")
+        | (Verb::Post, "/projects/{project_id}/ai/activity/{activity_id}/undo")
+        | (Verb::Put, "/projects/{project_id}/ai/autonomy")
+        | (Verb::Put, "/projects/{project_id}/ai/budget")
+        | (Verb::Post, "/projects/{project_id}/ai/first")
+        | (Verb::Post, "/projects/{project_id}/ai/first/{cohort_id}/close")
+        | (Verb::Post, "/projects/{project_id}/ai/first/{cohort_id}/draw")
+        | (Verb::Post, "/projects/{project_id}/ai/first/{cohort_id}/evaluate")
+        | (Verb::Post, "/projects/{project_id}/ai/first/{cohort_id}/finalize")
+        | (Verb::Post, "/projects/{project_id}/ai/first/{cohort_id}/recover")
+        | (Verb::Post, "/projects/{project_id}/ai/proposals/{proposal_id}/decision")
+        | (Verb::Post, "/projects/{project_id}/ai/reviewer-decisions/{decision_id}/resolve")
+        | (Verb::Post, "/projects/{project_id}/assistant/chat")
+        | (Verb::Post, "/projects/{project_id}/assistant/conversations")
+        | (Verb::Delete, "/projects/{project_id}/assistant/conversations/{conversation_id}")
+        | (Verb::Post, "/projects/{project_id}/assistant/plans/{plan_id}/confirm")
+        | (Verb::Post, "/projects/{project_id}/assistant/plans/{plan_id}/reject")
+        | (Verb::Post, "/projects/{project_id}/assistant/tools/execute")
+        | (Verb::Put, "/projects/{project_id}/automations/definitions/{recipe}")
+        | (Verb::Post, "/projects/{project_id}/automations/recipes/{recipe}/runs")
+        | (Verb::Post, "/projects/{project_id}/automations/runs")
+        | (Verb::Post, "/projects/{project_id}/automations/workflow-runs/{run_id}/cancel")
+        | (Verb::Post, "/projects/{project_id}/automations/workflows")
+        | (Verb::Post, "/projects/{project_id}/automations/workflows/from-template")
+        | (Verb::Delete, "/projects/{project_id}/automations/workflows/{workflow_id}")
+        | (Verb::Put, "/projects/{project_id}/automations/workflows/{workflow_id}")
+        | (Verb::Post, "/projects/{project_id}/automations/workflows/{workflow_id}/disable")
+        | (Verb::Post, "/projects/{project_id}/automations/workflows/{workflow_id}/enable")
+        | (Verb::Put, "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints")
+        | (
+            Verb::Post,
+            "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints/email/rotate",
+        )
+        | (
+            Verb::Post,
+            "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints/webhook-secret/rotate",
+        )
+        | (
+            Verb::Post,
+            "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints/webhook/rotate",
+        )
+        | (Verb::Post, "/projects/{project_id}/automations/workflows/{workflow_id}/publish")
+        | (Verb::Post, "/projects/{project_id}/automations/workflows/{workflow_id}/runs")
+        | (Verb::Post, "/projects/{project_id}/automations/workflows/{workflow_id}/test-runs")
+        | (Verb::Post, "/projects/{project_id}/deduplication/proposals/{proposal_id}/decision")
+        | (Verb::Post, "/projects/{project_id}/deduplication/run")
+        | (Verb::Post, "/projects/{project_id}/extraction/fields")
+        | (Verb::Patch, "/projects/{project_id}/extraction/fields/{field_id}")
+        | (Verb::Post, "/projects/{project_id}/imports")
+        | (Verb::Post, "/projects/{project_id}/records/{record_id}/ai/deduplication")
+        | (Verb::Post, "/projects/{project_id}/records/{record_id}/resolution")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/ai/appraisal-prefill")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/ai/screening")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/ai/study-grouping")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/appraisals")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/documents")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/documents/external")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/documents/open-access")
+        | (Verb::Delete, "/projects/{project_id}/reports/{report_id}/documents/{document_id}")
+        | (
+            Verb::Post,
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/identity/acknowledge",
+        )
+        | (
+            Verb::Post,
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/reparse",
+        )
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/screening")
+        | (Verb::Post, "/projects/{project_id}/reports/{report_id}/screening/undo")
+        | (Verb::Put, "/projects/{project_id}/reports/{report_id}/study")
+        | (Verb::Post, "/projects/{project_id}/review-runs/{run_id}/retry")
+        | (Verb::Put, "/projects/{project_id}/review/protocol")
+        | (Verb::Post, "/projects/{project_id}/review/protocol/publish")
+        | (Verb::Post, "/projects/{project_id}/studies")
+        | (Verb::Put, "/projects/{project_id}/studies/{study_id}")
+        | (Verb::Post, "/projects/{project_id}/studies/{study_id}/ai/extraction")
+        | (Verb::Put, "/projects/{project_id}/studies/{study_id}/classification")
+        | (
+            Verb::Delete,
+            "/projects/{project_id}/studies/{study_id}/extraction/values/{field_id}",
+        )
+        | (Verb::Put, "/projects/{project_id}/studies/{study_id}/extraction/values/{field_id}")
+        | (
+            Verb::Post,
+            "/projects/{project_id}/studies/{study_id}/extraction/values/{value_id}/confirm",
+        ) => HumanActivity::CommandAttempt,
+        _ => HumanActivity::Unclassified,
+    }
+}
+
 pub fn human_command_attempt(row: &RouteRule) -> bool {
-    matches!(
-        (row.method, row.path),
-        (Verb::Post, "/projects/{project_id}/studies")
-    )
+    human_activity(row) == HumanActivity::CommandAttempt
 }
 
 pub static ROUTES: &[RouteRule] = &[
@@ -1415,3 +1569,90 @@ pub static NON_HTTP: &[NonHttpRow] = &[
         test: "authz_user_scoped::notifications_include_only_viewable_projects",
     },
 ];
+
+#[cfg(test)]
+mod human_activity_tests {
+    use super::*;
+
+    #[test]
+    fn every_current_route_has_reviewed_activity_semantics() -> anyhow::Result<()> {
+        for row in ROUTES {
+            anyhow::ensure!(
+                human_activity(row) != HumanActivity::Unclassified,
+                "{} {} has unclassified activity semantics",
+                row.method.as_str(),
+                row.path
+            );
+            anyhow::ensure!(
+                !human_command_attempt(row)
+                    || !matches!(row.rule, Rule::Open | Rule::PlatformOperator)
+                        && row.method != Verb::Get,
+                "{} {} would infer human activity across a nonhuman boundary",
+                row.method.as_str(),
+                row.path
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_protected_write_is_not_activity_by_verb_or_authority() -> anyhow::Result<()> {
+        for method in [Verb::Post, Verb::Put, Verb::Patch, Verb::Delete] {
+            let row = authenticated(method, "/future-product-command", "future route fixture");
+            anyhow::ensure!(
+                human_activity(&row) == HumanActivity::Unclassified,
+                "{} inferred activity without explicit route review",
+                method.as_str()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn polling_derived_requests_machine_delivery_and_operators_are_excluded() -> anyhow::Result<()>
+    {
+        for (method, path, expected) in [
+            ("GET", "/me", HumanActivity::ReadOnly),
+            (
+                "GET",
+                "/projects/{project_id}/ai/activity",
+                HumanActivity::ReadOnly,
+            ),
+            (
+                "POST",
+                "/projects/{project_id}/metrics/recompute",
+                HumanActivity::DerivedRequest,
+            ),
+            (
+                "POST",
+                "/projects/{project_id}/automations/block-details",
+                HumanActivity::DerivedRequest,
+            ),
+            (
+                "POST",
+                "/projects/{project_id}/automations/workflows/{workflow_id}/validate",
+                HumanActivity::DerivedRequest,
+            ),
+            (
+                "POST",
+                "/notifications/mark-read",
+                HumanActivity::Acknowledgement,
+            ),
+            (
+                "POST",
+                "/hooks/billing/dodo",
+                HumanActivity::MachineDelivery,
+            ),
+            ("POST", "/auth/logout", HumanActivity::SessionLifecycle),
+            ("PATCH", "/settings", HumanActivity::Operator),
+        ] {
+            let row = lookup(method, path)
+                .ok_or_else(|| anyhow::anyhow!("missing fixture route: {method} {path}"))?;
+            anyhow::ensure!(
+                human_activity(row) == expected,
+                "{method} {path} must preserve its explicit non-activity boundary"
+            );
+        }
+        Ok(())
+    }
+}

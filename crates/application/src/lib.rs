@@ -1,3 +1,4 @@
+pub mod account_lifecycle;
 pub mod billing;
 pub mod concurrency_mirror;
 pub mod rate_limits;

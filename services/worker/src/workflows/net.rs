@@ -170,6 +170,29 @@ pub async fn send_email(
     body: &str,
     config: &deepref_config::SmtpConfig,
 ) -> Result<(), NodeError> {
+    send_email_with_message_id(to, subject, body, config, None).await
+}
+
+/// A caller-owned logical identity survives retries. The UUID-derived header
+/// contains no recipient or untrusted header text; SMTP can still duplicate a
+/// delivery after an ambiguous outcome, so this is not exactly-once evidence.
+pub(crate) async fn send_email_with_id(
+    to: &[String],
+    subject: &str,
+    body: &str,
+    config: &deepref_config::SmtpConfig,
+    logical_id: uuid::Uuid,
+) -> Result<(), NodeError> {
+    send_email_with_message_id(to, subject, body, config, Some(logical_id)).await
+}
+
+async fn send_email_with_message_id(
+    to: &[String],
+    subject: &str,
+    body: &str,
+    config: &deepref_config::SmtpConfig,
+    logical_id: Option<uuid::Uuid>,
+) -> Result<(), NodeError> {
     use lettre::{
         AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
         transport::smtp::authentication::Credentials,
@@ -194,6 +217,9 @@ pub async fn send_email(
         NodeError::permanent("The sender address set up on the server is not valid.")
     })?;
     let mut message = Message::builder().from(from).subject(subject);
+    if let Some(id) = logical_id {
+        message = message.message_id(Some(format!("<{id}@deepref.invalid>")));
+    }
     for recipient in to {
         let mailbox: Mailbox = recipient.parse().map_err(|_| {
             NodeError::permanent(format!("\"{recipient}\" is not a valid e-mail address."))

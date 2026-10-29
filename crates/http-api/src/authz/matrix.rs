@@ -4,7 +4,10 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use super::policy::{NON_HTTP, ROUTES, ResourceFrom, RouteRule, Rule, Verb, machine_safe};
+use super::policy::{
+    HumanActivity, NON_HTTP, ROUTES, ResourceFrom, RouteRule, Rule, Verb, human_activity,
+    machine_safe,
+};
 
 /// A route registered outside the OpenAPI router in `routes::router`.
 const UNDOCUMENTED_ROUTES: &[(Verb, &str)] = &[(Verb::Get, "/openapi.json")];
@@ -50,6 +53,8 @@ pub enum Mismatch {
     RowWithoutRoute(RouteKey),
     /// Two rows for one route.
     DuplicateRow(RouteKey),
+    /// No reviewed activity semantics for a current write operation.
+    ActivityUnclassified(RouteKey),
 }
 
 impl std::fmt::Display for Mismatch {
@@ -60,6 +65,9 @@ impl std::fmt::Display for Mismatch {
             }
             Self::RowWithoutRoute((m, p)) => write!(f, "policy row {m} {p} matches no route"),
             Self::DuplicateRow((m, p)) => write!(f, "policy table has two rows for {m} {p}"),
+            Self::ActivityUnclassified((m, p)) => {
+                write!(f, "route {m} {p} has no human activity classification")
+            }
         }
     }
 }
@@ -90,7 +98,19 @@ pub fn compare(routes: &BTreeSet<RouteKey>, table: &[RouteRule]) -> Vec<Mismatch
 
 /// Mismatches of the real table against the live router.
 pub fn router_mismatches() -> Vec<Mismatch> {
-    compare(&router_routes(), ROUTES)
+    let mut mismatches = compare(&router_routes(), ROUTES);
+    mismatches.extend(
+        ROUTES
+            .iter()
+            .filter(|row| human_activity(row) == HumanActivity::Unclassified)
+            .map(|row| {
+                Mismatch::ActivityUnclassified((
+                    row.method.as_str().to_owned(),
+                    row.path.to_owned(),
+                ))
+            }),
+    );
+    mismatches
 }
 
 fn rule_columns(rule: Rule) -> (&'static str, String, String) {
@@ -163,19 +183,21 @@ pub fn render_markdown() -> String {
     }
     let _ = writeln!(out, "| **Total HTTP** | **{}** |", ROUTES.len());
     let _ = writeln!(out, "| **Non-HTTP paths** | **{}** |\n", NON_HTTP.len());
-    out.push_str("## HTTP routes\n\n| Method | Path | Rule | Permission | Resource | Foreign-workspace test | Reason |\n| --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("Human activity receipts denote authenticated attempts before dispatch, never business success or a permission grant. Reads, derived queries, acknowledgements, machine deliveries and operator work are excluded. Unclassified writes fail the matrix check and protected dispatch.\n\n");
+    out.push_str("## HTTP routes\n\n| Method | Path | Rule | Permission | Resource | Human activity | Foreign-workspace test | Reason |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n");
     let mut rows: Vec<_> = ROUTES.iter().collect();
     rows.sort_by_key(|row| (row.path, row.method.as_str()));
     for row in rows {
         let (rule, permission, resource) = rule_columns(row.rule);
         let _ = writeln!(
             out,
-            "| {} | `{}` | {} | {} | {} | `{}` | {} |",
+            "| {} | `{}` | {} | {} | {} | {} | `{}` | {} |",
             row.method.as_str(),
             row.path,
             rule,
             permission,
             resource,
+            human_activity(row).as_str(),
             cell(row.foreign_test),
             cell(row.reason),
         );
