@@ -269,10 +269,28 @@ def render_html(value, snapshot, repository, now, runbook_prefix="../../"):
 <h1>Local operations evidence</h1>
 <p><strong>Unapproved proposals. Production activation is disabled.</strong> No backend ingestion, delivered production alert, fleet drain or business authority is established by this artifact.</p>
 <p>Rendered as of ''' + rendered + '''. Source capture timestamps are retained; expiry only changes observations to unknown. There is no background network request. Re-render with a fresh normalized snapshot to restore observations. Proposed actions compare this capture only; a sustained rule window is not established.</p>
-<table><caption>Closed dimensions only. Global database gauges use max across complete fresh replicas; process transport readiness uses min. Counter/histogram and missing-source rows remain unknown until verified adapters exist.</caption>
+<label for="panel-filter">Filter panels</label>
+<input id="panel-filter" type="search" maxlength="80" aria-controls="panel-table">
+<p id="panel-count" role="status" aria-live="polite" aria-atomic="true">All panels shown.</p>
+<table id="panel-table"><caption>Closed dimensions only. Global database gauges use max across complete fresh replicas; process transport readiness uses min. Counter/histogram and missing-source rows remain unknown until verified adapters exist.</caption>
 <thead><tr><th>Panel</th><th>Meaning</th><th>Value</th><th>State</th><th>Proposed action</th><th>Coverage</th><th>Owner role</th><th>Runbook</th><th>Evidence limit</th></tr></thead><tbody>''' + "\n".join(rows) + '''</tbody></table>
 <script>
-function expireStaleObservations(){const now=Date.now();for(const row of document.querySelectorAll('tr[data-expire-at]')){const expiry=Number(row.dataset.expireAt),capture=Number(row.dataset.capturedAt);if(!Number.isFinite(expiry)||!Number.isFinite(capture)||now>expiry||now<capture){row.dataset.expired='true';row.querySelector('.reading').textContent='unknown';row.querySelector('.status').textContent='unknown';row.querySelector('.proposal').textContent='';}}}
+const panelFilter=document.getElementById('panel-filter');
+const panelCount=document.getElementById('panel-count');
+function filterPanels(){
+  panelFilter.value=panelFilter.value.slice(0,80);
+  const query=panelFilter.value.trim().toLowerCase();
+  const rows=document.querySelectorAll('tbody tr');
+  let shown=0;
+  for(const row of rows){
+    row.hidden=!row.textContent.toLowerCase().includes(query);
+    if(!row.hidden)shown++;
+  }
+  const count=`Showing ${shown} of ${rows.length} panels`;
+  if(panelCount.textContent!==count)panelCount.textContent=count;
+}
+panelFilter.addEventListener('input',filterPanels);
+function expireStaleObservations(){const now=Date.now();for(const row of document.querySelectorAll('tr[data-expire-at]')){const expiry=Number(row.dataset.expireAt),capture=Number(row.dataset.capturedAt);if(!Number.isFinite(expiry)||!Number.isFinite(capture)||now>expiry||now<capture){row.dataset.expired='true';row.querySelector('.reading').textContent='unknown';row.querySelector('.status').textContent='unknown';row.querySelector('.proposal').textContent='';}}filterPanels();}
 expireStaleObservations();setInterval(expireStaleObservations,1000);
 </script></html>'''
 

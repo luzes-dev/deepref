@@ -23,6 +23,12 @@ capture expiry, value, proposed action and fresh/rejected replica counts.
 `rules.proposed.json` retains the complete versioned catalog. The tool refuses
 `--production`; these files do not activate a backend or notification route.
 
+Use **Filter panels** to narrow the rendered rows by literal, case-insensitive
+text, including panel dimensions, state, owner or runbook. Input is limited to 80
+characters, and the visible/total count updates locally. Clear the input to show
+all panels. Filtering makes no network request and never refreshes observations;
+expiry still changes stale rows to unknown, including rows hidden by the filter.
+
 Linux and Python 3.11 or newer supply the standard-library tooling; Node 24 or newer runs
 the generated-script tests. No third-party Python package or hosted service is
 required. Recorded evidence must include the actual interpreter versions.
@@ -138,7 +144,7 @@ PYTHONDONTWRITEBYTECODE=1 timeout --signal=TERM --kill-after=2s 90s \
 
 The runner checks at least 4 GiB disk free and 6 GiB available memory after
 acquisition, captures initial/final numeric values and source identities, and runs
-19 catalog, 10 pure protocol, nine wire and four generated-script tests plus the
+19 catalog, 10 pure protocol, nine wire and seven generated-script tests plus the
 actual catalog-bound CLI drill and documentation/format checks. Its wire manifest
 records 14 listener lifetimes and their task/refusal/deadline inventory; the CLI
 adds one listener. Every exact owned port is independently rechecked. Temporary

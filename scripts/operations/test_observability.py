@@ -188,7 +188,7 @@ def execute(args):
                 if f"Ran {count} tests" not in raw or "\nOK\n" not in raw or "skipped=" in raw:
                     raise RuntimeError("test count/selection mismatch: " + name)
             script_log = (output / "generated-script.log").read_text()
-            if "pass 4" not in script_log or "fail 0" not in script_log or "skipped 0" not in script_log:
+            if "pass 7" not in script_log or "fail 0" not in script_log or "skipped 0" not in script_log:
                 raise RuntimeError("generated-script selection mismatch")
             receipt = json.loads((output / "cli-delivery.jsonl").read_text().splitlines()[-1])
             if not receipt.get("local_fixture_delivery") or not receipt.get("owned_listener_closed") or receipt.get("pending_tasks") != 0 or any(receipt.get(key) is not False for key in ("production_accepted", "human_notification_verified", "backend_ingestion_verified")):
