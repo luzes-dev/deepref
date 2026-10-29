@@ -30,6 +30,8 @@ ARCHIVE_BYTES = 1073741824
 MEMORY_BYTES = 2147483648
 DISK_GUARD = 4294967296
 MEMORY_GUARD_KIB = 6291456
+# Full lowercase Docker ID plus an optional CRLF; larger files are unresolved.
+CID_FILE_MAX_BYTES = 66
 
 
 class CapacityRefusal(RuntimeError):
@@ -355,9 +357,18 @@ class Drill:
             return
         if record["id"] is None:
             cidfile = Path(record["cidfile"])
-            if cidfile.exists():
-                record["id"] = bounded_identifier(cidfile.read_text().strip(), r"[a-f0-9]{64}")
-            else:
+            # The daemon may create the container before the client finishes
+            # its CID file. Missing, unreadable or malformed contents are not
+            # identity; resolve the recorded exact name and ownership instead.
+            try:
+                with cidfile.open("rb") as handle:
+                    raw_id = handle.read(CID_FILE_MAX_BYTES + 1)
+            except OSError:
+                raw_id = b""
+            candidate_id = raw_id.strip()
+            if len(raw_id) <= CID_FILE_MAX_BYTES and re.fullmatch(rb"[a-f0-9]{64}", candidate_id):
+                record["id"] = candidate_id.decode("ascii")
+            if record["id"] is None:
                 inspected = self.docker("resolve-owned-" + role, "container", "inspect", record["name"], check=False)
                 if inspected.returncode != 0:
                     self.require_absent("container", record["name"])
