@@ -28,8 +28,8 @@ remain the enforcement boundary. Re-run checks after any privilege change.
 ## Action
 
 1. Use a new disposable database to rehearse. Install required extensions with
-   the database administrator and apply the append-only migrations through
-   0205 using `cargo sqlx migrate run --source crates/app/migrations --no-dotenv`
+   the database administrator and apply the fresh `0001_baseline.sql` using
+   `cargo sqlx migrate run --source crates/app/migrations --no-dotenv`
    with the explicit bootstrap administrator credential. This first adoption
    is an explicit administrator operation, separate from normal production
    `deepref-server migrate`. Never point a test at an existing user database.
@@ -66,8 +66,8 @@ remain the enforcement boundary. Re-run checks after any privilege change.
    explicitly grant any new application function it needs; default function
    execution is not public. Provisioning clears direct LOGIN/PUBLIC column ACLs
    as well as relation ACLs; checks detect later column-level privilege drift.
-   Migration 0205 repairs sequence ACL handling and protected maintenance
-   relation mutations. Checks also compare the five protected functions against
+   The baseline includes sequence ACL and protected maintenance relation
+   restrictions. Checks also compare the five protected functions against
    embedded versioned bodies/language/configuration and both installed audit
    trigger bindings. Any source or trigger drift refuses startup.
    Repeated activation preserves narrower table/function/sequence
@@ -80,8 +80,8 @@ remain the enforcement boundary. Re-run checks after any privilege change.
    retention-column and activation reads. New maintenance-only tables present at
    first adoption need explicit protected-table policy before activation; do not
    assume ordinary runtime default CRUD is appropriate for control tables.
-   Migration 0206 protects both privacy rollout controls on first adoption,
-   upgrade and reprovisioning. Runtime retains SELECT only on
+   The baseline protects both privacy rollout controls on first adoption and
+   reprovisioning. Runtime retains SELECT only on
    `account_export_rollout` and `account_erasure_rollout`; deletion writer
    journals, progress and target maps remain ordinary business DML. Maintenance
    has no direct rollout reads or writes. With its separate credential, run

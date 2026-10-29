@@ -1186,19 +1186,6 @@ async fn automation_audience_does_not_contaminate_human_frozen_evidence() {
     assert!(!contaminated, "automation exposure is not human exposure");
 }
 
-#[test]
-fn textual_uniqueness_and_legacy_comparisons_are_identity_checks() {
-    let original = include_str!("../migrations/0054_ai_first_cohorts.sql");
-    assert!(original.contains("l.actor_id=actor"));
-    let replacement = include_str!("../migrations/0055_ai_first_blind_controls.sql");
-    assert!(replacement.contains("l.actor_id=actor"));
-    assert!(original.contains("UNIQUE(cohort_id,report_id,actor_id)"));
-    let provenance = include_str!("../migrations/0107_trusted_actor_provenance.sql");
-    assert!(provenance.contains("actor_identity_may_be_user"));
-    assert!(provenance.contains("CREATE OR REPLACE FUNCTION ai_first_fresh_auditor("));
-    assert!(provenance.contains("CREATE OR REPLACE FUNCTION ai_first_queue_visible("));
-}
-
 #[tokio::test]
 async fn legacy_history_stays_unmodified_and_new_writes_can_add_provenance() {
     let Some(pool) = database().await else { return };

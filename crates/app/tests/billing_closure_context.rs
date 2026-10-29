@@ -1,10 +1,10 @@
 //! Restricted original-context capture, not evidence of provider closure.
 //! All provider references are local literals; no provider adapter is invoked.
 use anyhow::{Context, ensure};
-use deepref_app::{MIGRATOR, identity::AuditRequest};
+use deepref_app::identity::AuditRequest;
 use deepref_domain::{UserId, WorkspaceId};
 use serde_json::Value;
-use sqlx::{PgPool, Row, migrate::Migrator, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn workspace(pool: &PgPool) -> anyhow::Result<(UserId, WorkspaceId)> {
@@ -122,52 +122,6 @@ async fn original_context_is_immutable_and_preserves_existing_five_year_expiry()
             "rejected mutation changed original context"
         );
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn pre_capture_release_detachment_stays_unknown_after_upgrade() -> anyhow::Result<()> {
-    let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
-    else {
-        return Ok(());
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
-        .await?;
-    Migrator::with_migrations(
-        MIGRATOR
-            .iter()
-            .filter(|migration| migration.version < 193)
-            .cloned()
-            .collect(),
-    )
-    .run(&pool)
-    .await?;
-    let (user, tenant) = workspace(&pool).await?;
-    let account = mapping(&pool, tenant, true).await?;
-    deepref_app::workspaces::delete_workspace(&pool, user, tenant, AuditRequest::default()).await?;
-    let original: Value =
-        sqlx::query_scalar("SELECT to_jsonb(b) FROM billing_accounts b WHERE id=$1")
-            .bind(account)
-            .fetch_one(&pool)
-            .await?;
-    MIGRATOR.run(&pool).await?;
-    let row = sqlx::query("SELECT to_jsonb(b)-ARRAY['closure_workspace_id','closure_customer_ref','closure_subscription_ref','closure_captured_at'] AS old_fields,closure_captured_at IS NULL AND closure_workspace_id IS NULL AND closure_customer_ref IS NULL AND closure_subscription_ref IS NULL AS unknown FROM billing_accounts b WHERE id=$1")
-        .bind(account).fetch_one(&pool).await?;
-    ensure!(
-        row.try_get::<Value, _>("old_fields")? == original,
-        "upgrade rewrote retained historical billing fields"
-    );
-    ensure!(
-        row.try_get::<bool, _>("unknown")?,
-        "upgrade invented historical closure context"
-    );
-    check_violation(sqlx::query("UPDATE billing_accounts SET closure_captured_at=clock_timestamp(),closure_customer_ref='cus_invented' WHERE id=$1")
-        .bind(account).execute(&pool).await)?;
-    let still_unknown: bool = sqlx::query_scalar("SELECT closure_captured_at IS NULL AND closure_customer_ref IS NULL FROM billing_accounts WHERE id=$1")
-        .bind(account).fetch_one(&pool).await?;
-    ensure!(still_unknown, "rejected historical fill invented context");
     Ok(())
 }
 

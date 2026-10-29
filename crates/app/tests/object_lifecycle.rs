@@ -710,6 +710,8 @@ async fn tenant_layout_keeps_legacy_overlap_until_exact_guarded_activation() {
 #[tokio::test]
 async fn tenant_layout_activation_refuses_incomplete_validation_or_unexpected_legacy_check() {
     let Some(pool) = database().await else { return };
+    let tenant_layout_check: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='documents'::regclass AND conname='documents_object_key_tenant_layout_check'")
+        .fetch_one(&pool).await.unwrap();
     sqlx::query("ALTER TABLE documents DROP CONSTRAINT documents_object_key_tenant_layout_check")
         .execute(&pool)
         .await
@@ -721,13 +723,15 @@ async fn tenant_layout_activation_refuses_incomplete_validation_or_unexpected_le
             .is_err()
     );
     assert_eq!(rollout_state(&pool).await, (false, None, true));
-    // Restore the actual migration's widened CHECK and validate it; replacing
-    // the old CHECK with unexpected SQL must still fail without dropping it.
+    // Restore the installed widened CHECK without validation; replacing the
+    // restrictive CHECK with unexpected SQL must still fail without dropping it.
     sqlx::query("ALTER TABLE documents DROP CONSTRAINT documents_object_key_tenant_layout_check")
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::raw_sql(include_str!("../migrations/0146_tenant_document_keys.sql"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "ALTER TABLE documents ADD CONSTRAINT documents_object_key_tenant_layout_check {tenant_layout_check} NOT VALID"
+    )))
         .execute(&pool)
         .await
         .unwrap();
@@ -738,9 +742,9 @@ async fn tenant_layout_activation_refuses_incomplete_validation_or_unexpected_le
         "correct widened SQL still requires validation"
     );
     assert_eq!(rollout_state(&pool).await, (false, None, true));
-    sqlx::raw_sql(include_str!(
-        "../migrations/0147_validate_tenant_document_keys.sql"
-    ))
+    sqlx::raw_sql(
+        "ALTER TABLE documents VALIDATE CONSTRAINT documents_object_key_tenant_layout_check",
+    )
     .execute(&pool)
     .await
     .unwrap();

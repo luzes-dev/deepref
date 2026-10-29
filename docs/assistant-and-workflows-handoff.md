@@ -159,7 +159,7 @@ This section documents the specific UI/UX, styling, accessibility, and component
 
 ### Phase 3: Backend Persistence & Agent Engine — **CORE DONE**
 1. Database Migration:
-   - Created [`crates/app/migrations/0023_assistant_chat.sql`](../crates/app/migrations/0023_assistant_chat.sql):
+   - Created [`crates/app/migrations/0023_assistant_chat.sql`](https://github.com/luzes-dev/deepref/blob/8d1ab733c6c1c11fa545bd82dd8a39b0eee18083/crates/app/migrations/0023_assistant_chat.sql):
      - `assistant_conversations` table with project FK and updated_at indexes.
      - `assistant_messages` table with role check, JSONB tool_calls, tool_results, metadata.
 2. PostgreSQL persistence in [`crates/app/src/assistant.rs`](../crates/app/src/assistant.rs):

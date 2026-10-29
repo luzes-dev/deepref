@@ -172,8 +172,8 @@ records are detected with sensitivity 0.90; the arithmetic is
 
 ## Implementation map
 
-- [Blind controls migration](../../crates/app/migrations/0055_ai_first_blind_controls.sql): frozen control membership, fresh-reviewer admission and masked/interleaved queue policy.
-- [Migration 0054](../../crates/app/migrations/0054_ai_first_cohorts.sql): separate owner ceiling, immutable dispositions, frozen frame and dual reference labels.
+- [Blind controls migration](https://github.com/luzes-dev/deepref/blob/8d1ab733c6c1c11fa545bd82dd8a39b0eee18083/crates/app/migrations/0055_ai_first_blind_controls.sql): frozen control membership, fresh-reviewer admission and masked/interleaved queue policy.
+- [Migration 0054](https://github.com/luzes-dev/deepref/blob/8d1ab733c6c1c11fa545bd82dd8a39b0eee18083/crates/app/migrations/0054_ai_first_cohorts.sql): separate owner ceiling, immutable dispositions, frozen frame and dual reference labels.
 - [Cohort lifecycle](../../crates/app/src/ai_first/cohorts.rs), [routing](../../crates/app/src/ai_first/routing.rs), and [audit/finalization](../../crates/app/src/ai_first/audit.rs): approvals, bounded worker scheduling, current-evidence checks and recovery.
 - [Pure audit calculation](../../crates/application/src/ai_first.rs) and [eligibility rule](../../crates/review/src/ai_first.rs): exact integer authority and grounded two-screen agreement.
 - [API](../../crates/http-api/src/routes/ai_first.rs) and [UI](../../apps/web/src/lib/features/ai-autonomy/components/AiFirstPanel.svelte): fixed-sample workload forecast, blinded actor attribution, explicit approval and recovery.

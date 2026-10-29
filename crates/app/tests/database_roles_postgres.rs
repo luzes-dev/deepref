@@ -170,8 +170,8 @@ async fn prove_role_contract(
     }
     let (runtime, migration, maintenance) = (&pools[0], &pools[1], &pools[2]);
     verify_database_role(runtime, Purpose::Runtime).await?;
-    // New production source must not prevent the existing migration LOGIN
-    // from installing the new canonical contract. Runtime remains fail-closed.
+    // The migration LOGIN can repair a missing canonical activation function.
+    // Runtime and maintenance remain fail-closed until that repair completes.
     sqlx::query("DROP FUNCTION public.activate_export_retention(text)")
         .execute(admin)
         .await?;
@@ -187,8 +187,13 @@ async fn prove_role_contract(
             .is_err()
     );
     sqlx::raw_sql(include_str!(
-        "../migrations/0206_privacy_activation_role_boundaries.sql"
+        "../schema/role_contracts/activate_export_retention.sql"
     ))
+    .execute(migration)
+    .await?;
+    sqlx::query(
+        "GRANT EXECUTE ON FUNCTION public.activate_export_retention(text) TO deepref_maintenance",
+    )
     .execute(migration)
     .await?;
     prove_review_corrections(admin, runtime, maintenance, names).await?;
@@ -506,40 +511,25 @@ async fn prove_role_contract(
     Ok(())
 }
 
-// These are trusted immutable migration fragments, never SQL obtained from the
-// live catalog or operator input. Display is a closed fixture-only DDL seam.
+// These are trusted checked-in security contracts, never SQL obtained from the
+// live catalog or operator input. The enum is a closed fixture-only DDL seam.
 #[derive(Clone, Copy)]
 enum ProtectedFixtureFunction {
     Guard,
     Purge,
     Redaction,
 }
-impl std::fmt::Display for ProtectedFixtureFunction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (source, marker) = match self {
-            Self::Guard => (
-                include_str!("../migrations/0188_database_roles_and_bounded_audit_retention.sql"),
-                "CREATE OR REPLACE FUNCTION reject_admin_audit_event_changes()",
-            ),
-            Self::Purge => (
-                include_str!("../migrations/0188_database_roles_and_bounded_audit_retention.sql"),
-                "CREATE FUNCTION public.purge_retention_records(",
-            ),
-            Self::Redaction => (
-                include_str!(
-                    "../migrations/0117_authorized_account_redaction_and_address_digests.sql"
-                ),
-                "CREATE FUNCTION redact_deleted_user_audit(",
-            ),
-        };
-        let definition = source.split_once(marker).ok_or(std::fmt::Error)?.1;
-        let (definition, _) = definition.split_once("$$;").ok_or(std::fmt::Error)?;
-        write!(
-            f,
-            "CREATE OR REPLACE FUNCTION{}{}$$;",
-            marker.split_once("FUNCTION").ok_or(std::fmt::Error)?.1,
-            definition
-        )
+impl ProtectedFixtureFunction {
+    fn definition(self) -> &'static str {
+        match self {
+            Self::Guard => {
+                include_str!("../schema/role_contracts/reject_admin_audit_event_changes.sql")
+            }
+            Self::Purge => include_str!("../schema/role_contracts/purge_retention_records.sql"),
+            Self::Redaction => {
+                include_str!("../schema/role_contracts/redact_deleted_user_audit.sql")
+            }
+        }
     }
 }
 
@@ -766,11 +756,7 @@ async fn prove_protected_definitions(
         let refused = verify_database_role(runtime, Purpose::Runtime)
             .await
             .is_err();
-        QueryBuilder::<Postgres>::new("")
-            .push(function)
-            .build()
-            .execute(admin)
-            .await?;
+        sqlx::raw_sql(function.definition()).execute(admin).await?;
         sqlx::query(
             "ALTER FUNCTION public.redact_deleted_user_audit(uuid) SET search_path=pg_catalog",
         )

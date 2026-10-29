@@ -51,9 +51,9 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
         active,
         "database roles are not activated; run the explicit administrator provisioning step"
     );
-    // A migration credential must be able to apply the additive privacy
-    // contract before its new function exists. Runtime and maintenance may
-    // start only once the complete canonical activation boundary is installed.
+    // A migration credential must be able to repair a missing privacy function.
+    // Runtime and maintenance may start only once the complete canonical
+    // activation boundary is installed.
     let privacy_activation_installed: bool = sqlx::query_scalar(
         "SELECT to_regprocedure('public.activate_export_retention(text)') IS NOT NULL",
     )
@@ -61,9 +61,9 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
     .await?;
     anyhow::ensure!(
         privacy_activation_installed || purpose == DatabaseRolePurpose::Migration,
-        "privacy activation role migration is not installed"
+        "privacy activation role contract is not installed"
     );
-    // Expected source comes from immutable versioned migration bytes, never
+    // Expected source comes from checked-in canonical security contracts, never
     // from a mutable catalog row or caller-controlled configuration.
     for expected in PROTECTED_FUNCTIONS.iter().chain(
         PRIVACY_PROTECTED_FUNCTIONS
@@ -266,7 +266,6 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
 
 struct ProtectedFunction {
     signature: &'static str,
-    marker: &'static str,
     source: &'static str,
     definer: bool,
     configuration: &'static [&'static str],
@@ -274,36 +273,28 @@ struct ProtectedFunction {
 impl ProtectedFunction {
     fn body(&self) -> Result<&'static str> {
         self.source
-            .split_once(self.marker)
-            .and_then(|(_, definition)| definition.split_once("AS $$"))
+            .split_once("AS $$")
             .and_then(|(_, body)| body.split_once("$$;"))
             .map(|(body, _)| body)
             .context("read embedded canonical database function")
     }
 }
-const ROLE_SQL: &str =
-    include_str!("../migrations/0188_database_roles_and_bounded_audit_retention.sql");
-const REDACTION_SQL: &str =
-    include_str!("../migrations/0117_authorized_account_redaction_and_address_digests.sql");
 const PROTECTED_FUNCTIONS: &[ProtectedFunction] = &[
     ProtectedFunction {
         signature: "public.purge_retention_records(integer)",
-        marker: "CREATE FUNCTION public.purge_retention_records(",
-        source: ROLE_SQL,
+        source: include_str!("../schema/role_contracts/purge_retention_records.sql"),
         definer: true,
         configuration: &["search_path=pg_catalog", "lock_timeout=250ms"],
     },
     ProtectedFunction {
         signature: "public.redact_deleted_user_audit(uuid)",
-        marker: "CREATE FUNCTION redact_deleted_user_audit(",
-        source: REDACTION_SQL,
+        source: include_str!("../schema/role_contracts/redact_deleted_user_audit.sql"),
         definer: true,
         configuration: &["search_path=pg_catalog"],
     },
     ProtectedFunction {
         signature: "public.reject_admin_audit_event_changes()",
-        marker: "CREATE OR REPLACE FUNCTION reject_admin_audit_event_changes()",
-        source: ROLE_SQL,
+        source: include_str!("../schema/role_contracts/reject_admin_audit_event_changes.sql"),
         definer: false,
         configuration: &["search_path=pg_catalog"],
     },
@@ -312,8 +303,7 @@ const PROTECTED_FUNCTIONS: &[ProtectedFunction] = &[
 const PRIVACY_PROTECTED_FUNCTIONS: &[ProtectedFunction] = &[
     ProtectedFunction {
         signature: "public.activate_export_retention(text)",
-        marker: "CREATE OR REPLACE FUNCTION public.activate_export_retention(",
-        source: include_str!("../migrations/0206_privacy_activation_role_boundaries.sql"),
+        source: include_str!("../schema/role_contracts/activate_export_retention.sql"),
         definer: true,
         configuration: &[
             "search_path=pg_catalog",
@@ -323,8 +313,7 @@ const PRIVACY_PROTECTED_FUNCTIONS: &[ProtectedFunction] = &[
     },
     ProtectedFunction {
         signature: "public.activate_account_erasure(text)",
-        marker: "CREATE FUNCTION activate_account_erasure(",
-        source: include_str!("../migrations/0189_privacy_erasure_targets.sql"),
+        source: include_str!("../schema/role_contracts/activate_account_erasure.sql"),
         definer: true,
         configuration: &[
             "search_path=pg_catalog, public",
@@ -368,33 +357,4 @@ pub async fn provision_database_roles(
         .await?;
     transaction.commit().await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn canonical_protected_bodies_remain_compatible_with_applied_migrations() -> Result<()> {
-        let corrective = include_str!("../migrations/0205_database_role_contract_repairs.sql");
-        for expected in PROTECTED_FUNCTIONS {
-            let marker = expected
-                .marker
-                .replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION")
-                .replace("FUNCTION reject_", "FUNCTION public.reject_")
-                .replace("FUNCTION redact_", "FUNCTION public.redact_");
-            // Only this pure unit check rewrites a definition marker; production
-            // descriptors and expected bodies are immutable embedded bytes.
-            let body = corrective
-                .split_once(&marker)
-                .and_then(|(_, definition)| definition.split_once("AS $$"))
-                .and_then(|(_, body)| body.split_once("$$;"))
-                .context("read corrective canonical definition")?
-                .0;
-            anyhow::ensure!(
-                body == expected.body()?,
-                "corrective migration changed protected semantics"
-            );
-        }
-        Ok(())
-    }
 }

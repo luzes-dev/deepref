@@ -14,7 +14,7 @@ use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
 };
 use deepref_domain::{CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId};
-use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
@@ -378,124 +378,6 @@ async fn published_protocol_and_criteria_reject_direct_scientific_mutation() {
         .execute(&pool)
         .await;
     assert!(protocol_delete.is_err());
-}
-
-#[tokio::test]
-async fn migration_backfills_legacy_json_criteria_deterministically() {
-    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await else {
-        return;
-    };
-    let schema = format!("protocol_migration_test_{}", Uuid::new_v4().simple());
-    let mut connection = PgConnection::connect(&url)
-        .await
-        .expect("migration test database connection should work");
-    sqlx::query(AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-        .execute(&mut connection)
-        .await
-        .expect("test schema should be created");
-    sqlx::query(AssertSqlSafe(format!(
-        "SET search_path TO {schema}, public"
-    )))
-    .execute(&mut connection)
-    .await
-    .expect("test schema should be selected");
-
-    let result = async {
-        deepref_app::MIGRATOR
-            .run_to(10, &mut connection)
-            .await
-            .expect("migrations through 0010 should apply");
-        let project_id = Uuid::new_v4();
-        let protocol_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'legacy backfill project')")
-            .bind(project_id)
-            .execute(&mut connection)
-            .await
-            .expect("legacy project should be inserted");
-        sqlx::query(
-            "INSERT INTO protocol_versions (id,project_id,version,name,status,criteria,published_at) VALUES ($1,$2,1,'Legacy','published',$3,now())",
-        )
-        .bind(protocol_id)
-        .bind(project_id)
-        .bind(serde_json::json!([
-            {"id":"population","label":"Population","description":"People in scope"},
-            {"id":"outcome","label":"Outcome","description":"Outcome in scope"}
-        ]))
-        .execute(&mut connection)
-        .await
-        .expect("legacy protocol should be inserted");
-        deepref_app::MIGRATOR
-            .run(&mut connection)
-            .await
-            .expect("remaining migrations should apply");
-
-        let rows = sqlx::query(
-            "SELECT id,ordinal,criterion_type,stage,dimension,label,description FROM eligibility_criteria WHERE protocol_version_id=$1 ORDER BY ordinal",
-        )
-        .bind(protocol_id)
-        .fetch_all(&mut connection)
-        .await
-        .expect("backfilled criteria should be readable");
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].get::<i32, _>("ordinal"), 0);
-        assert_eq!(rows[0].get::<String, _>("criterion_type"), "include");
-        assert_eq!(rows[0].get::<String, _>("stage"), "both");
-        assert_eq!(rows[0].get::<String, _>("dimension"), "population");
-        assert_eq!(rows[1].get::<String, _>("dimension"), "outcome");
-
-        let first_id = rows[0].get::<Uuid, _>("id");
-        deepref_app::MIGRATOR
-            .run(&mut connection)
-            .await
-            .expect("rerunning migrations should be a no-op");
-        let second_id: Uuid = sqlx::query_scalar(
-            "SELECT id FROM eligibility_criteria WHERE protocol_version_id=$1 AND ordinal=0",
-        )
-        .bind(protocol_id)
-        .fetch_one(&mut connection)
-        .await
-        .expect("backfilled criterion should remain");
-        assert_eq!(first_id, second_id);
-
-        let report_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO reports (id,title) VALUES ($1,'Legacy cascade report')")
-            .bind(report_id)
-            .execute(&mut connection)
-            .await
-            .expect("cascade report should be inserted");
-        sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
-            .bind(project_id)
-            .bind(report_id)
-            .execute(&mut connection)
-            .await
-            .expect("cascade membership should be inserted");
-        sqlx::query("INSERT INTO screening_events (id,project_id,report_id,stage,decision,protocol_version_id,actor_kind,actor_id) VALUES ($1,$2,$3,'title_abstract','include',$4,'user','migration-test')")
-            .bind(Uuid::new_v4())
-            .bind(project_id)
-            .bind(report_id)
-            .bind(protocol_id)
-            .execute(&mut connection)
-            .await
-            .expect("historical screening event should be inserted");
-        sqlx::query("DELETE FROM projects WHERE id=$1")
-            .bind(project_id)
-            .execute(&mut connection)
-            .await
-            .expect("project cascade should remove protocol history");
-        let remaining_protocols: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM protocol_versions WHERE project_id=$1")
-                .bind(project_id)
-                .fetch_one(&mut connection)
-                .await
-                .expect("protocol count should be readable after cascade");
-        assert_eq!(remaining_protocols, 0);
-    };
-    result.await;
-
-    sqlx::query(AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
-        .execute(&mut connection)
-        .await
-        .expect("test schema should be removed");
 }
 
 #[tokio::test]

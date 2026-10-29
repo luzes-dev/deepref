@@ -14,6 +14,7 @@
 - [Assistant durability runbook](assistant-durability-runbook.md)
 - [JetStream delivery runbook](jetstream-transport-runbook.md)
 - [Database restore runbook](database-restore-runbook.md)
+- [Pre-production database baseline reset](database-baseline-reset.md)
 - [Object store reconciliation runbook](object-store-reconciliation-runbook.md)
 - [Provider outage runbook](provider-outage-runbook.md)
 - [Release and migration runbook](release-and-migration-runbook.md)
