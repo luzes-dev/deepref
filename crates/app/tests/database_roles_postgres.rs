@@ -170,6 +170,27 @@ async fn prove_role_contract(
     }
     let (runtime, migration, maintenance) = (&pools[0], &pools[1], &pools[2]);
     verify_database_role(runtime, Purpose::Runtime).await?;
+    // New production source must not prevent the existing migration LOGIN
+    // from installing the new canonical contract. Runtime remains fail-closed.
+    sqlx::query("DROP FUNCTION public.activate_export_retention(text)")
+        .execute(admin)
+        .await?;
+    verify_database_role(migration, Purpose::Migration).await?;
+    anyhow::ensure!(
+        verify_database_role(runtime, Purpose::Runtime)
+            .await
+            .is_err()
+    );
+    anyhow::ensure!(
+        verify_database_role(maintenance, Purpose::Maintenance)
+            .await
+            .is_err()
+    );
+    sqlx::raw_sql(include_str!(
+        "../migrations/0206_privacy_activation_role_boundaries.sql"
+    ))
+    .execute(migration)
+    .await?;
     prove_review_corrections(admin, runtime, maintenance, names).await?;
     // Deployment checks inspect the actual canonical function contracts.
     sqlx::query("ALTER FUNCTION public.purge_retention_records(integer) RESET search_path")
@@ -352,6 +373,10 @@ async fn prove_role_contract(
     sqlx::query("INSERT INTO public.admin_audit_events(id,event_type,principal_kind,target_user_id,occurred_at,metadata) VALUES(gen_random_uuid(),'auth.login','system',$1,now()-interval '7 months','{}'),(gen_random_uuid(),'auth.login','system',$1,now(),'{}'),(gen_random_uuid(),'account.deletion_completed','system',$1,now()-interval '7 months','{}'),(gen_random_uuid(),'account.deletion_completed','system',$1,now()-interval '6 years','{}')")
             .bind(user).execute(admin).await?;
     sqlx::query("INSERT INTO public.fulfilled_account_deletions(user_id,completed_at) VALUES($1,now()-interval '6 years')").bind(user).execute(admin).await?;
+    // This six-year-old proof models history from before physical activation.
+    // Seed it while the rollout is inactive, then exercise the real activators;
+    // the physical proof trigger correctly rejects new unacknowledged proofs.
+    prove_privacy_activation_boundaries(admin, runtime, maintenance, names).await?;
     // Even an accidental direct DELETE grant plus forged GUC cannot pass
     // the independent trigger's trusted-owner check.
     QueryBuilder::<Postgres>::new("GRANT DELETE ON public.admin_audit_events TO ")
@@ -838,5 +863,146 @@ async fn prove_bounded_operational_reads(
     }
     // The max-one maintenance pool is immediately reusable after cancellation.
     deepref_app::audit_admin::remaining_retention_eligible(maintenance).await?;
+    Ok(())
+}
+
+/// Privacy activation is an operator capability, distinct from runtime deletion
+/// business DML. Exercise real authenticated LOGINs, including a one-connection
+/// maintenance pool with the hostile search_path installed by the fixture.
+async fn prove_privacy_activation_boundaries(
+    admin: &PgPool,
+    runtime: &PgPool,
+    maintenance: &PgPool,
+    names: [&FixtureLogin; 3],
+) -> Result<()> {
+    deny(
+        runtime,
+        "UPDATE public.account_export_rollout SET retention_activated=retention_activated",
+    )
+    .await?;
+    deny(
+        runtime,
+        "UPDATE public.account_erasure_rollout SET activated=activated",
+    )
+    .await?;
+    deny(runtime, "SELECT public.activate_account_erasure('all-legacy-export-writers-stopped-and-untracked-staging-removed-no-restart')").await?;
+    deny(
+        runtime,
+        "SELECT public.activate_export_retention('all-eager-deleting-binaries-drained-no-restart')",
+    )
+    .await?;
+    deny(maintenance, "SELECT * FROM public.account_export_rollout").await?;
+    deny(
+        maintenance,
+        "UPDATE public.account_erasure_rollout SET activated=true",
+    )
+    .await?;
+    verify_database_role(maintenance, Purpose::Maintenance).await?;
+    anyhow::ensure!(
+        sqlx::query("SELECT public.activate_export_retention('wrong-token')")
+            .execute(maintenance)
+            .await
+            .is_err()
+    );
+    anyhow::ensure!(
+        sqlx::query("SELECT public.activate_account_erasure('wrong-token')")
+            .execute(maintenance)
+            .await
+            .is_err()
+    );
+    anyhow::ensure!(
+        deepref_app::account_export::activate_export_retention(maintenance, "wrong-token")
+            .await
+            .is_err()
+    );
+    anyhow::ensure!(
+        deepref_app::privacy_erasure::activate(maintenance, "wrong-token")
+            .await
+            .is_err()
+    );
+    deepref_app::account_export::activate_export_retention(
+        maintenance,
+        deepref_app::account_export::EXPORT_ATTESTATION_TOKEN,
+    )
+    .await?;
+    deepref_app::privacy_erasure::activate(
+        maintenance,
+        deepref_app::privacy_erasure::ERASURE_DRAIN_ATTESTATION,
+    )
+    .await?;
+    let activated: bool = sqlx::query_scalar(
+        "SELECT (SELECT retention_activated FROM public.account_export_rollout WHERE singleton)
+            AND (SELECT activated FROM public.account_erasure_rollout WHERE singleton)",
+    )
+    .fetch_one(runtime)
+    .await?;
+    anyhow::ensure!(
+        activated,
+        "maintenance activation did not persist both exact attestations"
+    );
+    // Direct LOGIN column grants and capability-level table grants must be
+    // repaired on repeated provisioning, without reopening rollout mutation.
+    QueryBuilder::<Postgres>::new("GRANT UPDATE (activated) ON public.account_erasure_rollout TO ")
+        .push(names[0])
+        .build()
+        .execute(admin)
+        .await?;
+    sqlx::query("GRANT UPDATE ON public.account_export_rollout TO deepref_runtime")
+        .execute(admin)
+        .await?;
+    anyhow::ensure!(
+        verify_database_role(runtime, Purpose::Runtime)
+            .await
+            .is_err(),
+        "effective privacy rollout mutation was accepted"
+    );
+    provision_database_roles(
+        admin,
+        names[0].as_str(),
+        names[1].as_str(),
+        names[2].as_str(),
+    )
+    .await?;
+    deny(
+        runtime,
+        "UPDATE public.account_export_rollout SET retention_activated=false",
+    )
+    .await?;
+    deny(
+        runtime,
+        "UPDATE public.account_erasure_rollout SET activated=false",
+    )
+    .await?;
+    verify_database_role(runtime, Purpose::Runtime).await?;
+    verify_database_role(maintenance, Purpose::Maintenance).await?;
+    // Both newly permitted definers must retain immutable, pinned contracts.
+    sqlx::query("ALTER FUNCTION public.activate_account_erasure(text) RESET search_path")
+        .execute(admin)
+        .await?;
+    anyhow::ensure!(
+        verify_database_role(maintenance, Purpose::Maintenance)
+            .await
+            .is_err(),
+        "activation definer search_path drift was accepted"
+    );
+    sqlx::query(
+        "ALTER FUNCTION public.activate_account_erasure(text) SET search_path=pg_catalog,public",
+    )
+    .execute(admin)
+    .await?;
+    verify_database_role(maintenance, Purpose::Maintenance).await?;
+    sqlx::query("GRANT EXECUTE ON FUNCTION public.activate_export_retention(text) TO PUBLIC")
+        .execute(admin)
+        .await?;
+    anyhow::ensure!(
+        verify_database_role(runtime, Purpose::Runtime)
+            .await
+            .is_err(),
+        "PUBLIC activation capability was accepted"
+    );
+    sqlx::query("REVOKE EXECUTE ON FUNCTION public.activate_export_retention(text) FROM PUBLIC")
+        .execute(admin)
+        .await?;
+    verify_database_role(runtime, Purpose::Runtime).await?;
     Ok(())
 }

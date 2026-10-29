@@ -51,9 +51,25 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
         active,
         "database roles are not activated; run the explicit administrator provisioning step"
     );
+    // A migration credential must be able to apply the additive privacy
+    // contract before its new function exists. Runtime and maintenance may
+    // start only once the complete canonical activation boundary is installed.
+    let privacy_activation_installed: bool = sqlx::query_scalar(
+        "SELECT to_regprocedure('public.activate_export_retention(text)') IS NOT NULL",
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    anyhow::ensure!(
+        privacy_activation_installed || purpose == DatabaseRolePurpose::Migration,
+        "privacy activation role migration is not installed"
+    );
     // Expected source comes from immutable versioned migration bytes, never
     // from a mutable catalog row or caller-controlled configuration.
-    for expected in PROTECTED_FUNCTIONS {
+    for expected in PROTECTED_FUNCTIONS.iter().chain(
+        PRIVACY_PROTECTED_FUNCTIONS
+            .iter()
+            .filter(|_| privacy_activation_installed),
+    ) {
         let safe: bool = sqlx::query_scalar(
             "SELECT p.proowner='deepref_migration_owner'::regrole
                 AND p.prosecdef=$2 AND p.prosrc=$3 AND l.lanname='plpgsql'
@@ -135,7 +151,17 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
            (has_table_privilege(session_user,'public.admin_audit_events','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege(session_user,'public.admin_audit_events','UPDATE,REFERENCES')) AS audit_mutation,
            (has_table_privilege(session_user,'public.fulfilled_account_deletions','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege(session_user,'public.fulfilled_account_deletions','UPDATE,REFERENCES')) AS proof_mutation,
            EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prosecdef
-             AND has_function_privilege(session_user,p.oid,'EXECUTE') AND p.oid<>CASE WHEN $1='deepref_runtime' THEN 'public.redact_deleted_user_audit(uuid)'::regprocedure WHEN $1='deepref_maintenance' THEN 'public.purge_retention_records(integer)'::regprocedure ELSE p.oid END) AS unsafe_definer,
+             AND has_function_privilege(session_user,p.oid,'EXECUTE') AND CASE
+               WHEN $1='deepref_runtime' THEN p.oid<>'public.redact_deleted_user_audit(uuid)'::regprocedure
+               WHEN $1='deepref_maintenance' THEN p.oid NOT IN(
+                 'public.purge_retention_records(integer)'::regprocedure,
+                 to_regprocedure('public.activate_export_retention(text)'),
+                 to_regprocedure('public.activate_account_erasure(text)'))
+               ELSE false END) AS unsafe_definer,
+           EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE n.nspname='public' AND c.relname IN('account_export_rollout','account_erasure_rollout')
+               AND (has_table_privilege(session_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                 OR has_any_column_privilege(session_user,c.oid,'INSERT,UPDATE,REFERENCES'))) AS privacy_rollout_mutation,
            (has_table_privilege(session_user,'public._sqlx_migrations','INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege(session_user,'public._sqlx_migrations','INSERT,UPDATE,REFERENCES')) AS migration_mutation,
            (has_table_privilege(session_user,'public.database_role_contract','INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege(session_user,'public.database_role_contract','INSERT,UPDATE,REFERENCES')) AS contract_mutation,
            EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -168,6 +194,7 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
                 "runtime_sequence_mutation",
                 "public_sequence_access",
                 "unsafe_sequence_defaults",
+                "privacy_rollout_mutation",
             ] {
                 anyhow::ensure!(
                     !row.try_get::<bool, _>(field)?,
@@ -194,6 +221,7 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
                 "maintenance_sequence_access",
                 "public_sequence_access",
                 "unsafe_sequence_defaults",
+                "privacy_rollout_mutation",
             ] {
                 anyhow::ensure!(
                     !row.try_get::<bool, _>(field)?,
@@ -203,6 +231,14 @@ async fn verify(pool: &PgPool, purpose: DatabaseRolePurpose) -> Result<DatabaseR
             anyhow::ensure!(
                 row.try_get::<bool, _>("can_purge")?,
                 "maintenance retention function is not granted"
+            );
+            let can_activate: bool = sqlx::query_scalar(
+                "SELECT has_function_privilege(session_user,'public.activate_export_retention(text)','EXECUTE')
+                    AND has_function_privilege(session_user,'public.activate_account_erasure(text)','EXECUTE')",
+            ).fetch_one(&mut *transaction).await?;
+            anyhow::ensure!(
+                can_activate,
+                "maintenance privacy activation functions are not granted"
             );
         }
         DatabaseRolePurpose::Migration => {
@@ -270,6 +306,31 @@ const PROTECTED_FUNCTIONS: &[ProtectedFunction] = &[
         source: ROLE_SQL,
         definer: false,
         configuration: &["search_path=pg_catalog"],
+    },
+];
+
+const PRIVACY_PROTECTED_FUNCTIONS: &[ProtectedFunction] = &[
+    ProtectedFunction {
+        signature: "public.activate_export_retention(text)",
+        marker: "CREATE OR REPLACE FUNCTION public.activate_export_retention(",
+        source: include_str!("../migrations/0206_privacy_activation_role_boundaries.sql"),
+        definer: true,
+        configuration: &[
+            "search_path=pg_catalog",
+            "lock_timeout=250ms",
+            "statement_timeout=1500ms",
+        ],
+    },
+    ProtectedFunction {
+        signature: "public.activate_account_erasure(text)",
+        marker: "CREATE FUNCTION activate_account_erasure(",
+        source: include_str!("../migrations/0189_privacy_erasure_targets.sql"),
+        definer: true,
+        configuration: &[
+            "search_path=pg_catalog, public",
+            "lock_timeout=250ms",
+            "statement_timeout=1500ms",
+        ],
     },
 ];
 

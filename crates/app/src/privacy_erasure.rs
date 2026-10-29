@@ -76,10 +76,17 @@ pub async fn activate(pool: &PgPool, attestation: &str) -> anyhow::Result<()> {
         attestation == ERASURE_DRAIN_ATTESTATION,
         "exact legacy writer/staging cleanup attestation required"
     );
-    sqlx::query("SELECT activate_account_erasure($1)")
-        .bind(attestation)
-        .execute(pool)
+    // Install the backend deadline before the consequential statement starts;
+    // the function's own settings alone do not define the caller's budget.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout='1500ms'")
+        .execute(&mut *tx)
         .await?;
+    sqlx::query("SELECT public.activate_account_erasure($1)")
+        .bind(attestation)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 

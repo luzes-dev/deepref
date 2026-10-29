@@ -211,7 +211,11 @@ pub async fn account_erasure_status(config: &ApiConfig) -> anyhow::Result<String
 
 /// The caller must actually drain older writers and remove untracked staging.
 pub async fn activate_account_erasure(config: &ApiConfig, attestation: &str) -> anyhow::Result<()> {
-    let pool = database_pool(config).await?;
+    let pool = database_pool_for(
+        config,
+        deepref_app::database_roles::DatabaseRolePurpose::Maintenance,
+    )
+    .await?;
     deepref_app::privacy_erasure::activate(&pool, attestation).await
 }
 
@@ -327,7 +331,11 @@ pub async fn activate_export_retention(
     config: &ApiConfig,
     attestation: &str,
 ) -> anyhow::Result<()> {
-    let pool = database_pool(config).await?;
+    let pool = database_pool_for(
+        config,
+        deepref_app::database_roles::DatabaseRolePurpose::Maintenance,
+    )
+    .await?;
     deepref_app::account_export::activate_export_retention(&pool, attestation).await
 }
 

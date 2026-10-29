@@ -137,15 +137,16 @@ pub async fn activate_export_retention(pool: &PgPool, attestation: &str) -> anyh
         "invalid attestation token for export retention rollout"
     );
 
+    // Install the backend deadline before the consequential statement starts;
+    // the function's own settings alone do not define the caller's budget.
     let mut tx = pool.begin().await?;
-    sqlx::query(
-        "UPDATE account_export_rollout
-         SET retention_activated = true, activated_at = now(), operator_attestation = $1
-         WHERE singleton = true",
-    )
-    .bind(EXPORT_ATTESTATION_TOKEN)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("SET LOCAL statement_timeout='1500ms'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT public.activate_export_retention($1)")
+        .bind(EXPORT_ATTESTATION_TOKEN)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
 
     tracing::info!(

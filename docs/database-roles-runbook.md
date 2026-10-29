@@ -67,7 +67,7 @@ remain the enforcement boundary. Re-run checks after any privilege change.
    execution is not public. Provisioning clears direct LOGIN/PUBLIC column ACLs
    as well as relation ACLs; checks detect later column-level privilege drift.
    Migration 0205 repairs sequence ACL handling and protected maintenance
-   relation mutations. Checks also compare the three protected functions against
+   relation mutations. Checks also compare the five protected functions against
    embedded versioned bodies/language/configuration and both installed audit
    trigger bindings. Any source or trigger drift refuses startup.
    Repeated activation preserves narrower table/function/sequence
@@ -80,6 +80,22 @@ remain the enforcement boundary. Re-run checks after any privilege change.
    retention-column and activation reads. New maintenance-only tables present at
    first adoption need explicit protected-table policy before activation; do not
    assume ordinary runtime default CRUD is appropriate for control tables.
+   Migration 0206 protects both privacy rollout controls on first adoption,
+   upgrade and reprovisioning. Runtime retains SELECT only on
+   `account_export_rollout` and `account_erasure_rollout`; deletion writer
+   journals, progress and target maps remain ordinary business DML. Maintenance
+   has no direct rollout reads or writes. With its separate credential, run
+   `accounts activate-export-retention --confirm-drained <exact token>` or
+   `accounts activate-erasure --confirm-drained <exact token>` only after the
+   corresponding real drain/staging obligations in the privacy runbooks are
+   satisfied. The CLI selects Maintenance-purpose verification and the two
+   pinned activation functions preserve those exact eligibility checks.
+   Runtime and maintenance refuse startup until the canonical privacy role
+   boundary is installed. The migration LOGIN can apply the additive migration
+   while its new activation function is absent; its existing ownership and
+   credential checks still apply. No migration or role provisioning activates
+   either privacy rollout automatically.
+
 5. Schedule `deepref-server audit purge` using the maintenance credential. The
    command reports `remaining_eligible`; repeat later while that is true. A dry
    run is read-only. Each real call caps audit batches at 32 and batch size at

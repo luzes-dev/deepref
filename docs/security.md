@@ -226,6 +226,13 @@ retention cutoff. A caller-controlled setting alone grants no authority.
 UPDATE remains restricted to the separate authorized account-redaction path;
 TRUNCATE and attempts to remove retained history are refused.
 
+Migration 0206 also restricts export-retention and physical-erasure activation.
+Runtime can read both rollout controls but cannot mutate them or execute their
+activation functions. The maintenance credential can call only the canonical
+activation functions with their exact drain attestations; it cannot update the
+controls directly. Business deletion journals and progress maps retain runtime
+DML. These grants do not establish that a deployed fleet was actually drained.
+
 Adoption is an explicit administrator action, followed by checks using all
 three actual LOGIN credentials. The repository's local tests do not establish
 production activation, credential rotation, old-process drain or scheduling.
