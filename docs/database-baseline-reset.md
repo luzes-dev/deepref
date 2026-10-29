@@ -22,6 +22,7 @@ This deliberately drops upgrade compatibility with databases using the former
    The migration registry should contain successful version `1`. Repeating the
    run is a no-op. Never erase migration registry rows to make an old database
    appear empty.
+
 4. Point the API and workers at the new database. Use the existing bootstrap and
    [database-role provisioning procedure](database-roles-runbook.md). Named
    LOGIN identities and credentials are deployment configuration, not baked into
