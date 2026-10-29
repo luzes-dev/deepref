@@ -260,8 +260,18 @@ async fn run_authorized(
     request: Request,
     next: Next,
 ) -> Response {
-    if !policy::human_command_attempt(row) {
-        return next.run(request).await;
+    match policy::human_activity(row) {
+        policy::HumanActivity::CommandAttempt => {}
+        policy::HumanActivity::Unclassified => {
+            tracing::error!(
+                method = row.method.as_str(),
+                route = row.path,
+                "protected route has no human activity classification"
+            );
+            return ApiError::Configuration("route activity policy is not configured".to_owned())
+                .into_response();
+        }
+        _ => return next.run(request).await,
     }
     let Some(session) = session else {
         return ApiError::Auth(AuthFailure::Unauthenticated).into_response();
@@ -278,10 +288,7 @@ async fn run_authorized(
     {
         Ok(true) => next.run(request).await,
         Ok(false) => ApiError::Auth(AuthFailure::Unauthenticated).into_response(),
-        Err(error) => ApiError::Internal(
-            anyhow::Error::new(error).context("could not record human product activity"),
-        )
-        .into_response(),
+        Err(error) => ApiError::ActivityEvidenceUnavailable(error).into_response(),
     }
 }
 
