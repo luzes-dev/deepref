@@ -22,6 +22,7 @@ use tokio::{
 };
 use tracing::Instrument;
 
+pub mod account_notices;
 pub mod assistant;
 pub mod config;
 pub mod delivery;
