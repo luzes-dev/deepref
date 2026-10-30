@@ -98,7 +98,10 @@ if name == "docker":
         print("127.0.0.1:12345")
     elif args[0] == "rm":
         state["cleaned"] = True
-    path.write_text(json.dumps(state))
+    # Publish atomically: readers never observe a truncated file.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(state))
+    os.replace(tmp, path)
 elif name == "python3":
     # The broker wait must not start before PostgreSQL's final TCP server.
     state = json.loads(path.read_text()) if path.exists() else {}
