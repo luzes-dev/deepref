@@ -146,7 +146,9 @@ to the existing catalog renderer. Preserve the source revision, actual capture
 files and hashes with the conversion. An old retained capture correctly renders
 unknown once its source timestamps expire.
 
-Pure checks create modeled files only and do not establish SDK or wire proof:
+This discovery command checks modeled conversion/evidence files and starts,
+terminates, and awaits one real owned process group. It opens no listeners and
+does not establish SDK or wire proof:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
