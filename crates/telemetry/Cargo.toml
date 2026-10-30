@@ -16,6 +16,12 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 deepref-domain = { version = "0.1.0", path = "../domain" }
 deepref-application.workspace = true
+anyhow = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+opentelemetry-proto = { version = "=0.33.1", default-features = false, features = ["gen-tonic", "metrics", "with-serde"], optional = true }
+tonic = { version = "=0.14.6", default-features = false, features = ["transport", "router", "codegen"], optional = true }
+prost = { version = "=0.14.4", optional = true }
+tokio-stream = { version = "=0.1.19", features = ["net"], optional = true }
 
 [lints]
 workspace = true
@@ -23,6 +29,16 @@ workspace = true
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+[features]
+operations-fixtures = [
+    "dep:anyhow",
+    "dep:serde_json",
+    "dep:opentelemetry-proto",
+    "dep:tonic",
+    "dep:prost",
+    "dep:tokio-stream",
+]
 
 [package.metadata.deepref]
 layer = "adapter"

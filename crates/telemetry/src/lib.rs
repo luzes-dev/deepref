@@ -158,6 +158,9 @@ impl TelemetryHandle {
     }
 }
 
+#[cfg(all(test, feature = "operations-fixtures"))]
+mod otlp_capture;
+
 #[cfg(test)]
 mod tests {
     use super::*;
