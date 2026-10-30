@@ -330,14 +330,16 @@ fn is_migration_path(path: &str) -> bool {
 
 fn destructive_findings(contents: &str) -> Vec<(usize, &'static str)> {
     let tokens = tokenize(&strip_comments_and_strings(contents));
+    let widened_checks = check_widening_drops(&tokens);
     let mut findings = Vec::new();
 
     for (index, token) in tokens.iter().enumerate() {
         match token.word.as_str() {
             "drop"
-                if tokens
-                    .get(index + 1)
-                    .is_some_and(|next| DROP_OBJECTS.contains(&next.word.as_str())) =>
+                if !widened_checks.contains(&index)
+                    && tokens
+                        .get(index + 1)
+                        .is_some_and(|next| DROP_OBJECTS.contains(&next.word.as_str())) =>
             {
                 findings.push((token.line, "DROP"));
             }
@@ -369,6 +371,107 @@ fn destructive_findings(contents: &str) -> Vec<(usize, &'static str)> {
     }
 
     findings
+}
+
+/// Words that end the table name of `ALTER TABLE` and start its first action.
+const ALTER_TABLE_ACTIONS: &[&str] =
+    &["add", "alter", "drop", "owner", "rename", "set", "validate"];
+
+/// Token indexes of `DROP CONSTRAINT x` that are the expand half of a CHECK
+/// widening: the same file later runs `ALTER TABLE` on the same table with
+/// `ADD CONSTRAINT x CHECK (...) NOT VALID`. The new constraint only skips
+/// existing rows until a separate migration validates it, so old releases keep
+/// writing rows the wider rule accepts. Any other constraint drop, a re-add
+/// without `NOT VALID` or a non-CHECK re-add stays a finding. Quoted names are
+/// stripped before tokenizing, so they never match and stay findings.
+fn check_widening_drops(tokens: &[Token]) -> Vec<usize> {
+    let mut drops = Vec::new();
+    let mut adds = Vec::new();
+    let mut start = 0;
+    while start < tokens.len() {
+        let end = tokens[start..]
+            .iter()
+            .position(|token| token.word == ";")
+            .map_or(tokens.len(), |offset| start + offset);
+        collect_constraint_clauses(tokens, start, end, &mut drops, &mut adds);
+        start = end + 1;
+    }
+    drops
+        .into_iter()
+        .filter(|(index, table, name)| {
+            adds.iter().any(|(add_index, add_table, add_name)| {
+                add_index > index && add_table == table && add_name == name
+            })
+        })
+        .map(|(index, _, _)| index)
+        .collect()
+}
+
+type ConstraintClause = (usize, String, String);
+
+fn collect_constraint_clauses(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    drops: &mut Vec<ConstraintClause>,
+    adds: &mut Vec<ConstraintClause>,
+) {
+    if !(token_at(tokens, start, "alter") && token_at(tokens, start + 1, "table")) {
+        return;
+    }
+    let mut index = start + 2;
+    if token_at(tokens, index, "if") && token_at(tokens, index + 1, "exists") {
+        index += 2;
+    }
+    if token_at(tokens, index, "only") {
+        index += 1;
+    }
+    let name_start = index;
+    while index < end && !ALTER_TABLE_ACTIONS.contains(&tokens[index].word.as_str()) {
+        index += 1;
+    }
+    if index == name_start {
+        return;
+    }
+    let table = tokens[name_start..index]
+        .iter()
+        .map(|token| token.word.as_str())
+        .collect::<Vec<_>>()
+        .join(".");
+
+    let clause_starts: Vec<usize> = (index..end)
+        .filter(|&position| {
+            matches!(
+                tokens[position].word.as_str(),
+                "add" | "drop" | "alter" | "validate"
+            ) && token_at(tokens, position + 1, "constraint")
+        })
+        .collect();
+    for (offset, &position) in clause_starts.iter().enumerate() {
+        let clause_end = clause_starts.get(offset + 1).copied().unwrap_or(end);
+        let mut name_index = position + 2;
+        let verb = tokens[position].word.as_str();
+        if verb == "drop" && token_at(tokens, name_index, "if") {
+            name_index += 2;
+        }
+        let Some(name) = tokens.get(name_index).filter(|_| name_index < clause_end) else {
+            continue;
+        };
+        let clause = (position, table.clone(), name.word.clone());
+        match verb {
+            "drop" => drops.push(clause),
+            "add" => {
+                let is_check = token_at(tokens, name_index + 1, "check");
+                let not_valid = (name_index + 1..clause_end.saturating_sub(1)).any(|candidate| {
+                    token_at(tokens, candidate, "not") && token_at(tokens, candidate + 1, "valid")
+                });
+                if is_check && not_valid {
+                    adds.push(clause);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn is_alter_column_type(tokens: &[Token], index: usize) -> bool {
@@ -433,6 +536,14 @@ fn tokenize(sql: &str) -> Vec<Token> {
                 current_line = line;
             }
             current.push(character.to_ascii_lowercase());
+        } else if character == ';' {
+            // Statement boundaries let the CHECK-widening rule stay inside
+            // one `ALTER TABLE`.
+            flush_token(&mut tokens, &mut current, current_line);
+            tokens.push(Token {
+                word: ";".to_owned(),
+                line,
+            });
         } else {
             flush_token(&mut tokens, &mut current, current_line);
         }
@@ -795,6 +906,81 @@ DROP INDEX widgets_note_idx;
                 .map(|violation| violation.line)
                 .collect::<Vec<_>>(),
             vec![2, 3, 4, 6, 7]
+        );
+    }
+
+    const CHECK_WIDENING: &str = "\
+-- phase: expand
+ALTER TABLE ONLY public.widgets DROP CONSTRAINT widgets_kind_check;
+ALTER TABLE ONLY public.widgets ADD CONSTRAINT widgets_kind_check
+    CHECK (kind IN ('a', 'b', 'c')) NOT VALID;
+";
+
+    #[test]
+    fn check_widening_with_not_valid_re_add_passes() {
+        assert!(scan_migration("0030_widen.sql", CHECK_WIDENING).is_empty());
+    }
+
+    #[test]
+    fn check_widening_in_one_statement_passes() {
+        let contents = "\
+-- phase: expand
+ALTER TABLE widgets
+    DROP CONSTRAINT IF EXISTS widgets_kind_check,
+    ADD CONSTRAINT widgets_kind_check CHECK (kind <> '') NOT VALID;
+";
+        assert!(scan_migration("0030_widen.sql", contents).is_empty());
+    }
+
+    #[test]
+    fn constraint_drops_outside_the_widening_pattern_stay_findings() {
+        let cases = [
+            (
+                "re-added without NOT VALID",
+                "ALTER TABLE widgets DROP CONSTRAINT c;\nALTER TABLE widgets ADD CONSTRAINT c CHECK (kind <> '');\n",
+            ),
+            ("never re-added", "ALTER TABLE widgets DROP CONSTRAINT c;\n"),
+            (
+                "re-added under another name",
+                "ALTER TABLE widgets DROP CONSTRAINT c;\nALTER TABLE widgets ADD CONSTRAINT d CHECK (kind <> '') NOT VALID;\n",
+            ),
+            (
+                "re-added on another table",
+                "ALTER TABLE widgets DROP CONSTRAINT c;\nALTER TABLE gadgets ADD CONSTRAINT c CHECK (kind <> '') NOT VALID;\n",
+            ),
+            (
+                "re-added as a foreign key",
+                "ALTER TABLE widgets DROP CONSTRAINT c;\nALTER TABLE widgets ADD CONSTRAINT c FOREIGN KEY (g) REFERENCES gadgets (id) NOT VALID;\n",
+            ),
+            (
+                "re-added before the drop",
+                "ALTER TABLE widgets ADD CONSTRAINT c CHECK (kind <> '') NOT VALID;\nALTER TABLE widgets DROP CONSTRAINT c;\n",
+            ),
+            (
+                "quoted name",
+                "ALTER TABLE widgets DROP CONSTRAINT \"c\";\nALTER TABLE widgets ADD CONSTRAINT \"c\" CHECK (kind <> '') NOT VALID;\n",
+            ),
+        ];
+        for (case, body) in cases {
+            let violations = scan_migration("0030_drop.sql", &format!("-- phase: expand\n{body}"));
+            assert_eq!(violations.len(), 1, "{case}: {violations:?}");
+            assert_eq!(violations[0].rule, "destructive-sql", "{case}");
+            assert!(violations[0].snippet.starts_with("DROP:"), "{case}");
+        }
+    }
+
+    #[test]
+    fn widening_one_check_does_not_hide_other_drops() {
+        let contents = format!(
+            "{CHECK_WIDENING}DROP INDEX widgets_note_idx;\nALTER TABLE widgets DROP COLUMN note;\n"
+        );
+        let violations = scan_migration("0030_widen.sql", &contents);
+        assert_eq!(
+            violations
+                .iter()
+                .map(|violation| violation.line)
+                .collect::<Vec<_>>(),
+            vec![5, 6]
         );
     }
 
