@@ -82,9 +82,9 @@ import sys
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 path = Path(os.environ["PROBE_STATE"])
-state = json.loads(path.read_text()) if path.exists() else {}
 status = 0
 if name == "docker":
+    state = json.loads(path.read_text()) if path.exists() else {}
     if args[0] == "exec" and "pg_isready" in args:
         if "-h" in args and args[args.index("-h") + 1] == "127.0.0.1":
             state["tcp_checks"] = state.get("tcp_checks", 0) + 1
@@ -98,15 +98,16 @@ if name == "docker":
         print("127.0.0.1:12345")
     elif args[0] == "rm":
         state["cleaned"] = True
+    path.write_text(json.dumps(state))
 elif name == "python3":
     # The broker wait must not start before PostgreSQL's final TCP server.
+    state = json.loads(path.read_text()) if path.exists() else {}
     status = 0 if state.get("tcp_ready") else 1
 elif name == "awk":
     if args[-1] == "/proc/meminfo":
         print(6291456)
     else:
         os.execv(os.environ["PROBE_AWK"], ["awk", *args])
-path.write_text(json.dumps(state))
 sys.exit(status)
 ''')
             shim.chmod(0o700)
