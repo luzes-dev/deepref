@@ -1,7 +1,12 @@
 """Readiness and real-workflow contract for the required NATS probe."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -58,6 +63,83 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("DEEPREF_REQUIRE_NATS=1", runner)
         self.assertIn("wait-jetstream.py", runner)
         self.assertIn("--test jetstream_review", runner)
+
+
+class FixtureStartupTests(unittest.TestCase):
+    def run_probe(self, *, never_ready=False):
+        # Exercise the public shell command while Docker models the image's
+        # temporary socket-only init server, restart gap, then TCP readiness.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            shim = root / "shim"
+            shim.write_text(f"#!{sys.executable}\n" + r'''
+import json
+import os
+from pathlib import Path
+import sys
+
+name = Path(sys.argv[0]).name
+args = sys.argv[1:]
+path = Path(os.environ["PROBE_STATE"])
+state = json.loads(path.read_text()) if path.exists() else {}
+status = 0
+if name == "docker":
+    if args[0] == "exec" and "pg_isready" in args:
+        if "-h" in args and args[args.index("-h") + 1] == "127.0.0.1":
+            state["tcp_checks"] = state.get("tcp_checks", 0) + 1
+            ready = state["tcp_checks"] >= 3 and not os.environ.get("NEVER_READY")
+            state["tcp_ready"] = bool(ready)
+            status = 0 if ready else 2
+        else:
+            state["socket_checks"] = state.get("socket_checks", 0) + 1
+            status = 0 if state["socket_checks"] == 1 else 2
+    elif args[0] == "port":
+        print("127.0.0.1:12345")
+    elif args[0] == "rm":
+        state["cleaned"] = True
+elif name == "python3":
+    # The broker wait must not start before PostgreSQL's final TCP server.
+    status = 0 if state.get("tcp_ready") else 1
+elif name == "awk":
+    if args[-1] == "/proc/meminfo":
+        print(6291456)
+    else:
+        os.execv(os.environ["PROBE_AWK"], ["awk", *args])
+path.write_text(json.dumps(state))
+sys.exit(status)
+''')
+            shim.chmod(0o700)
+            for name in ["docker", "find", "flock", "sleep", "python3", "awk"]:
+                (root / name).symlink_to(shim)
+            env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
+                       PROBE_STATE=str(state), DEEPREF_IMPL_CACHE=str(root),
+                       PROBE_AWK=shutil.which("awk"))
+            if never_ready:
+                env["NEVER_READY"] = "1"
+            marker = root / "test-command-ran"
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts/ci/test-jetstream.sh"),
+                 "touch", str(marker)], env=env, capture_output=True, text=True,
+                timeout=10,
+            )
+            return result, json.loads(state.read_text()), marker.exists()
+
+    def test_temporary_socket_readiness_does_not_start_tests(self):
+        result, state, ran = self.run_probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(ran)
+        self.assertTrue(state["tcp_ready"])
+        self.assertGreaterEqual(state["tcp_checks"], 3)
+        self.assertTrue(state["cleaned"])
+
+    def test_missing_tcp_server_fails_closed_and_cleans_up(self):
+        result, state, ran = self.run_probe(never_ready=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PostgreSQL TCP readiness failed before deadline", result.stderr)
+        self.assertFalse(ran)
+        self.assertEqual(state["tcp_checks"], 45)
+        self.assertTrue(state["cleaned"])
 
 
 if __name__ == "__main__":

@@ -42,11 +42,18 @@ docker run -d --name "$nats" --label deepref.test=jetstream --memory=256m --cpus
   --tmpfs /data:rw,size=134217728 -p 127.0.0.1::4222 -p 127.0.0.1::8222 \
   nats@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541 \
   -js -sd /data -m 8222 >/dev/null
+# The image's temporary initialization server accepts Unix sockets only and
+# stops before the final server starts. Tests connect over TCP, so wait for
+# that server rather than accepting the temporary socket and racing its exit.
+pg_ready=false
 for ((attempt=0;attempt<45;attempt++)); do
-  if docker exec "$pg" pg_isready -U postgres -d deepref >/dev/null 2>&1; then break; fi
+  if docker exec "$pg" pg_isready -h 127.0.0.1 -U postgres -d deepref >/dev/null 2>&1; then
+    pg_ready=true
+    break
+  fi
   sleep 1
 done
-docker exec "$pg" pg_isready -U postgres -d deepref >/dev/null
+[[ "$pg_ready" == true ]] || { echo 'PostgreSQL TCP readiness failed before deadline' >&2; exit 1; }
 pg_port=$(docker port "$pg" 5432/tcp | awk -F: '{print $NF}')
 nats_port=$(docker port "$nats" 4222/tcp | awk -F: '{print $NF}')
 monitor_port=$(docker port "$nats" 8222/tcp | awk -F: '{print $NF}')
