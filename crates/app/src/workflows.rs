@@ -13,7 +13,9 @@ use deepref_application::workflows::{
     generate_token, input_sources, next_fire_after, node_type, plan_run, trigger_of_graph,
     validate_graph,
 };
-use deepref_domain::{Actor, ProjectId};
+use deepref_domain::{Actor, ProjectId, UserId};
+
+use crate::identity::{AuditPrincipal, AuditRequest, insert_admin_audit};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlx::{Acquire, PgPool, Postgres, Row, Transaction, postgres::PgRow};
@@ -69,6 +71,10 @@ pub enum WorkflowError {
     NotFound,
     #[error("the run was not found")]
     RunNotFound,
+    /// A graph names a project resource that is missing or belongs to another
+    /// project. Both cases look the same to the caller.
+    #[error("a referenced resource was not found")]
+    ReferenceNotFound,
     #[error("{0}")]
     Conflict(String),
     #[error("the workflow has problems that must be fixed before it can be published")]
@@ -83,6 +89,39 @@ pub enum WorkflowError {
     InvalidStoredValue(String),
     #[error("workflow file storage failed")]
     ObjectStorage(#[source] deepref_documents::DocumentStoreError),
+}
+
+/// Refuses a graph whose extraction-field choices name a field that does not
+/// exist in this project, including one that belongs to another project or
+/// workspace (03b: indistinguishable from missing).
+async fn require_own_project_fields(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
+    graph: &WorkflowGraph,
+) -> Result<(), WorkflowError> {
+    let references = deepref_application::workflows::project_field_references(graph);
+    if references.is_empty() {
+        return Ok(());
+    }
+    let mut ids = Vec::with_capacity(references.len());
+    for reference in &references {
+        ids.push(Uuid::parse_str(reference).map_err(|_| WorkflowError::ReferenceNotFound)?);
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    let owned: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT id) FROM extraction_field_definitions
+         WHERE project_id=$1 AND id = ANY($2)",
+    )
+    .bind(project_uuid(project_id))
+    .bind(&ids)
+    .fetch_one(&mut **tx)
+    .await?;
+    if usize::try_from(owned).ok() == Some(ids.len()) {
+        Ok(())
+    } else {
+        Err(WorkflowError::ReferenceNotFound)
+    }
 }
 
 fn project_uuid(project_id: ProjectId) -> Uuid {
@@ -269,6 +308,7 @@ pub async fn create_workflow(
     let secrets = extract_secrets(&mut graph);
     let id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
+    require_own_project_fields(&mut tx, project_id, &graph).await?;
     let inserted = sqlx::query(
         "INSERT INTO workflows
            (id, project_id, name, description, draft_graph, webhook_token, webhook_secret,
@@ -451,6 +491,7 @@ pub async fn update_workflow(
     }
     let mut graph_value = None;
     if let Some(mut graph) = update.graph {
+        require_own_project_fields(&mut tx, project_id, &graph).await?;
         let secrets = extract_secrets(&mut graph);
         write_secrets(&mut tx, workflow_id, &secrets, &graph).await?;
         for node in &mut graph.nodes {
@@ -610,6 +651,7 @@ pub async fn publish_workflow(
     .ok_or(WorkflowError::NotFound)?;
     let graph = parse_graph(row.get("draft_graph"))?;
     require_available_graph(&graph, niche_nodes_enabled)?;
+    require_own_project_fields(&mut tx, project_id, &graph).await?;
     let status = parse_workflow_status(row.try_get("status")?)?;
     let ctx = validation_context(pool, workflow_id, &graph, email_configured).await?;
     let report = validate_graph(&graph, &ctx);
@@ -785,11 +827,29 @@ pub enum RotateTarget {
     Email,
 }
 
+impl RotateTarget {
+    /// The audit `credential` value; never the credential itself.
+    const fn audit_name(self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+            Self::WebhookSecret => "webhook_secret",
+            Self::Email => "email",
+        }
+    }
+}
+
+/// Replaces one hook credential. The old value stops working when this
+/// commits: there is no overlap window, so senders must switch to the
+/// returned value. The rotation is recorded as a `workflow.endpoint_rotated`
+/// audit row in the same transaction; the row names the workflow and which
+/// credential changed, never a token or secret.
 pub async fn rotate_endpoint_credentials(
     pool: &PgPool,
     project_id: ProjectId,
     workflow_id: Uuid,
     target: RotateTarget,
+    actor: UserId,
+    audit: AuditRequest<'_>,
 ) -> Result<WebhookConfig, WorkflowError> {
     let (sql, token, secret) = match target {
         RotateTarget::Webhook => (
@@ -811,17 +871,35 @@ pub async fn rotate_endpoint_credentials(
             generate_secret(),
         ),
     };
+    let mut tx = pool.begin().await?;
     let updated = sqlx::query(sql)
         .bind(project_uuid(project_id))
         .bind(workflow_id)
         .bind(token)
         .bind(secret)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if updated == 0 {
         return Err(WorkflowError::NotFound);
     }
+    let workspace_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id=$1")
+            .bind(project_uuid(project_id))
+            .fetch_one(&mut *tx)
+            .await?;
+    insert_admin_audit(
+        &mut tx,
+        "workflow.endpoint_rotated",
+        AuditPrincipal::User(actor),
+        None,
+        workspace_id,
+        Some(project_uuid(project_id)),
+        json!({"workflow_id": workflow_id.to_string(), "credential": target.audit_name()}),
+        audit,
+    )
+    .await?;
+    tx.commit().await?;
     get_webhook_config(pool, project_id, workflow_id).await
 }
 

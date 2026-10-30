@@ -583,6 +583,9 @@ fn map_error(error: WorkflowError) -> ApiError {
     match error {
         WorkflowError::NotFound => ApiError::NotFound("automation not found".to_owned()),
         WorkflowError::RunNotFound => ApiError::NotFound("run not found".to_owned()),
+        WorkflowError::ReferenceNotFound => {
+            ApiError::NotFound("referenced resource not found".to_owned())
+        }
         WorkflowError::Conflict(message) => ApiError::Conflict {
             code: "WORKFLOW_CONFLICT".to_owned(),
             message,
@@ -1452,12 +1455,19 @@ async fn rotate(
     project: Uuid,
     workflow: Uuid,
     target: RotateTarget,
+    actor: &crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<EndpointsDto>, ApiError> {
+    let request = crate::error::correlation_id();
     let config = deepref_app::rotate_endpoint_credentials(
         &state.pool,
         project_id(project)?,
         workflow,
         target,
+        actor.user_id,
+        deepref_app::identity::AuditRequest {
+            request_id: request.as_deref(),
+            session_ref: None,
+        },
     )
     .await
     .map_err(map_error)?;
@@ -1475,8 +1485,16 @@ async fn rotate(
 pub(crate) async fn rotate_webhook(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<EndpointsDto>, ApiError> {
-    rotate(&state, project, workflow, RotateTarget::Webhook).await
+    rotate(
+        &state,
+        project,
+        workflow,
+        RotateTarget::Webhook,
+        &request_actor,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -1490,8 +1508,16 @@ pub(crate) async fn rotate_webhook(
 pub(crate) async fn rotate_webhook_secret(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<EndpointsDto>, ApiError> {
-    rotate(&state, project, workflow, RotateTarget::WebhookSecret).await
+    rotate(
+        &state,
+        project,
+        workflow,
+        RotateTarget::WebhookSecret,
+        &request_actor,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -1505,8 +1531,16 @@ pub(crate) async fn rotate_webhook_secret(
 pub(crate) async fn rotate_email(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
+    request_actor: crate::routes::actor::AuthenticatedActor,
 ) -> Result<Json<EndpointsDto>, ApiError> {
-    rotate(&state, project, workflow, RotateTarget::Email).await
+    rotate(
+        &state,
+        project,
+        workflow,
+        RotateTarget::Email,
+        &request_actor,
+    )
+    .await
 }
 
 #[utoipa::path(

@@ -558,6 +558,36 @@ pub fn validate_graph(graph: &WorkflowGraph, ctx: &ValidationContext) -> Validat
     report
 }
 
+/// Every non-blank value a graph stores in a [`ConfigFieldKind::ProjectField`]
+/// field, as text. The caller must prove each one names a field of the
+/// graph's own project before storing or publishing the graph.
+pub fn project_field_references(graph: &WorkflowGraph) -> Vec<String> {
+    let mut references = Vec::new();
+    for node in &graph.nodes {
+        let Some(def) = node_type(&node.node_type) else {
+            continue;
+        };
+        for field in def
+            .config
+            .iter()
+            .filter(|field| field.kind == ConfigFieldKind::ProjectField)
+        {
+            let value = node.config.get(&field.key);
+            if is_blank(value) {
+                continue;
+            }
+            if let Some(value) = value {
+                references.push(
+                    value
+                        .as_str()
+                        .map_or_else(|| value.to_string(), str::to_owned),
+                );
+            }
+        }
+    }
+    references
+}
+
 /// A secret value taken out of a graph so it is stored separately.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretWrite {
