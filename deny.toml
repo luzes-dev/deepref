@@ -19,3 +19,12 @@ allow = [
   "Zlib",
 ]
 confidence-threshold = 0.8
+
+# redis 1.8.0 pulls this exact release. BSL-1.0 is the Boost Software
+# License, not the Business Source License. Its bundled LICENSE matches
+# https://spdx.org/licenses/BSL-1.0.html; keep source notices with redistribution.
+# Future versions and other crates still require a separate license review.
+[[licenses.exceptions]]
+name = "xxhash-rust"
+version = "=0.8.19"
+allow = ["BSL-1.0"]
