@@ -1,9 +1,12 @@
-"""Pure capture-evidence refusal tests; no SDK, socket, Cargo or lock proof."""
+"""Evidence refusals plus one owned process; no SDK, socket, Cargo or lock proof."""
 
 import copy
 from datetime import timedelta
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -121,7 +124,7 @@ class CaptureRunnerEvidenceTests(unittest.TestCase):
             (root / "tmp").mkdir()
             (fixture / "owned-port.json").write_text(json.dumps({
                 "test": runner.CASE, "scope": "local_metric_fixture", "port": 12345}))
-            result = {"exit": 1}
+            result = {"exit": 1, "phases": []}
             modeled_pins = {"files": {"synthetic": "fixture"}}
             with (patch.object(runner, "owned_process", side_effect=ValueError("modeled identity refusal")),
                   patch.object(runner, "owned_closed", return_value=True) as closed,
@@ -134,6 +137,24 @@ class CaptureRunnerEvidenceTests(unittest.TestCase):
             self.assertEqual(result["tmp_entries"], [])
             self.assertEqual(result["source_after"], modeled_pins)
             self.assertEqual(result["final_guards"], {"synthetic": True})
+
+    def test_final_inventory_refuses_an_actual_remaining_phase_group(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"],
+                                   start_new_session=True)
+        result = {"exit": 1, "phases": [{"process_group": process.pid}]}
+        modeled_pins = {"files": {"synthetic": "fixture"}}
+        try:
+            with (patch.object(runner, "pins", return_value=modeled_pins),
+                  patch.object(runner, "guards", return_value={"synthetic": True})):
+                runner.final_inventory(None, "modeled", modeled_pins, result)
+            self.assertEqual(result["cleanup_exit"], 1)
+            self.assertEqual([row["step"] for row in result["cleanup_errors"]], ["phase-groups"])
+            self.assertFalse(result["phase_groups"][0]["closed"])
+            self.assertEqual(result["source_after"], modeled_pins)
+            self.assertEqual(result["final_guards"], {"synthetic": True})
+        finally:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=1)
 
 
 if __name__ == "__main__":

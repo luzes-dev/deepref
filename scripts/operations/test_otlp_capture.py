@@ -24,7 +24,7 @@ import tomllib
 from fault_proxy import FIXTURE_LOCK, require_held_lock
 from metrics_catalog import assess_panels, read_json_bounded
 from otlp_snapshot import convert_capture
-from test_observability import ROOT, guards, owned_closed, run_phase
+from test_observability import ROOT, guards, owned_closed, phase_group_inventory, run_phase
 
 CASE = "otlp_capture::real_sdk_gauges_retain_source_time"
 FEATURE = "operations-fixtures"
@@ -37,6 +37,7 @@ SOURCES = (
     "scripts/operations/otlp_snapshot.py", "scripts/operations/tests/test_otlp_snapshot.py",
     "scripts/operations/test_otlp_capture.py", "scripts/operations/test_observability.py",
     "scripts/operations/tests/test_otlp_capture_runner.py",
+    "scripts/operations/tests/test_phase_lifetime.py",
     "scripts/operations/metrics_catalog.py", "scripts/operations/fault_proxy.py",
 )
 def pins():
@@ -214,6 +215,12 @@ def final_inventory(output, nonce, active, result):
     def numeric_inventory():
         result["final_guards"] = guards()
 
+    def phase_inventory():
+        result["phase_groups"] = phase_group_inventory(result["phases"])
+        if not all(row["closed"] for row in result["phase_groups"]):
+            raise RuntimeError("owned phase process group remains")
+
+    check("phase-groups", phase_inventory)
     check("source", source_inventory)
     check("numeric-guards", numeric_inventory)
     result["cleanup_errors"] = errors
@@ -275,6 +282,8 @@ def execute(args):
             result["precompile_guards"] = guards()
             require_guards(result["precompile_guards"])
             (output / "source-activated.json").write_text(json.dumps(active, indent=2) + "\n")
+            run("phase-lifetime", [sys.executable, "-m", "unittest", "discover", "-s",
+                                   "scripts/operations/tests", "-p", "test_phase_lifetime.py", "-v"], 15)
             # Own checkout mtimes only, after activation and before any compiler.
             for name in subprocess.check_output(["rg", "--files", "-g", "*.rs"], cwd=ROOT, text=True).splitlines():
                 (ROOT / name).touch()

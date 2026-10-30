@@ -59,6 +59,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
         .context("write bounded capture")
 }
 
+#[cfg(test)]
 fn require_owned_run() -> Result<PathBuf> {
     ensure!(
         std::env::var("DEEPREF_REQUIRE_OTLP_CAPTURE").as_deref() == Ok("1"),
@@ -394,6 +395,7 @@ async fn capture_phase(
     )
 }
 
+#[cfg(test)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_sdk_gauges_retain_source_time() -> Result<()> {
     let root = require_owned_run()?;

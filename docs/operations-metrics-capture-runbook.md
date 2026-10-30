@@ -120,6 +120,11 @@ Emergency termination, temporary residue, source drift or cleanup errors fail
 the final gate. Retain any missing outer process receipt as missing; a successful
 child test is not a replacement for every runner/cleanup gate.
 
+Each command runs in an owned process group. A leader exiting does not establish
+group closure: remaining descendants receive bounded TERM/KILL cleanup and the
+phase fails. Final cleanup independently checks every recorded phase group in
+addition to the exact capture PID, port and task inventory.
+
 Only complete final success sets `local_fixture_sdk_gRPC_capture=true` in the
 runner result. `backend_ingestion_verified` and `production_accepted` remain false.
 The generic file converter always keeps its source-verification flag false; an
