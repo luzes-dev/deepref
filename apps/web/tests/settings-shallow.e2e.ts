@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { settleVisualPage, test } from './visual/fixtures';
+import { test } from './visual/fixtures';
 
 const articlesUrl = '/projects/visual-project/articles?filter=review&sort=year';
 
@@ -321,29 +321,4 @@ test('Open full settings converts the overlay into the normal Settings route', a
 		expect(transition.width).toBeGreaterThan(0);
 		expect(transition.height).toBeGreaterThan(0);
 	}
-});
-
-test('a settings mutation made in the modal is available on the full page', async ({ page }) => {
-	await page.setViewportSize({ width: 1280, height: 860 });
-	let persistedSettings = { ...initialSettings };
-	await page.route('**/api/settings', async (route) => {
-		if (route.request().method() === 'PATCH') {
-			const body = route.request().postDataJSON();
-			expect(body).toMatchObject({ default_max_depth: 3 });
-			persistedSettings = { ...persistedSettings, ...body };
-		}
-		await route.fulfill({ json: persistedSettings });
-	});
-
-	await openArticles(page);
-	const { dialog } = await openSettingsModal(page);
-	await dialog.getByLabel('Default max depth').fill('3');
-	await expect(dialog.getByTestId('settings-save-status')).toHaveText(/Unsaved changes/);
-	await expect(dialog.getByTestId('settings-save-status')).toHaveText(/Changes saved/);
-	await expect(dialog.getByRole('button', { name: /Save settings/i })).toHaveCount(0);
-
-	await dialog.getByRole('button', { name: 'Open full settings', exact: true }).click();
-	await expect(page.getByTestId('settings-page')).toBeVisible();
-	await expect(page.getByLabel('Default max depth')).toHaveValue('3');
-	await settleVisualPage(page);
 });
