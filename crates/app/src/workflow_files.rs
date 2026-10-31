@@ -14,6 +14,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::object_lifecycle::{ObjectOwner, begin_object_upload};
 use crate::workflows::WorkflowError;
 
 /// Largest file an export block may store; the same bound `workflow_files`
@@ -78,15 +79,40 @@ pub struct NewWorkflowFile<'a> {
 
 /// Store a file for an export block. The object is written first; the row,
 /// which carries the reference and still the bytes, is inserted afterwards. A
-/// failed insert removes the object again, and a crash between the two leaves
-/// only an unreferenced object, never a row pointing at nothing.
+/// failed or ambiguous commit leaves a durable cleanup intent, and cleanup
+/// rechecks references before deleting any bytes.
 pub async fn create_workflow_file(
     pool: &PgPool,
     store: &DocumentStore,
     file: NewWorkflowFile<'_>,
 ) -> Result<Uuid, WorkflowError> {
     let file_id = Uuid::new_v4();
-    let key = ObjectKey::workflow_file(file.project_id, file.run_id, file_id);
+    let key = crate::object_lifecycle::workflow_file_key(
+        pool,
+        ProjectId::new(file.project_id),
+        file.run_id,
+        file_id,
+    )
+    .await
+    .map_err(|error| WorkflowError::InvalidStoredValue(error.to_string()))?;
+    let mut tx = begin_object_upload(
+        pool,
+        ObjectOwner::Project(ProjectId::new(file.project_id)),
+        &key,
+    )
+    .await
+    .map_err(|error| WorkflowError::InvalidStoredValue(error.to_string()))?;
+    sqlx::query("LOCK TABLE workflow_files IN ROW EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
+    let mode: String = sqlx::query_scalar(
+        "SELECT mode FROM workflow_file_storage_state WHERE singleton FOR SHARE",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query("SELECT set_config('deepref.workflow_file_writer','object-v1',true)")
+        .execute(&mut *tx)
+        .await?;
     let stored = store
         .put_object(
             &key,
@@ -95,33 +121,42 @@ pub async fn create_workflow_file(
         )
         .await
         .map_err(storage_error)?;
-    let inserted = sqlx::query(
+    let insert = if mode == "contracted" {
+        "INSERT INTO workflow_files
+           (id, project_id, run_id, node_id, name, content_type, storage_key, content_sha256, byte_size)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
+    } else {
         "INSERT INTO workflow_files
            (id, project_id, run_id, node_id, name, content_type, content,
             storage_key, content_sha256, byte_size)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-    )
-    .bind(file_id)
-    .bind(file.project_id)
-    .bind(file.run_id)
-    .bind(file.node_id)
-    .bind(file.name)
-    .bind(file.content_type)
-    .bind(file.content)
-    .bind(key.as_str())
-    .bind(&stored.sha256)
-    .bind(stored.byte_size as i64)
-    .execute(pool)
-    .await;
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"
+    };
+    let query = sqlx::query(insert)
+        .bind(file_id)
+        .bind(file.project_id)
+        .bind(file.run_id)
+        .bind(file.node_id)
+        .bind(file.name)
+        .bind(file.content_type);
+    let query = if mode == "contracted" {
+        query
+    } else {
+        query.bind(if mode == "overlap" {
+            Some(file.content)
+        } else {
+            None
+        })
+    };
+    let inserted = query
+        .bind(key.as_str())
+        .bind(&stored.sha256)
+        .bind(stored.byte_size as i64)
+        .execute(&mut *tx)
+        .await;
     if let Err(error) = inserted {
-        if let Err(cleanup) = store.delete_object(&key).await {
-            tracing::warn!(
-                %file_id, %cleanup,
-                "object of a workflow file whose row was not stored could not be removed"
-            );
-        }
         return Err(error.into());
     }
+    tx.commit().await?;
     Ok(file_id)
 }
 
@@ -187,11 +222,25 @@ pub async fn get_workflow_file(
 }
 
 async fn load_content(pool: &PgPool, file_id: Uuid) -> Result<Vec<u8>, WorkflowError> {
-    sqlx::query_scalar("SELECT content FROM workflow_files WHERE id=$1")
-        .bind(file_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(WorkflowError::NotFound)
+    // to_jsonb keeps this compatibility fallback executable after the explicit
+    // contract drops the column. Cast the server's bytea text representation
+    // back to bytea, handling both hex and escape bytea_output settings.
+    let encoded: Option<String> =
+        sqlx::query_scalar("SELECT to_jsonb(f)->>'content' FROM workflow_files f WHERE id=$1")
+            .bind(file_id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+    let Some(encoded) = encoded else {
+        return Err(WorkflowError::InvalidStoredValue(
+            "workflow file has no compatibility bytes; object recovery is required".to_owned(),
+        ));
+    };
+    let content: Vec<u8> = sqlx::query_scalar("SELECT $1::text::bytea")
+        .bind(encoded)
+        .fetch_one(pool)
+        .await?;
+    Ok(content)
 }
 
 async fn read_verified_object(
@@ -231,8 +280,8 @@ pub struct WorkflowFileBackfill {
 }
 
 /// Move up to `limit` of a project's files that have no object reference into
-/// object storage. Safe to repeat and to interrupt: the object key is derived
-/// from the row, the row is selected by its missing reference, and the
+/// object storage. Safe to repeat and to interrupt: each attempt reserves a
+/// unique durable upload intent, the row is selected by its missing reference, and the
 /// reference is only recorded after the written object reads back with the
 /// hash of `content`.
 pub async fn backfill_workflow_files(
@@ -278,17 +327,30 @@ async fn backfill_one(
     run_id: Uuid,
     file_id: Uuid,
 ) -> Result<(), WorkflowError> {
+    let key = crate::object_lifecycle::workflow_file_key(
+        pool,
+        ProjectId::new(project),
+        run_id,
+        Uuid::new_v4(),
+    )
+    .await
+    .map_err(|error| WorkflowError::InvalidStoredValue(error.to_string()))?;
+    let mut tx = begin_object_upload(pool, ObjectOwner::Project(ProjectId::new(project)), &key)
+        .await
+        .map_err(|error| WorkflowError::InvalidStoredValue(error.to_string()))?;
+    sqlx::query("LOCK TABLE workflow_files IN ROW EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
     let content: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT content FROM workflow_files WHERE id=$1 AND storage_key IS NULL",
+        "SELECT content FROM workflow_files WHERE id=$1 AND storage_key IS NULL FOR UPDATE",
     )
     .bind(file_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     // Gone, or another run already moved it.
     let Some(content) = content else {
         return Ok(());
     };
-    let key = ObjectKey::workflow_file(project, run_id, file_id);
     let expected = content_sha256(&content);
     let size = content.len();
     store
@@ -304,7 +366,10 @@ async fn backfill_one(
             "workflow file {file_id} did not read back from object storage unchanged"
         )));
     }
-    let updated = sqlx::query(
+    sqlx::query("SELECT set_config('deepref.workflow_file_writer','object-v1',true)")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
         "UPDATE workflow_files
          SET storage_key=$2, content_sha256=$3, byte_size=$4
          WHERE id=$1 AND storage_key IS NULL",
@@ -313,21 +378,9 @@ async fn backfill_one(
     .bind(key.as_str())
     .bind(&expected)
     .bind(size as i64)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    if updated == 0 {
-        // Another run set the same reference, or the project was deleted while
-        // this one wrote; only the second leaves an orphan to remove.
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_files WHERE id=$1)")
-                .bind(file_id)
-                .fetch_one(pool)
-                .await?;
-        if !exists && let Err(cleanup) = store.delete_object(&key).await {
-            tracing::warn!(%file_id, %cleanup, "orphaned workflow file object could not be removed");
-        }
-    }
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 

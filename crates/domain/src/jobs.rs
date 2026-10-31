@@ -18,6 +18,7 @@ pub enum JobKind {
     AiUsageReconcile,
     AiUsageExportReplay,
     BackfillWorkflowFiles,
+    CleanupObjects,
 }
 
 /// Workload class of a durable job: the pool a worker serves and the unit of
@@ -91,7 +92,7 @@ impl JobKind {
     /// running binary decodes. Claims filter this set before LIMIT and declare
     /// it transaction-locally to the database capability fence. Heartbeats
     /// report the set for diagnostics; they do not establish fleet readiness.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::WorkFetchRequested,
         Self::RecomputeMetrics,
         Self::ImportDeduplication,
@@ -104,6 +105,7 @@ impl JobKind {
         Self::AiUsageReconcile,
         Self::AiUsageExportReplay,
         Self::BackfillWorkflowFiles,
+        Self::CleanupObjects,
     ];
 
     /// Persisted spellings of [`JobKind::ALL`].
@@ -125,6 +127,7 @@ impl JobKind {
             Self::AiUsageReconcile => "ai_usage_reconcile",
             Self::AiUsageExportReplay => "ai_usage_export_replay",
             Self::BackfillWorkflowFiles => "backfill_workflow_files",
+            Self::CleanupObjects => "cleanup_objects",
         }
     }
 
@@ -139,9 +142,10 @@ impl JobKind {
             }
             // The document pipeline: full-text retrieval feeds parsing, and
             // corpus deduplication is CPU/memory-bound local processing.
-            Self::RetrieveDocument | Self::ParseDocument | Self::ImportDeduplication => {
-                WorkloadClass::Documents
-            }
+            Self::RetrieveDocument
+            | Self::ParseDocument
+            | Self::ImportDeduplication
+            | Self::CleanupObjects => WorkloadClass::Documents,
             // Durable automation, workflow and review step dispatch.
             Self::DurableRunStep | Self::BackfillWorkflowFiles => WorkloadClass::Workflow,
             // External provider traffic, bounded by provider rate limits.
@@ -193,6 +197,7 @@ impl std::str::FromStr for JobKind {
             "ai_usage_reconcile" => Ok(Self::AiUsageReconcile),
             "ai_usage_export_replay" => Ok(Self::AiUsageExportReplay),
             "backfill_workflow_files" => Ok(Self::BackfillWorkflowFiles),
+            "cleanup_objects" => Ok(Self::CleanupObjects),
             _ => Err(InvalidJobKind(value.to_owned())),
         }
     }
@@ -290,6 +295,7 @@ mod tests {
             (JobKind::RetrieveDocument, WorkloadClass::Documents),
             (JobKind::ParseDocument, WorkloadClass::Documents),
             (JobKind::ImportDeduplication, WorkloadClass::Documents),
+            (JobKind::CleanupObjects, WorkloadClass::Documents),
             (JobKind::DurableRunStep, WorkloadClass::Workflow),
             (JobKind::BackfillWorkflowFiles, WorkloadClass::Workflow),
             (JobKind::WorkFetchRequested, WorkloadClass::Integration),

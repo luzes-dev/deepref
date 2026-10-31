@@ -161,6 +161,7 @@ pub async fn reconcile_once_with_provider_reconcilers(
     pool: &PgPool,
     provider_reconcilers: &ProviderReconcilerRegistry,
 ) -> anyhow::Result<ReconcileReport> {
+    deepref_app::object_lifecycle::schedule_object_cleanup(pool).await?;
     let recovery = deepref_app::recover_expired_worker_state(pool).await?;
     let repaired_work = repair_missing_work(pool).await?;
     crate::assistant::reconcile_orphan_runs(pool).await?;
