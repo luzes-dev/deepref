@@ -570,3 +570,159 @@ impl deepref_application::concurrency_mirror::ConcurrencyMirrorObserver for Hold
         }
     }
 }
+
+/// Real Valkey mirror that can be switched off between calls, modelling an
+/// outage that starts while leases are already held.
+struct Switchable {
+    real: Arc<dyn ConcurrencyMirror>,
+    down: Arc<std::sync::atomic::AtomicBool>,
+}
+impl Switchable {
+    fn down(&self) -> bool {
+        self.down.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+impl ConcurrencyMirror for Switchable {
+    fn check(&self, scope: MirrorScope, policy: MirrorPolicy) -> MirrorFuture<'_, MirrorDecision> {
+        if self.down() {
+            return Box::pin(async {
+                Err(deepref_application::concurrency_mirror::MirrorUnavailable)
+            });
+        }
+        self.real.check(scope, policy)
+    }
+    fn hold(
+        &self,
+        scope: MirrorScope,
+        lease: MirrorLeaseId,
+        policy: MirrorPolicy,
+    ) -> MirrorFuture<'_, MirrorDecision> {
+        if self.down() {
+            return Box::pin(async {
+                Err(deepref_application::concurrency_mirror::MirrorUnavailable)
+            });
+        }
+        self.real.hold(scope, lease, policy)
+    }
+    fn refresh(
+        &self,
+        scope: MirrorScope,
+        lease: MirrorLeaseId,
+        policy: MirrorPolicy,
+    ) -> MirrorFuture<'_, ()> {
+        if self.down() {
+            return Box::pin(async {
+                Err(deepref_application::concurrency_mirror::MirrorUnavailable)
+            });
+        }
+        self.real.refresh(scope, lease, policy)
+    }
+    fn release(&self, scope: MirrorScope, lease: MirrorLeaseId) -> MirrorFuture<'_, ()> {
+        if self.down() {
+            return Box::pin(async {
+                Err(deepref_application::concurrency_mirror::MirrorUnavailable)
+            });
+        }
+        self.real.release(scope, lease)
+    }
+}
+
+/// Live PG leases on the workspace key of `scope`.
+async fn slot_count(pool: &sqlx::PgPool, scope: &AiConcurrencyScope) -> i64 {
+    let [(_, workspace_key, _), _] = scope.keys();
+    sqlx::query_scalar(
+        "SELECT count(*) FROM ai_concurrency_slots
+         WHERE scope_kind='workspace' AND scope_key=$1 AND lease_expires_at >= clock_timestamp()",
+    )
+    .bind(workspace_key)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn valkey_outage_mid_lease_keeps_the_pg_ceiling_across_two_instances() {
+    let Some((pool, control)) = fixture().await else {
+        return;
+    };
+    let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let real: Arc<dyn ConcurrencyMirror> = Arc::new(control.concurrency_mirror().unwrap());
+    // Two API instances: separate PG holders, one shared Valkey namespace.
+    let instance = |pool: &sqlx::PgPool| {
+        MirroredAiConcurrencyAdmission::new(
+            canonical(pool, Duration::from_secs(2)),
+            Arc::new(Switchable {
+                real: real.clone(),
+                down: down.clone(),
+            }),
+        )
+    };
+    let first = instance(&pool);
+    let second = instance(&pool);
+    let scope = scope();
+    let held = first.acquire(scope.clone()).await.unwrap();
+
+    down.store(true, std::sync::atomic::Ordering::SeqCst);
+    first.renew(&held).await.unwrap();
+    assert!(
+        matches!(
+            second.acquire(scope.clone()).await,
+            Err(AdmissionError::Saturated { .. })
+        ),
+        "an unavailable mirror must fall back to the PG ceiling, not admit"
+    );
+    first.release(held).await.unwrap();
+    assert_eq!(slot_count(&pool, &scope).await, 0);
+
+    // With Valkey still down, the PG slot freed by `release` is admitted and
+    // the ceiling still holds for the other instance.
+    let fallback = second.acquire(scope.clone()).await.unwrap();
+    assert!(matches!(
+        first.acquire(scope.clone()).await,
+        Err(AdmissionError::Saturated { .. })
+    ));
+    second.release(fallback).await.unwrap();
+    assert_eq!(slot_count(&pool, &scope).await, 0);
+}
+
+#[tokio::test]
+async fn an_expired_pg_lease_is_reclaimed_and_its_late_release_cannot_free_the_new_holder() {
+    let Some((pool, control)) = fixture().await else {
+        return;
+    };
+    let mirror: Arc<dyn ConcurrencyMirror> = Arc::new(control.concurrency_mirror().unwrap());
+    let stale = MirroredAiConcurrencyAdmission::new(
+        canonical(&pool, Duration::from_millis(300)),
+        mirror.clone(),
+    );
+    let fresh =
+        MirroredAiConcurrencyAdmission::new(canonical(&pool, Duration::from_secs(2)), mirror);
+    let scope = scope();
+    let expired = stale.acquire(scope.clone()).await.unwrap();
+    assert!(matches!(
+        fresh.acquire(scope.clone()).await,
+        Err(AdmissionError::Saturated { .. })
+    ));
+
+    // The stale holder stops heartbeating; both the PG lease and its mirror
+    // entry (bounded by the same renew interval) expire.
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    let reclaimed = fresh.acquire(scope.clone()).await.unwrap();
+    assert_eq!(
+        stale.renew(&expired).await.unwrap_err(),
+        AdmissionError::LeaseLost
+    );
+    let _ = stale.release(expired).await;
+    assert_eq!(
+        slot_count(&pool, &scope).await,
+        1,
+        "a late release from the expired holder cannot free the new lease"
+    );
+    assert!(matches!(
+        stale.acquire(scope.clone()).await,
+        Err(AdmissionError::Saturated { .. })
+    ));
+    fresh.renew(&reclaimed).await.unwrap();
+    fresh.release(reclaimed).await.unwrap();
+    assert_eq!(slot_count(&pool, &scope).await, 0);
+}
