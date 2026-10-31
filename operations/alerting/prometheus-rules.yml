@@ -1,0 +1,169 @@
+# DeepRef alert rules, Prometheus rule-file format (also loaded by Mimir,
+# Thanos Ruler, VictoriaMetrics vmalert and Grafana-managed Prometheus rules).
+#
+# Status: proposals. Thresholds mirror operations/metrics/catalog.json and are
+# NOT approved (handoff 12 requires owner sign-off). No backend is selected.
+#
+# Metric names assume the standard OTLP -> Prometheus translation: dots become
+# underscores, unit "s" adds _seconds, counters add _total, and annotation
+# units such as {request} are dropped. Verify ingested names before install.
+# `cargo xtask alerts check` proves every metric name here is emitted.
+#
+# Database-sampled gauges are global aggregates sampled by every worker
+# replica: always reduce with max(), never sum(). Every rule carries
+# catalog_id, severity (page|ticket), owner and a runbook annotation.
+groups:
+  - name: deepref-api
+    rules:
+      - alert: DeepRefApiAvailabilityPage
+        expr: |
+          sum(rate(deepref_http_requests_total{status_class!="5xx"}[5m]))
+            / sum(rate(deepref_http_requests_total[5m])) < 0.995
+        for: 5m
+        labels: { severity: page, owner: api-owner, catalog_id: api-availability }
+        annotations:
+          summary: API non-5xx response ratio below 99.5%
+          runbook: docs/slo-incident-runbook.md
+      - alert: DeepRefApiAvailabilityTicket
+        expr: |
+          sum(rate(deepref_http_requests_total{status_class!="5xx"}[5m]))
+            / sum(rate(deepref_http_requests_total[5m])) < 0.999
+        for: 15m
+        labels: { severity: ticket, owner: api-owner, catalog_id: api-availability }
+        annotations:
+          summary: API non-5xx response ratio below 99.9%
+          runbook: docs/slo-incident-runbook.md
+      - alert: DeepRefApiLatencyPage
+        expr: |
+          histogram_quantile(0.95, sum by (route_class, le) (
+            rate(deepref_http_response_header_duration_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels: { severity: page, owner: api-owner, catalog_id: api-latency }
+        annotations:
+          summary: "p95 response-header latency above 2s for {{ $labels.route_class }}"
+          runbook: docs/slo-incident-runbook.md
+      - alert: DeepRefApiLatencyTicket
+        expr: |
+          histogram_quantile(0.95, sum by (route_class, le) (
+            rate(deepref_http_response_header_duration_seconds_bucket[5m]))) > 0.75
+        for: 15m
+        labels: { severity: ticket, owner: api-owner, catalog_id: api-latency }
+        annotations:
+          summary: "p95 response-header latency above 750ms for {{ $labels.route_class }}"
+          runbook: docs/slo-incident-runbook.md
+      - alert: DeepRefSchemaBehind
+        expr: max(deepref_schema_behind) > 0
+        for: 5m
+        labels: { severity: page, owner: api-owner, catalog_id: schema-behind }
+        annotations:
+          summary: An API replica runs against a database schema older than it requires
+          runbook: docs/release-and-migration-runbook.md
+
+  - name: deepref-worker
+    rules:
+      - alert: DeepRefQueueAgePage
+        expr: max by (pool) (deepref_worker_queue_oldest_due_age_seconds) > 300
+        for: 5m
+        labels: { severity: page, owner: worker-owner, catalog_id: queue-age }
+        annotations:
+          summary: "Oldest due job in pool {{ $labels.pool }} waited over 5 minutes"
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefQueueAgeTicket
+        expr: max by (pool) (deepref_worker_queue_oldest_due_age_seconds) > 60
+        for: 5m
+        labels: { severity: ticket, owner: worker-owner, catalog_id: queue-age }
+        annotations:
+          summary: "Oldest due job in pool {{ $labels.pool }} waited over 1 minute"
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefDeadJobsPage
+        expr: max by (pool) (deepref_worker_dead_depth) > 9
+        for: 5m
+        labels: { severity: page, owner: worker-owner, catalog_id: dead-depth }
+        annotations:
+          summary: "Ten or more retained dead jobs in pool {{ $labels.pool }}"
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefDeadJobsTicket
+        expr: max by (pool) (deepref_worker_dead_depth) > 0
+        for: 5m
+        labels: { severity: ticket, owner: worker-owner, catalog_id: dead-depth }
+        annotations:
+          summary: "Retained dead jobs in pool {{ $labels.pool }}"
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefNoLiveWorkers
+        expr: max(deepref_worker_live) < 1
+        for: 5m
+        labels: { severity: page, owner: worker-owner, catalog_id: live-workers }
+        annotations:
+          summary: No worker heartbeat within 60 seconds
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefPoolWithoutCapacity
+        expr: max by (pool) (deepref_worker_queue_depth) > 0 and max by (pool) (deepref_worker_capacity) == 0
+        for: 5m
+        labels: { severity: page, owner: worker-owner, catalog_id: live-workers }
+        annotations:
+          summary: "Pool {{ $labels.pool }} has due work and no live capacity"
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefMetricSamplerStale
+        expr: |
+          time() - max(deepref_worker_metrics_last_success_seconds) > 180
+            or absent(deepref_worker_metrics_last_success_seconds)
+        for: 5m
+        labels: { severity: page, owner: platform-owner, catalog_id: sampler-freshness }
+        annotations:
+          summary: No complete database metric sample for 3 minutes; queue and backlog alerts are blind
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefMetricSamplerFailing
+        expr: max(deepref_worker_metrics_sample_up) < 1
+        for: 5m
+        labels: { severity: ticket, owner: platform-owner, catalog_id: sampler-freshness }
+        annotations:
+          summary: Every worker metric sampler reports failed samples
+          runbook: docs/metrics-and-alerts-runbook.md
+
+  - name: deepref-durable-backlog
+    rules:
+      - alert: DeepRefBacklogAgePage
+        expr: max by (family) (deepref_backlog_oldest_age_seconds) > 300
+        for: 5m
+        labels: { severity: page, owner: platform-owner, catalog_id: durable-backlog-age }
+        annotations:
+          summary: "Oldest {{ $labels.family }} obligation older than 5 minutes"
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefBacklogAgeTicket
+        expr: max by (family) (deepref_backlog_oldest_age_seconds) > 60
+        for: 5m
+        labels: { severity: ticket, owner: platform-owner, catalog_id: durable-backlog-age }
+        annotations:
+          summary: "Oldest {{ $labels.family }} obligation older than 1 minute"
+          runbook: docs/metrics-and-alerts-runbook.md
+      - alert: DeepRefUsageIdentityConflict
+        expr: max(deepref_usage_export_identity_conflicts) > 0
+        for: 5m
+        labels: { severity: page, owner: ai-owner, catalog_id: usage-identity-conflict }
+        annotations:
+          summary: An immutable usage fact identity is occupied by a different outbox event
+          runbook: docs/ai-usage.md
+      - alert: DeepRefUsageUnattributed
+        expr: max(deepref_usage_export_unattributed) > 0
+        for: 5m
+        labels: { severity: page, owner: ai-owner, catalog_id: usage-unattributed }
+        annotations:
+          summary: Usage facts without a resolvable workspace
+          runbook: docs/ai-usage.md
+
+  - name: deepref-transport
+    rules:
+      - alert: DeepRefTransportNotReady
+        expr: min(deepref_transport_ready) < 1
+        for: 5m
+        labels: { severity: page, owner: platform-owner, catalog_id: transport-observation }
+        annotations:
+          summary: A worker observed JetStream as not ready
+          runbook: docs/jetstream-transport-runbook.md
+      - alert: DeepRefTransportObservationStale
+        expr: time() - min(deepref_transport_readiness_last_observed_seconds) > 90
+        for: 5m
+        labels: { severity: ticket, owner: platform-owner, catalog_id: transport-observation }
+        annotations:
+          summary: A JetStream readiness observation is older than 90 seconds
+          runbook: docs/jetstream-transport-runbook.md

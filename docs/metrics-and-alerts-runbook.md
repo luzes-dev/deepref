@@ -113,6 +113,40 @@ Action: repair the dependency or mapping and replay with the same identities. Do
 
 Evidence: retained facts remain intact, receipts commit once, and fresh backlog/identity diagnostics show the actual outcome.
 
+### Terminal delivery recovery
+
+Quarantined outbox events and dead-lettered (quarantined) inbox events are
+listed, inspected and replayed with `deepref-server deliveries`:
+
+```bash
+deepref-server deliveries list <outbox|inbox> [--after <cursor>] [--limit <1..100>]
+deepref-server deliveries inspect <outbox|inbox> <id>
+deepref-server deliveries replay <outbox|inbox> <id> --request <uuid> --operator <user-uuid> --reason <text>
+```
+
+Listing is keyset paginated (pass the last reference as `--after`) and never
+prints payloads; error text is truncated to 300 characters. Replay resets the
+attempt budget with the same event identity; committed outbox receipts are
+never re-run. Each replay writes a `delivery_recovery_audit` row in the same
+transaction. Generate one `--request` UUID per decision and reuse it on retry:
+a repeated request returns the first outcome (`repeated_request: true`) and
+changes nothing, and a request id cannot be reused for another delivery. Every
+action has a 30-second deadline. NATS terminal advisories use
+`deepref-server transport terminal-status` and `recover-terminal`
+([JetStream runbook](jetstream-transport-runbook.md)).
+
+## Alerting configuration as code
+
+`operations/alerting/` holds backend-neutral, Prometheus-compatible proposals:
+`prometheus-rules.yml` (page and ticket rules per catalog row),
+`grafana-dashboard.json` and `alertmanager-routing.template.yml` (a routing
+template with placeholder receivers). Thresholds mirror the unapproved catalog.
+Names assume the standard OTLP translation (dots to underscores, `_seconds` for
+unit `s`, `_total` for counters). `cargo xtask alerts check` fails when a rule or
+panel references a metric no instrument emits, names an unknown catalog row or
+links a missing runbook. Backup, WAL and object-store error rows have no source
+metric yet and therefore no rule.
+
 ## Alert acceptance still required
 
 Owners must accept every SLO target, window, page/ticket threshold, expected worker count and notification route before launch. Handoff 12 remains the acceptance matrix. This code does not assign an on-call person or invent production measurements.
