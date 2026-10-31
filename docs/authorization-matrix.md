@@ -14,13 +14,13 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 
 | Rule | Rows |
 | --- | --- |
-| Authenticated | 14 |
+| Authenticated | 15 |
 | Handler | 10 |
 | Open | 11 |
 | PlatformOperator | 1 |
 | Require | 143 |
 | RequireIfPresent | 1 |
-| **Total HTTP** | **180** |
+| **Total HTTP** | **181** |
 | **Non-HTTP paths** | **12** |
 
 ## HTTP routes
@@ -47,6 +47,7 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 | POST | `/me/export` | Authenticated | - | user-scoped | `account_export::test_export_request` | the caller requests an account data export (11) |
 | DELETE | `/me/export/{id}` | Authenticated | - | user-scoped | `account_export::test_export_cancel` | the caller cancels or discards their account data export (11) |
 | GET | `/me/export/{id}/download` | Authenticated | - | user-scoped | `account_export::test_export_download` | the caller downloads their completed account data export (11) |
+| GET | `/me/workspaces` | Authenticated | - | user-scoped | `account_settings::only_current_memberships_and_pdp_capabilities_are_listed` | human current membership discovery for account settings; actions recheck central PDP |
 | GET | `/notifications` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | user-scoped inbox, filtered to projects the caller can still view |
 | POST | `/notifications/mark-read` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | marks only notifications of projects the caller can still view |
 | GET | `/notifications/unread-count` | Authenticated | - | user-scoped | `authz_user_scoped::notifications_include_only_viewable_projects` | user-scoped count over projects the caller can still view |

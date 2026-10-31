@@ -515,3 +515,123 @@ async fn global_file_count_fails_before_reading_any_missing_object() {
     assert!(error.to_string().contains("source budget"), "{error:#}");
     assert_eq!(f.record(export.id).await.status, ExportStatus::Failed);
 }
+
+#[tokio::test]
+async fn scientific_outputs_and_relationships_are_packaged_without_foreign_rows() {
+    let Some(f) = Fixture::new().await else {
+        return;
+    };
+    let (document, _) = f.document(b"original scientific document").await;
+    let block = Uuid::new_v4();
+    let study = Uuid::new_v4();
+    let assessment = Uuid::new_v4();
+    let field = Uuid::new_v4();
+    sqlx::query("INSERT INTO document_pages(document_id,parser_version,page_number,width,height,active) VALUES($1,'test',1,100,200,true)")
+        .bind(document).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO document_blocks(id,document_id,parser_version,page_number,kind,ordinal,text,content_hash,active) VALUES($1,$2,'test',1,'text',0,'Derived scientific text',repeat('a',64),true)")
+        .bind(block).bind(document).execute(&f.pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO studies(id,project_id,title,design) VALUES($1,$2,'Exported study','cohort')",
+    )
+    .bind(study)
+    .bind(f.project)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO study_reports(project_id,study_id,report_id,relationship) VALUES($1,$2,$3,'report_of_study')")
+        .bind(f.project).bind(study).bind(document).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO appraisal_assessments(id,project_id,report_id,definition_id,definition_version,responses,judgments,actor_kind,actor_id) VALUES($1,$2,$3,'test',1,'{\"q\":\"yes\"}','{\"risk\":\"low\"}','system','test')")
+        .bind(assessment).bind(f.project).bind(document).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO appraisal_assessment_evidence(id,assessment_id,project_id,report_id,question_id,document_id,block_id) VALUES($1,$2,$3,$4,'q',$4,$5)")
+        .bind(Uuid::new_v4()).bind(assessment).bind(f.project).bind(document).bind(block).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO appraisal_events(id,assessment_id,project_id,report_id,event_type,payload,actor_kind,actor_id) VALUES($1,$2,$3,$4,'appraisal_completed','{}','system','test')")
+        .bind(Uuid::new_v4()).bind(assessment).bind(f.project).bind(document).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO extraction_field_definitions(id,project_id,version,field_key,label,value_type) VALUES($1,$2,1,'sample_size','Sample size','number')")
+        .bind(field).bind(f.project).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO extraction_values(id,project_id,study_id,report_id,field_definition_id,field_definition_version,value_type,number_value,rationale,source_document_id,source_block_id,source_page,source_parser_version,source_content_hash,approved_by_actor_kind,approved_by_actor_id) VALUES($1,$2,$3,$4,$5,1,'number',42,'Verified source',$4,$6,1,'test',repeat('a',64),'system','test')")
+        .bind(Uuid::new_v4()).bind(f.project).bind(study).bind(document).bind(field).bind(block).execute(&f.pool).await.unwrap();
+    sqlx::query("UPDATE extraction_values SET superseded_at=now(),superseded_by_actor_kind='system',superseded_by_actor_id='corrector' WHERE project_id=$1")
+        .bind(f.project).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO extraction_values(id,project_id,study_id,field_definition_id,field_definition_version,value_type,number_value,approved_by_actor_kind,approved_by_actor_id,verified_at,verified_by_actor_kind,verified_by_actor_id) VALUES($1,$2,$3,$4,1,'number',43,'system','corrector',now(),'system','verifier')")
+        .bind(Uuid::new_v4()).bind(f.project).bind(study).bind(field).execute(&f.pool).await.unwrap();
+    let acquisition = Uuid::new_v4();
+    sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,status,created_at,config) VALUES($1,$2,'crossref','completed',now(),'{\"secret\":\"ACQUISITION_CONFIG_SENTINEL\"}')")
+        .bind(acquisition).bind(f.project).execute(&f.pool).await.unwrap();
+    sqlx::query("INSERT INTO acquisition_items(acquisition_id,project_id,report_id,canonical_doi,depth,status,last_error) VALUES($1,$2,$3,'10.1234/export',0,'fetched','ACQUISITION_ERROR_SENTINEL')")
+        .bind(acquisition).bind(f.project).bind(document).execute(&f.pool).await.unwrap();
+    // Even an interrupted envelope lacking its optional recipe detail must
+    // remain visible in the declared run inventory rather than vanish in a join.
+    sqlx::query("INSERT INTO durable_runs(id,project_id,kind,actor_kind,actor_id,idempotency_key,status) VALUES($1,$2,'automation','system','test','archive-envelope','completed')")
+        .bind(Uuid::new_v4()).bind(f.project).execute(&f.pool).await.unwrap();
+    let artifact = Uuid::new_v4();
+    sqlx::query("INSERT INTO review_artifacts(id,project_id,content_hash,media_type,payload) VALUES($1,$2,repeat('b',64),'application/json','{\"conclusion\":\"Review output\"}')")
+        .bind(artifact).bind(f.project).execute(&f.pool).await.unwrap();
+    let foreign = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,kind,name,slug) VALUES($1,'organization','Foreign',$2)")
+        .bind(foreign)
+        .bind(foreign.to_string())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let foreign_project = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO projects(id,workspace_id,name) VALUES($1,$2,'FOREIGN_SCIENCE_SENTINEL')",
+    )
+    .bind(foreign_project)
+    .bind(foreign)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO review_artifacts(project_id,content_hash,media_type,payload) VALUES($1,repeat('c',64),'application/json','{\"private\":\"FOREIGN_SCIENCE_SENTINEL\"}')")
+        .bind(foreign_project).execute(&f.pool).await.unwrap();
+    let export = f.request().await;
+    let lease = f.claim().await;
+    f.process(export.id, &lease).await.unwrap();
+    let result = authorize_download(&f.pool, f.user, export.id)
+        .await
+        .unwrap();
+    let output = std::process::Command::new("python3").arg("-c").arg(r#"
+import sys,zipfile,json
+with zipfile.ZipFile(sys.argv[1]) as z:
+ sections={name:json.loads(z.read(name)) for name in z.namelist() if name.endswith('.json')}
+ for name in ['document_pages','document_blocks','study_reports','appraisal_assessments','appraisal_evidence','appraisal_events','extraction_fields','review_artifacts','automation_runs','acquisition_runs','acquisition_items']:
+  assert len(sections[name+'.json']) == 1, name
+ values={v['number_value']:v for v in sections['extraction_values.json']}
+ assert set(values) == {42,43}
+ assert values[42]['superseded_at'] is not None
+ assert values[42]['superseded_by_actor_id'] == 'corrector'
+ assert values[43]['superseded_at'] is None
+ assert values[43]['verified_by_actor_id'] == 'verifier'
+ assert sections['acquisition_items.json'][0]['canonical_doi'] == '10.1234/export'
+ assert sections['document_blocks.json'][0]['text'] == 'Derived scientific text'
+ assert sections['review_artifacts.json'][0]['payload']['conclusion'] == 'Review output'
+ for name in ['extraction_events','study_events','review_manifests','review_artifact_lineage','review_finalizations','review_attempts','automation_runs','automation_steps','automation_attempts','ai_runs','ai_proposals']:
+  assert name+'.json' in sections, name
+ assert b'FOREIGN_SCIENCE_SENTINEL' not in b''.join(z.read(name) for name in z.namelist())
+ assert b'ACQUISITION_CONFIG_SENTINEL' not in b''.join(z.read(name) for name in z.namelist())
+ assert b'ACQUISITION_ERROR_SENTINEL' not in b''.join(z.read(name) for name in z.namelist())
+ assert sections['manifest.json']['version'] == 2
+ assert 'extraction_values.json' in sections['manifest.json']['json_sections']
+"#).arg(f.dir.path().join(result.storage_key.unwrap())).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn oversized_scientific_output_fails_the_whole_inventory() {
+    let Some(f) = Fixture::new().await else {
+        return;
+    };
+    sqlx::query("INSERT INTO review_artifacts(project_id,content_hash,media_type,payload) VALUES($1,repeat('b',64),'application/json',jsonb_build_object('text',repeat('x',$2)))")
+        .bind(f.project).bind(collector::MAX_ROW_BYTES).execute(&f.pool).await.unwrap();
+    let export = f.request().await;
+    let lease = f.claim().await;
+    assert!(f.process(export.id, &lease).await.is_err());
+    let record = f.record(export.id).await;
+    assert_eq!(record.status, ExportStatus::Failed);
+    assert!(record.storage_key.is_none());
+    assert_eq!(f.references(export.id).await, 0);
+}
