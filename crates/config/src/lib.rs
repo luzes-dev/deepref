@@ -15,6 +15,7 @@ mod smtp;
 mod source;
 mod telemetry;
 mod usage_export;
+mod valkey;
 mod worker;
 mod workflow;
 mod workos;
@@ -44,6 +45,7 @@ pub use smtp::{SmtpConfig, SmtpTls};
 pub use source::ConfigSource;
 pub use telemetry::TelemetryConfig;
 pub use usage_export::{USAGE_EXPORT_ENABLED, USAGE_EXPORT_REPLAY_BATCH_SIZE, UsageExportConfig};
+pub use valkey::ValkeyConfig;
 pub use worker::WorkerSettings;
 pub use workflow::WorkflowConfig;
 pub use workos::WorkOsConfig;
@@ -68,6 +70,7 @@ pub struct RuntimeConfig {
     pub pdf: PdfConfig,
     pub integrations: IntegrationsConfig,
     pub usage_export: UsageExportConfig,
+    pub valkey: Option<ValkeyConfig>,
 }
 
 impl RuntimeConfig {
@@ -108,6 +111,7 @@ impl RuntimeConfig {
             pdf: PdfConfig::from_source(get),
             integrations: IntegrationsConfig::from_source(get)?,
             usage_export: UsageExportConfig::from_source(environment, get)?,
+            valkey: ValkeyConfig::from_source(environment, get)?,
             environment,
         })
     }
