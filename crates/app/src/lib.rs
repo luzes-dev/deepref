@@ -32,6 +32,7 @@ pub mod inbox;
 mod jobs;
 mod leased_handler;
 mod legacy_actors;
+pub mod mirrored_concurrency;
 mod notifications;
 pub mod object_lifecycle;
 pub mod outbox;
@@ -283,3 +284,5 @@ pub use ai_first::{
 
 pub mod billing;
 pub mod work_publication;
+
+pub mod project_counts;
