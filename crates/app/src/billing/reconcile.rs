@@ -219,6 +219,15 @@ impl ProviderReconciler for BillingReconciler {
                     Err(_) => failed = true,
                 }
             }
+            // Detached accounts: drive provider-side subscription cancellation.
+            match service.close_detached().await {
+                Ok(pass) => {
+                    outcome.checked += pass.cancelled + pass.manual_required + pass.retry_later;
+                    outcome.repaired += pass.cancelled + pass.manual_required;
+                    failed |= pass.retry_later > 0;
+                }
+                Err(_) => failed = true,
+            }
             if failed { Err(fail()) } else { Ok(outcome) }
         })
     }

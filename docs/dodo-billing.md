@@ -121,9 +121,9 @@ unresolved; no credit balance is used as per-call AI financial authority.
 The local `BillingView` is a typed export seam without provider references,
 credentials, hosted links or raw inbox data. Workspace deletion fences in-flight
 HTTP and detaches active customer mapping, projection and workspace reference.
-A restricted operation tombstone has a five-year expiry; final purge/export
-integration belongs to the subsequent privacy slice. Provider closure/deletion
-is not claimed by local detach. Existing financial ledgers remain authoritative.
+A restricted operation tombstone has a five-year expiry (see "Financial
+retention and provider closure" below). Provider closure/deletion is not claimed
+by local detach. Existing financial ledgers remain authoritative.
 
 This is the 08a foundation. Subsequent 08b implements the provider-neutral immutable
 09 usage sink and unresolved-adjustment seam; metered charging stays guarded until
@@ -133,3 +133,107 @@ attribution are proven. Historical events must not be retimed or reidentified.
 subscription/portal cycle, seller/product/KYC/bank/payout approval, actual catalog,
 privacy publication and hosting decision remain external/pending. Unconfigured
 protected checks are not passing checks.
+
+## Financial retention and provider closure (08c)
+
+### Financial tombstone
+
+Deleting a workspace (directly or through account deletion, 11B) detaches its
+billing account. For five years (`purge_after = detached_at + 5 years`) the
+row keeps only:
+
+- `id`, `provider_scope`, `operation_id`, `created_at`, `detached_at`,
+  `purge_after`, `generation`, `provisioning='detached'`;
+- the restricted original context `closure_workspace_id`,
+  `closure_customer_ref`, `closure_subscription_ref`, `closure_captured_at`,
+  which links the usage and provider records to the billing account rather
+  than to a person;
+- `provider_closure`, `provider_closure_at`, `provider_closure_evidence`.
+
+Live references, projection and product are cleared at detachment. Usage
+facts (`ai_usage_ledger`, `ai_usage_corrections`, settled/voided
+`ai_usage_reservations`, `ai_usage_period_buckets`) and export records
+(`billing_usage_fact_targets`, `billing_usage_resolutions`) keep their
+immutable tenant id for the same period.
+
+### Purge
+
+`deepref-server accounts purge-financial-retention [--dry-run]` deletes, in
+committed batches of 500 (32 batches per table at most), records whose
+workspace no longer exists, whose every billing account naming that
+workspace is past `purge_after`, and which are themselves older than five
+years. Records of live workspaces are never purged. Usage-fact identities in
+`ai_usage_fact_ids` stay so deduplication remains sound; they hold no tenant
+data. The dry run counts at most one batch per table and is a lower bound
+(corrections become eligible only after their ledger row is gone).
+
+The database enforces this: `billing_guard_financial_delete` (migration 0010)
+refuses DELETE on those six tables unless the transaction set
+`deepref.billing_purge=on` and `billing_retention_expired(...)` holds for the
+row. Retention is counted from closure, not from the fact date alone, so a
+record is kept at least five years after the account closed. Rows of
+workspaces without any billing account (free use) go five years after
+recording once the workspace is gone.
+
+### Provider-side closure
+
+Detachment sets `provider_closure`; the state only moves forward (DB trigger):
+
+| State | Meaning | Next |
+| --- | --- | --- |
+| `cancel_pending` | a subscription was captured | the existing billing reconciler calls `cancel_subscription` (16 per pass, retried every 15 min on provider outage) |
+| `cancel_failed` | Dodo refused, or the subscription is not the captured customer's | operator cancels in the dashboard |
+| `customer_manual` | subscription ended (API response or a `subscription.cancelled`/`subscription.expired` webhook for the captured subscription) or none existed | operator requests customer-data erasure from Dodo |
+| `closed` | operator recorded evidence | terminal |
+
+Dodo documents no customer delete/close endpoint (only `POST /customers` at
+<https://docs.dodopayments.com/api-reference/customers/>; the full reference
+index was not exhaustively checked), so every closure ends with a manual
+step. `deepref-server accounts billing-closure-status` prints counts and
+`accounts record-provider-closure <account-uuid> --evidence <uuid>` records
+the operator's restricted evidence record. Nothing claims provider deletion
+without it.
+
+Cancellation reads `GET /subscriptions/{id}` first; `cancelled`, `expired` or
+`failed` count as ended, so repeats are safe. Otherwise it sends
+`PATCH /subscriptions/{id}` with `{"status":"cancelled"}` (immediate, not
+`cancel_at_next_billing_date`):
+<https://docs.dodopayments.com/api-reference/subscriptions/patch-subscriptions>.
+Webhooks for a detached customer complete as no-ops apart from that closure
+evidence. Duplicates are deduplicated at receipt, and late `subscription.active`
+or other events cannot move state backwards. Before this change they retried
+until the attempt budget ran out.
+
+## Usage export adapter (09 downstream)
+
+`DodoUsageExportSink` (crates/app/src/billing/usage_sink.rs) implements the 09b
+`UsageExportSink`. It is wired in the worker when `AI usage export` is enabled
+and `DODO_METERED_CHARGING_ENABLED=true` (event name `DODO_METER_EVENT_NAME`),
+using the Dodo credentials above. No sandbox credentials exist yet. To enable
+it, set the Dodo test-mode variables plus the meter flag, enable export with
+`deepref-server ai-usage enable-export`, and run the protected contract check
+against test mode.
+
+Contract, checked 2026-10-30:
+
+- [Ingest](https://docs.dodopayments.com/api-reference/usage-events/ingest-events):
+  `POST /events/ingest` `{events:[{event_id,customer_id,event_name,timestamp,metadata}]}`,
+  response `{ingested_count}`. `event_id` is the idempotency key and repeats are
+  ignored. Timestamps older than 1 hour or more than 5 minutes ahead are
+  rejected ([guide](https://docs.dodopayments.com/developer-resources/usage-based-billing-guide)),
+  and backfill is unsupported. Metadata values are scalars (≤50 keys).
+- [Get event](https://docs.dodopayments.com/api-reference/usage-events/get-event):
+  `GET /events/{event_id}` returns the stored event, or 404.
+
+Mapping: fact id = `event_id`; `settled_at` is the original timestamp, never
+retimed. `ingested_count>=1` means Accepted. `ingested_count=0`, 5xx, 429 and
+transport errors are Ambiguous, resolved by lookup and a full-payload compare
+(match = Duplicate). Other 4xx are Permanent. A local 50-minute/4-minute window
+keeps new POSTs inside the provider window. A late fact is looked up first; if
+it is not found, it is quarantined as Permanent for reconciliation and never
+reposted. Corrections and non-positive units are refused (Permanent)
+because Dodo documents no correction or negative-quantity semantics.
+
+Unverified: whether a 409 is ever returned (handled as conflict), how long
+deduplication is retained beyond the acceptance window, and correction
+support.

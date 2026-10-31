@@ -183,6 +183,39 @@ pub async fn audit_purge(config: &ApiConfig, dry_run: bool) -> anyhow::Result<St
     Ok(serde_json::to_string_pretty(&output)?)
 }
 
+/// Bounded five-year financial retention purge (08c). With `dry_run` nothing
+/// is deleted and one batch per table is counted.
+pub async fn purge_financial_retention(
+    config: &ApiConfig,
+    dry_run: bool,
+) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let report =
+        deepref_app::billing::retention::purge_financial_retention(&pool, dry_run, None).await?;
+    Ok(serde_json::to_string_pretty(&report)?)
+}
+
+/// Counts of detached billing accounts per provider-closure state.
+pub async fn billing_closure_status(config: &ApiConfig) -> anyhow::Result<String> {
+    let pool = database_pool(config).await?;
+    let status = deepref_app::billing::provider_closure_status(&pool).await?;
+    Ok(serde_json::to_string_pretty(&status)?)
+}
+
+/// Operator record that provider-side closure is evidenced.
+pub async fn record_provider_closure(
+    config: &ApiConfig,
+    account: uuid::Uuid,
+    evidence: uuid::Uuid,
+) -> anyhow::Result<()> {
+    let pool = database_pool(config).await?;
+    anyhow::ensure!(
+        deepref_app::billing::record_provider_closure(&pool, account, evidence).await?,
+        "account is not detached with a pending manual provider-closure step"
+    );
+    Ok(())
+}
+
 /// Completes every account deletion whose 30-day window has passed, and
 /// re-applies deletions a restore undid (11, BUSINESS_DECISIONS).
 pub async fn complete_account_deletions(

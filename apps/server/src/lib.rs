@@ -315,6 +315,28 @@ async fn run_accounts(action: AccountsCommand) -> anyhow::Result<()> {
             println!("account export retention activated");
             Ok(())
         }
+        AccountsCommand::PurgeFinancialRetention { dry_run } => {
+            println!(
+                "{}",
+                deepref_http_api::purge_financial_retention(&config, dry_run).await?
+            );
+            Ok(())
+        }
+        AccountsCommand::BillingClosureStatus => {
+            println!(
+                "{}",
+                deepref_http_api::billing_closure_status(&config).await?
+            );
+            Ok(())
+        }
+        AccountsCommand::RecordProviderClosure {
+            account_id,
+            evidence_id,
+        } => {
+            deepref_http_api::record_provider_closure(&config, account_id, evidence_id).await?;
+            println!("provider closure recorded");
+            Ok(())
+        }
         AccountsCommand::ErasureStatus => {
             println!(
                 "{}",
