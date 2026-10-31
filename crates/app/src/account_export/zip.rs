@@ -27,13 +27,25 @@ impl Staging {
         // Staging takes cleanup ownership so failures retain the existing warning.
         Ok(Self(directory.keep()))
     }
+    pub(super) fn for_attempt(attempt: uuid::Uuid) -> std::io::Result<Self> {
+        let directory = tempfile::Builder::new()
+            .prefix(&format!("deepref-export-{attempt}-"))
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?;
+        Ok(Self(directory.keep()))
+    }
+    pub(super) fn cleanup(self) -> std::io::Result<()> {
+        std::fs::remove_dir_all(&self.0)
+    }
     pub fn path(&self) -> &Path {
         &self.0
     }
 }
 impl Drop for Staging {
     fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
             tracing::warn!(%error, "export staging cleanup failed");
         }
     }

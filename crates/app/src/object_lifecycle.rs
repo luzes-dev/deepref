@@ -161,13 +161,12 @@ pub async fn lock_object_for_upload(
     tx: &mut Transaction<'_, Postgres>,
     key: &ObjectKey,
 ) -> anyhow::Result<()> {
-    let deleted: Option<DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT retired_at FROM object_lifecycle WHERE storage_key=$1 FOR UPDATE",
-    )
-    .bind(key.as_str())
-    .fetch_one(&mut **tx)
-    .await?;
-    anyhow::ensure!(deleted.is_none(), "upload intent was already retired");
+    let writable:bool=sqlx::query_scalar("SELECT retired_at IS NULL AND deleted_at IS NULL AND (privacy_due_at IS NULL OR privacy_due_at>clock_timestamp()) FROM object_lifecycle WHERE storage_key=$1 FOR UPDATE")
+        .bind(key.as_str()).fetch_one(&mut **tx).await?;
+    anyhow::ensure!(
+        writable,
+        "upload intent is retired or due for privacy erasure"
+    );
     Ok(())
 }
 
@@ -196,7 +195,7 @@ pub async fn retain_object_reference(
         ObjectOwner::Account(id) => (Some(id.as_uuid()), None),
     };
     let valid: bool = sqlx::query_scalar(
-        "SELECT retired_at IS NULL AND deleted_at IS NULL AND user_id IS NOT DISTINCT FROM $2 AND project_id IS NOT DISTINCT FROM $3
+        "SELECT retired_at IS NULL AND deleted_at IS NULL AND (privacy_due_at IS NULL OR privacy_due_at>clock_timestamp()) AND user_id IS NOT DISTINCT FROM $2 AND project_id IS NOT DISTINCT FROM $3
          FROM object_lifecycle WHERE storage_key=$1 FOR UPDATE")
         .bind(key.as_str()).bind(user).bind(project).fetch_one(&mut **tx).await?;
     anyhow::ensure!(
@@ -229,7 +228,7 @@ pub async fn release_object_reference(
     .bind(reference_id)
     .execute(&mut **tx)
     .await?;
-    sqlx::query("UPDATE object_lifecycle SET cleanup_after=now()+interval '24 hours'
+    sqlx::query("UPDATE object_lifecycle SET cleanup_after=CASE WHEN privacy_due_at<=clock_timestamp() THEN LEAST(cleanup_after,clock_timestamp()) ELSE now()+interval '24 hours' END
                  WHERE storage_key IN (SELECT storage_key FROM object_retained_references WHERE reference_id=$1)
                  AND deleted_at IS NULL")
         .bind(reference_id).execute(&mut **tx).await?;
@@ -249,14 +248,33 @@ pub async fn cleanup_objects(
     store: &DocumentStore,
     limit: i64,
 ) -> anyhow::Result<u64> {
+    cleanup_matching(pool, store, limit, false).await
+}
+
+/// Only due account-erasure targets; ordinary operational-grace objects are
+/// left to the existing object-cleanup scheduler.
+pub async fn cleanup_due_privacy_objects(
+    pool: &PgPool,
+    store: &DocumentStore,
+    limit: i64,
+) -> anyhow::Result<u64> {
+    cleanup_matching(pool, store, limit, true).await
+}
+
+async fn cleanup_matching(
+    pool: &PgPool,
+    store: &DocumentStore,
+    limit: i64,
+    privacy_only: bool,
+) -> anyhow::Result<u64> {
     anyhow::ensure!((1..=1000).contains(&limit), "cleanup batch must be 1..1000");
     let mut count = 0;
     for _ in 0..limit {
         let mut tx = pool.begin().await?;
         let candidate: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
             "SELECT storage_key,retired_at FROM object_lifecycle WHERE deleted_at IS NULL
-             AND cleanup_after <= now() ORDER BY cleanup_after,storage_key FOR UPDATE SKIP LOCKED LIMIT 1")
-            .fetch_optional(&mut *tx).await?;
+             AND cleanup_after <= now() AND (NOT $1::bool OR privacy_due_at<=clock_timestamp()) ORDER BY cleanup_after,storage_key FOR UPDATE SKIP LOCKED LIMIT 1")
+            .bind(privacy_only).fetch_optional(&mut *tx).await?;
         let Some((key, retired)) = candidate else {
             break;
         };
@@ -280,7 +298,7 @@ pub async fn cleanup_objects(
                 "SELECT max(expires_at) FROM object_retained_references WHERE storage_key=$1 AND expires_at>now()")
                 .bind(&key).fetch_one(&mut *tx).await?;
             if let Some(expiry) = expiry {
-                sqlx::query("UPDATE object_lifecycle SET cleanup_after=$2+interval '24 hours' WHERE storage_key=$1")
+                sqlx::query("UPDATE object_lifecycle SET cleanup_after=CASE WHEN privacy_due_at<=clock_timestamp() THEN $2 ELSE $2+interval '24 hours' END WHERE storage_key=$1")
                     .bind(&key).bind(expiry).execute(&mut *tx).await?;
                 tx.commit().await?;
                 continue;

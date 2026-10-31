@@ -165,6 +165,7 @@ async fn committed_source_retention_and_post_collection_revocation() {
                 retained_until: until,
             },
             &generation_budget(),
+            &UploadObservation::new(),
         )
         .await;
         if race == "cancel" {
@@ -254,7 +255,8 @@ async fn retry_releases_old_reference_and_fences_late_publication() {
                 summary: &old_summary,
                 retained_until: old_until
             },
-            &generation_budget()
+            &generation_budget(),
+            &UploadObservation::new(),
         )
         .await
         .is_err()
@@ -279,6 +281,7 @@ async fn retry_releases_old_reference_and_fences_late_publication() {
             retained_until: until,
         },
         &generation_budget(),
+        &UploadObservation::new(),
     )
     .await
     .unwrap();

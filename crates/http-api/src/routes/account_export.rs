@@ -9,7 +9,8 @@ use axum::{
 };
 use deepref_app::account_export::{
     AccountExportRecord, ExportError, ExportStatus, authorize_download, cancel_account_export,
-    get_latest_account_export, record_export_download_audit, request_account_export,
+    get_latest_account_export, lock_download_read, record_export_download_audit,
+    request_account_export,
 };
 use deepref_app::identity::AuditRequest;
 use deepref_domain::UserId;
@@ -230,6 +231,13 @@ pub async fn download_export(
         .document_store
         .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
 
+    let read = tokio::time::timeout_at(
+        deadline,
+        lock_download_read(&state.pool, user, id, &storage_key),
+    )
+    .await
+    .map_err(|_| download_timeout())?
+    .map_err(map_export_error)?;
     let object = tokio::time::timeout_at(deadline, store.get(&storage_key))
         .await
         .map_err(|_| download_timeout())?
@@ -240,6 +248,11 @@ pub async fn download_export(
                 ApiError::Internal(error.into())
             }
         })?;
+    // Object acquisition is serialized with erasure. Release this connection
+    // before the audit call, including when the business pool has size one.
+    tokio::time::timeout_at(deadline, read.commit())
+        .await
+        .map_err(|_| download_timeout())??;
 
     // Record audit event for download
     let request_id = crate::error::correlation_id();
@@ -264,9 +277,15 @@ pub async fn download_export(
         return Err(download_timeout());
     }
     let stream = bounded_download_stream(
-        object
-            .into_stream()
-            .map(|value| value.map_err(std::io::Error::other)),
+        revocable_download_stream(
+            state.pool,
+            user,
+            id,
+            storage_key,
+            object
+                .into_stream()
+                .map(|value| value.map_err(std::io::Error::other)),
+        ),
         deadline,
     );
     let mut response = Body::from_stream(stream).into_response();
@@ -345,6 +364,44 @@ fn download_deadline(
 fn download_timeout() -> ApiError {
     ApiError::Internal(anyhow::anyhow!("export download deadline exceeded"))
 }
+
+fn revocable_download_stream<S>(
+    pool: sqlx::PgPool,
+    user: UserId,
+    id: Uuid,
+    storage_key: String,
+    source: S,
+) -> impl Stream<Item = std::io::Result<Bytes>> + Send
+where
+    S: Stream<Item = std::io::Result<Bytes>> + Send + 'static,
+{
+    futures::stream::unfold(
+        (Box::pin(source), pool, storage_key, false),
+        move |(mut source, pool, key, done)| async move {
+            if done {
+                return None;
+            }
+            let read = lock_download_read(&pool, user, id, &key).await;
+            let Ok(read) = read else {
+                return Some((
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "export is no longer available",
+                    )),
+                    (source, pool, key, true),
+                ));
+            };
+            // Keep the fence until the adapter has finished this read. The
+            // outer absolute response deadline bounds this wait and DB locks.
+            let value = source.next().await;
+            if let Err(error) = read.commit().await {
+                return Some((Err(std::io::Error::other(error)), (source, pool, key, true)));
+            }
+            value.map(|value| (value, (source, pool, key, false)))
+        },
+    )
+}
+
 fn bounded_download_stream<S>(
     source: S,
     deadline: tokio::time::Instant,

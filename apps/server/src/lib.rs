@@ -315,6 +315,18 @@ async fn run_accounts(action: AccountsCommand) -> anyhow::Result<()> {
             println!("account export retention activated");
             Ok(())
         }
+        AccountsCommand::ErasureStatus => {
+            println!(
+                "{}",
+                deepref_http_api::account_erasure_status(&config).await?
+            );
+            Ok(())
+        }
+        AccountsCommand::ActivateErasure { confirm_drained } => {
+            deepref_http_api::activate_account_erasure(&config, &confirm_drained).await?;
+            println!("physical account-erasure proofs activated");
+            Ok(())
+        }
     }
 }
 
