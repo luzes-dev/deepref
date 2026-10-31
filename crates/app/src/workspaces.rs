@@ -980,6 +980,7 @@ pub(crate) async fn delete_workspace_rows(
         audit,
     )
     .await?;
+    crate::api_keys::remove_workspace_keys(tx, actor, workspace_id, audit).await?;
     sqlx::query("DELETE FROM workspace_memberships WHERE workspace_id = $1")
         .bind(workspace_id.as_uuid())
         .execute(&mut **tx)

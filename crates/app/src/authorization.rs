@@ -10,13 +10,13 @@
 use std::{collections::HashSet, sync::Mutex};
 
 use deepref_application::authorization::{
-    AuthorizationFuture, AuthorizationStore, AuthzError, ResourceAccess,
+    AuthorizationFuture, AuthorizationStore, AuthzError, ResourceAccess, ServiceAccess,
 };
 use deepref_domain::{
     ProjectId, ProjectRole, UserId, WorkspaceId, WorkspaceRole,
     authorization::{Grants, Permission, Resource, project_role_grants, workspace_role_grants},
 };
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -52,40 +52,134 @@ const WORKSPACE_ACCESS_SQL: &str = "\
     LEFT JOIN workspace_memberships m ON m.workspace_id = w.id AND m.user_id = $2 \
     WHERE w.id = $1";
 
-impl AuthorizationStore for PostgresAuthorizationStore {
+/// One human-access fact query and parser for pool and transaction adapters.
+/// Permission/role decisions remain exclusively in the central PDP/domain.
+async fn read_access<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+    user: UserId,
+    resource: Resource,
+) -> Result<ResourceAccess, AuthzError> {
+    let (sql, id) = match resource {
+        Resource::Project(project) => (PROJECT_ACCESS_SQL, project.as_uuid()),
+        Resource::Workspace(workspace) => (WORKSPACE_ACCESS_SQL, workspace.as_uuid()),
+    };
+    let row = sqlx::query(sql)
+        .bind(id)
+        .bind(user.as_uuid())
+        .fetch_optional(executor)
+        .await
+        .map_err(|error| AuthzError::Store(error.to_string()))?;
+    let Some(row) = row else {
+        return Ok(ResourceAccess::unresolved());
+    };
+    let read = |error: sqlx::Error| AuthzError::Store(error.to_string());
+    let workspace: Option<Uuid> = row.try_get("workspace_id").map_err(read)?;
+    let user_status: Option<String> = row.try_get("user_status").map_err(read)?;
+    let role: Option<String> = row.try_get("membership_role").map_err(read)?;
+    let status: Option<String> = row.try_get("membership_status").map_err(read)?;
+    let project_role: Option<String> = row.try_get("project_role").map_err(read)?;
+    let membership = role.as_deref().zip(status.as_deref());
+    Ok(ResourceAccess {
+        workspace_id: workspace.map(WorkspaceId::new),
+        grants: Grants::from_stored(user_status.as_deref(), membership, project_role.as_deref()),
+    })
+}
+
+/// Human authorization through a borrowed, already-held transaction connection.
+/// The mutex adapts AuthorizationStore's shared-reference port to SQLx's mutable
+/// connection executor; it never acquires a pool connection. Borrowing prevents
+/// this adapter from outliving the transaction whose locks protect its facts.
+/// Machine authorization is not needed here and retains the port's deny default.
+pub(crate) struct TransactionAuthorizationStore<'connection> {
+    connection: tokio::sync::Mutex<&'connection mut PgConnection>,
+}
+
+impl<'connection> TransactionAuthorizationStore<'connection> {
+    pub(crate) fn new(connection: &'connection mut PgConnection) -> Self {
+        Self {
+            connection: tokio::sync::Mutex::new(connection),
+        }
+    }
+}
+
+impl AuthorizationStore for TransactionAuthorizationStore<'_> {
     fn access<'a>(
         &'a self,
         user: UserId,
         resource: Resource,
     ) -> AuthorizationFuture<'a, Result<ResourceAccess, AuthzError>> {
         Box::pin(async move {
+            let mut connection = self.connection.lock().await;
+            read_access(&mut **connection, user, resource).await
+        })
+    }
+}
+
+impl AuthorizationStore for PostgresAuthorizationStore {
+    fn access<'a>(
+        &'a self,
+        user: UserId,
+        resource: Resource,
+    ) -> AuthorizationFuture<'a, Result<ResourceAccess, AuthzError>> {
+        Box::pin(read_access(&self.pool, user, resource))
+    }
+    fn service_access<'a>(
+        &'a self,
+        service: deepref_domain::ServicePrincipal,
+        resource: Resource,
+    ) -> AuthorizationFuture<'a, Result<ServiceAccess, AuthzError>> {
+        Box::pin(async move {
             let (sql, id) = match resource {
-                Resource::Project(project) => (PROJECT_ACCESS_SQL, project.as_uuid()),
-                Resource::Workspace(workspace) => (WORKSPACE_ACCESS_SQL, workspace.as_uuid()),
-            };
-            let row = sqlx::query(sql)
-                .bind(id)
-                .bind(user.as_uuid())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|error| AuthzError::Store(error.to_string()))?;
-            let Some(row) = row else {
-                return Ok(ResourceAccess::unresolved());
+                Resource::Workspace(id) => (
+                    "SELECT w.id AS workspace_id, k.workspace_id AS key_workspace_id, k.scopes,
+                            u.status AS user_status, m.role, m.status AS membership_status
+                     FROM api_keys k
+                     JOIN users u ON u.id = k.created_by_user_id
+                     JOIN workspaces w ON w.id = $2
+                     LEFT JOIN workspace_memberships m ON m.workspace_id = w.id AND m.user_id = u.id
+                     WHERE k.id = $1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())",
+                    id.as_uuid()),
+                Resource::Project(id) => (
+                    "SELECT p.workspace_id, k.workspace_id AS key_workspace_id, k.scopes,
+                            u.status AS user_status, m.role, m.status AS membership_status
+                     FROM api_keys k
+                     JOIN users u ON u.id = k.created_by_user_id
+                     JOIN projects p ON p.id = $2
+                     LEFT JOIN workspace_memberships m ON m.workspace_id = p.workspace_id AND m.user_id = u.id
+                     WHERE k.id = $1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())",
+                    id.as_uuid()),
             };
             let read = |error: sqlx::Error| AuthzError::Store(error.to_string());
+            let row = sqlx::query(sql)
+                .bind(service.key_id.as_uuid())
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(read)?;
+            let Some(row) = row else {
+                return Ok(ServiceAccess::unresolved());
+            };
+            let key_workspace: Uuid = row.try_get("key_workspace_id").map_err(read)?;
             let workspace: Option<Uuid> = row.try_get("workspace_id").map_err(read)?;
-            let user_status: Option<String> = row.try_get("user_status").map_err(read)?;
-            let role: Option<String> = row.try_get("membership_role").map_err(read)?;
-            let status: Option<String> = row.try_get("membership_status").map_err(read)?;
-            let project_role: Option<String> = row.try_get("project_role").map_err(read)?;
-            let membership = role.as_deref().zip(status.as_deref());
-            Ok(ResourceAccess {
-                workspace_id: workspace.map(WorkspaceId::new),
-                grants: Grants::from_stored(
-                    user_status.as_deref(),
-                    membership,
-                    project_role.as_deref(),
-                ),
+            let status: String = row.try_get("user_status").map_err(read)?;
+            let role: Option<String> = row.try_get("role").map_err(read)?;
+            let membership_status: Option<String> =
+                row.try_get("membership_status").map_err(read)?;
+            let scopes: Vec<String> = row.try_get("scopes").map_err(read)?;
+            Ok(ServiceAccess {
+                key_workspace_id: Some(WorkspaceId::new(key_workspace)),
+                resource: ResourceAccess {
+                    workspace_id: workspace.map(WorkspaceId::new),
+                    grants: Grants::from_stored(
+                        Some(&status),
+                        role.as_deref().zip(membership_status.as_deref()),
+                        None,
+                    ),
+                },
+                scopes: scopes
+                    .iter()
+                    .filter_map(|scope| Permission::parse(scope))
+                    .collect(),
             })
         })
     }

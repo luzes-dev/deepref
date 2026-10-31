@@ -29,6 +29,7 @@ pub mod heartbeat;
 pub mod inbox_processor;
 pub mod limiter;
 pub mod metadata;
+pub mod metrics;
 pub mod outbox_dispatch;
 pub mod pmid_import;
 pub mod processor;
@@ -293,6 +294,14 @@ pub async fn run_with_shutdown(
         heartbeat_signal,
         pool_capacities,
     ));
+    // Sampling is opt-in with the configured OTLP pipeline; no collector
+    // means no additional operational queries on the application database.
+    let metrics_task = config
+        .runtime
+        .telemetry
+        .otlp_endpoint
+        .as_ref()
+        .map(|_| tokio::spawn(metrics::run(pool.clone(), reconciler_signal.clone())));
     let loop_config = ClaimLoopConfig {
         pools,
         pool_concurrency: config.pool_concurrency.clone(),
@@ -339,6 +348,15 @@ pub async fn run_with_shutdown(
     // These processors enforce their own drain deadline, then abort and await
     // every owned event. Await the processors themselves instead of dropping
     // a JoinHandle on an outer timeout and detaching cleanup.
+    if let Some(mut task) = metrics_task
+        && tokio::time::timeout(Duration::from_secs(5), &mut task)
+            .await
+            .is_err()
+    {
+        task.abort();
+        let _ = task.await;
+        tracing::warn!("operational metric sampler was aborted during shutdown");
+    }
     let outbox_drained = outbox_task.await;
     let inbox_drained = inbox_task.await;
     loop_result?;

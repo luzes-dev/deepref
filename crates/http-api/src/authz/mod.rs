@@ -109,6 +109,11 @@ pub(crate) async fn enforce(
     };
     let query = request.uri().query().map(str::to_owned);
     let session = request.extensions().get::<SessionContext>().cloned();
+    let principal = request
+        .extensions()
+        .get::<deepref_domain::Principal>()
+        .copied()
+        .or_else(|| session.as_ref().map(|session| session.principal));
     let caller = Caller {
         user: session
             .as_ref()
@@ -155,9 +160,18 @@ pub(crate) async fn enforce(
         }
         AuthzMode::Enforced => {}
     }
-    let Some(session) = session else {
+    let Some(principal) = principal else {
         return ApiError::Auth(AuthFailure::Unauthenticated).into_response();
     };
+    if matches!(principal, deepref_domain::Principal::Service(_)) && !policy::machine_safe(row) {
+        pep.state
+            .record_auth_rejection(
+                deepref_app::auth_rejections::RejectionReason::ApiKeyRouteDenied,
+                None,
+            )
+            .await;
+        return denied_response();
+    }
     let (permission, source, optional) = match row.rule {
         Rule::Require(permission, source) => (permission, source, false),
         Rule::RequireIfPresent(permission, source) => (permission, source, true),
@@ -208,11 +222,19 @@ pub(crate) async fn enforce(
             match pep
                 .state
                 .authorizer
-                .require(&session.principal, permission, Resource::Project(project))
+                .require(&principal, permission, Resource::Project(project))
                 .await
             {
                 Ok(()) => next.run(request).await,
                 Err(AuthzError::Denied(_)) => {
+                    if matches!(principal, deepref_domain::Principal::Service(_)) {
+                        pep.state
+                            .record_auth_rejection(
+                                deepref_app::auth_rejections::RejectionReason::ApiKeyRouteDenied,
+                                None,
+                            )
+                            .await;
+                    }
                     deny(
                         &pep.state,
                         &caller,

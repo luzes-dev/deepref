@@ -1,275 +1,97 @@
-# Handoff 08: Polar billing, commercial state and local entitlements
+# Handoff 08: Dodo Payments billing and local entitlements
 
-## Goal
+## Goal and owner decision
 
-Integrate Polar as DeepRef's Merchant of Record and commercial system while keeping runtime authorization and entitlements local.
+Integrate Dodo Payments as the selected Merchant of Record while keeping runtime authorization, scientific policy and hard AI limits local. The legacy filename preserves existing links; Polar is no longer the implementation target.
 
-Read `00_PROGRAM.md`. Complete handoffs 01 and 02, all of handoff 03 (03a, 03b and 03c as one release gate), and handoff 04a in `04_NATS_OUTBOX_FOUNDATION.md`.
+On 2026-10-23 the owner selected Dodo Payments. Read `00_PROGRAM.md` and `BUSINESS_DECISIONS.md`. Complete 01, 02, 03a–c and the broker-independent PostgreSQL integration inbox from 04a before integrating billing.
 
-## Commercial readiness gate
-
-Resolve Polar payout eligibility for the actual seller/legal entity in Brazil before this handoff starts substantial work. Small Polar Sandbox spikes may proceed while the gate is unresolved.
-
-Treat this as a business decision, not an engineering workaround. Record the decision before proceeding with substantial billing work.
-
-Do not create a foreign legal entity as part of this work.
-
-Status (2026-10-19, `BUSINESS_DECISIONS.md`): the seller is an individual in Brazil, and Polar does not pay out to Brazil. This handoff is paused until the billing provider is chosen, then rewritten for that provider. The LGPD roles, retention periods and data region recorded there apply to whichever provider is chosen.
+The seller remains an individual resident in Brazil, without a CNPJ or foreign entity. Dodo lists Brazil for merchant accounts, supports individual onboarding, and determines individual country eligibility from the verified government ID. Actual product, identity, bank and compliance approval remains external. Test-mode implementation may proceed; live billing must not be enabled until the actual seller and product are approved. See [merchant eligibility](https://docs.dodopayments.com/miscellaneous/accepted-countries-and-territories), [account verification](https://docs.dodopayments.com/miscellaneous/verification-process) and [merchant acceptance](https://docs.dodopayments.com/miscellaneous/merchant-acceptance). Do not create a foreign entity or submit personal verification on the owner's behalf.
 
 ## Responsibility split
 
-Polar owns:
+Dodo owns the commercial catalog, hosted checkout, subscriptions, customer portal, invoices, commercial credit/meter interpretation and Merchant-of-Record functions. DeepRef owns Workspace identity, runtime authorization, typed local entitlements, scientific policy, hard financial reservation/settlement and its immutable usage ledger.
 
-```text
-customers
-products/prices
-checkout
-subscriptions
-customer portal
-invoices
-tax/Merchant-of-Record obligations
-commercial benefits
-commercial credits
-meters
-commercial usage billing
-```
+Do not duplicate card storage, invoicing, sales-tax calculation or dispute infrastructure. A browser redirect is never evidence that a payment succeeded.
 
-DeepRef owns:
+## Provider adapter and contract evidence
 
-```text
-Workspace
-runtime authorization
-local entitlement projection
-scientific policy
-hard usage enforcement
-usage ledger
-```
+Use a small Rust adapter behind a DeepRef-owned billing port. Existing `reqwest`, `serde`, error and secret-handling infrastructure is sufficient; no JavaScript billing sidecar. Provider JSON and identifiers stay in the adapter. Record the exact API/OpenAPI or SDK source revision used to define fixtures, including mode, endpoints, statuses and error semantics. Reverify current official contracts before implementation rather than copying examples from this handoff.
 
-## Customer mapping
+Explicit test/live mode chooses the corresponding fixed provider endpoint and credentials. Never silently default to live mode. Production validates HTTPS and the allowed Dodo hosts; arbitrary provider base URLs are only available in controlled test fixtures. Requests have bounded connect/overall deadlines, bounded bodies and sanitized errors. Credentials, hosted session links and customer PII must not enter ordinary logs.
 
-Workspace is the billing customer.
+Official contract starting points:
 
-Use `WorkspaceId` as Polar external customer identity where the current API supports it.
+- [Checkout sessions](https://docs.dodopayments.com/developer-resources/checkout-session).
+- [Subscription integration](https://docs.dodopayments.com/developer-resources/subscription-integration-guide).
+- [Webhooks and signature verification](https://docs.dodopayments.com/developer-resources/webhooks).
+- [Usage ingestion](https://docs.dodopayments.com/developer-resources/usage-based-billing-guide).
+- [Official customer API source](https://github.com/dodopayments/dodopayments-typescript/blob/main/src/resources/customers/customers.ts) and [portal source](https://github.com/dodopayments/dodopayments-typescript/blob/main/src/resources/customers/customer-portal.ts).
 
-Persist the Polar customer ID as provider metadata when useful.
+These references establish provider behavior, not permission to copy example in-memory webhook processing: DeepRef requires a committed PostgreSQL inbox row before acknowledgement.
 
-Never bill a project or individual user as the primary product tenant.
+## Customer identity and provisioning
 
-## Rust integration
+Workspace is the billing tenant. Persist a unique workspace-to-Dodo-customer mapping, scoped to provider business and mode. Internal `WorkspaceId` remains canonical; never substitute email or a browser-supplied provider ID for tenant identity.
 
-Do not add a JavaScript billing sidecar.
+Use an external identity field only when the current API documents its semantics. Otherwise keep the mapping locally and use a bounded supported metadata correlation field. Do not assume Dodo implements Polar's external-customer API. Customer creation must survive simultaneous requests and ambiguous outcomes: serialize local provisioning intent, retain operation identity, and reconcile supported provider evidence before creating another customer. An undocumented idempotency header is not a correctness guarantee. Unknown outcomes remain visible rather than being retried as unrelated operations.
 
-Use a small Rust integration adapter through Polar's current versioned REST API.
+Minimize outbound PII. Collect a billing email only where the chosen provider flow requires one, with authorized user input. Send no member roster, scientific content, prompts or document names. Do not reuse an email across workspaces to infer they share a billing account.
 
-Keep the adapter behind a DeepRef-owned billing provider port. Do not make Polar's API or data types the domain/application contract; no alternative provider is mandated.
+## Local projection and entitlements
 
-Prefer existing `reqwest`, `serde`, `thiserror` and secret-handling infrastructure.
+Store billing account mapping, subscription/commercial product references, lifecycle status/timestamps, reconciliation freshness and effective typed entitlements. Provider account/mode identifiers are part of mapping and verification boundaries. Keep any necessary immutable financial history separate from active product state.
 
-Model only the endpoints DeepRef uses.
+Application code uses closed concepts such as `Feature::AiFirst`, `Automation`, `ApiAccess`, `AdvancedExports` and limits for projects, members and monthly AI allowance. It must never branch on a commercial plan name or provider benefit ID. Map configured provider product/entitlement identifiers at the boundary. Unit tests construct effective entitlements without Dodo.
 
-Provider JSON types remain inside the integration layer.
+Read effective entitlements locally during ordinary authorization. Define locally known free, paid and unknown billing classification explicitly. An absent or failed projection is not proof that an account is free, especially for automatic inactivity deletion. Revocation and downgrade behavior is explicit and tested. Preserve already-known access through transient provider outages according to a documented bounded grace policy, while refusing unproven grants and increases. Retain PostgreSQL financial checks regardless of commercial credits.
 
-Pin/document API version behavior where Polar supports versioning.
+## Checkout and portal
 
-## Local billing projection
+Authorized workspace billing routes derive customer mapping and configured product IDs server-side. The browser selects a closed DeepRef offering, never an arbitrary provider customer, price, quantity or amount.
 
-Create local tables/models for:
+Validate return URLs against the configured application origin and allowed paths; reject userinfo, unsafe schemes and open redirects. Validate the returned hosted URL against the expected mode/provider host before returning it. Treat it as a short-lived bearer capability: no-store responses, no logs, no shared cached links. Use hosted checkout without stored-card/immediate-charge options unless a separate accountable flow is designed.
 
-```text
-billing account/customer mapping
-subscription projection
-commercial product reference
-billing lifecycle timestamps/status
-```
+Dodo's hosted session contract may return no checkout URL for non-hosted payment flows; do not unwrap a nullable URL or treat it as a completed subscription. Customer portal creation follows the same permission and tenant-mapping rules. Return a protected link without requesting unsolicited provider email delivery.
 
-Do not make Polar API calls during ordinary feature authorization.
+## Durable webhooks and reconciliation
 
-## Entitlements
+Receive raw bytes, verify the provider signature and signed timestamp, validate expected business/mode, then insert idempotently into the existing PostgreSQL integration inbox. Acknowledge only after that transaction commits. Deduplicate by provider/business/mode and verified webhook identity. Bound request bodies and signature parsing; malformed or invalid requests create no inbox rows and no unbounded audit storm.
 
-Application code must never do:
+Dodo documents Standard Webhooks: verify the exact raw body with the documented header/signature scheme and replay tolerance. Support deliberate overlapping-key rotation. Use a current vetted library or test the adapter against independently generated signed vectors. Do not parse and reserialize before verification.
 
-```text
-if plan == "pro"
-```
+The durable inbox handler projects only supported event families. Handle activation, renewal, cancellation, expiry, failed/past-due/on-hold states, plan changes and applicable refund/dispute/credit changes without granting access twice or reviving a newer cancellation. Do not assume arrival order, and do not infer a monotonic provider version from a delivery timestamp. Resolve ambiguous ordering through current provider reads, serialized/fenced local reconciliation and deterministic projection rules. A stale fetch must not overwrite newer committed state.
 
-Create typed concepts:
+Periodic bounded reconciliation repairs missed/quarantined webhooks, unknown provisioning outcomes and subscription/entitlement drift. A provider outage grows durable backlog; webhook receipt and local entitlement reads do not require NATS or Valkey. Record safe administrative audit events for checkout, subscription, entitlement and credit changes in the same authoritative transaction.
 
-```text
-Feature::AiFirst
-Feature::Automation
-Feature::ApiAccess
-Feature::AdvancedExports
+## Usage export and credits (handoff 09)
 
-Limit::Projects
-Limit::WorkspaceMembers
-Limit::MonthlyAiCredit
-```
+Attach the Dodo sink to the existing provider-neutral immutable usage-fact/outbox contract. Do not change reservation/ledger semantics, export rollout fences or identities. Use one event per immutable fact until batching/correction semantics are verified. Numeric meter metadata remains numeric. Stable `event_id` and original event timestamp must survive retry, explicit replay, customer mapping changes and billing-period boundaries.
 
-Map Polar products/benefits to these DeepRef entitlements.
+Dodo's current ingestion guide documents deduplication by `event_id` and a narrow timestamp window: older than one hour or more than five minutes ahead is rejected; historical backfill is unsupported. This limits automatic recovery after a long outage. Never retime old usage, generate a new identity to evade deduplication, or silently mark rejected facts delivered. Persist a distinguishable reconciliation-required outcome, expose operator diagnostics and alert before buffered facts approach the deadline. For ambiguous sends, use supported event lookup to establish acceptance and validate the immutable payload before resending or resolving.
 
-Store effective local entitlement state.
+Enable metered charging only after documented tests establish deduplication scope/retention, result granularity, ambiguous-send lookup, billing-period attribution, accepted numeric ranges and supported correction behavior. Missing guarantees stay explicit. Late or corrected financial facts need an audited provider-supported adjustment process; until one is proven, they remain unresolved and commercial metering stays guarded. Operationally resolving an export must not alter scientific provenance or the local immutable billing ledger.
 
-Conceptual table:
+Commercial credits may be projected for display and entitlement policy. A live Dodo balance lookup never replaces atomic local reservation or becomes a prerequisite for each AI call.
 
-```sql
-workspace_entitlements (
-    workspace_id,
-    key,
-    value jsonb,
-    source,
-    effective_from,
-    effective_until,
-    updated_at
-)
-```
+## Privacy and retention
 
-Unit tests must be able to construct entitlements without Polar.
+Apply `BUSINESS_DECISIONS.md`: DeepRef controls its account/workspace/entitlement data; Merchant-of-Record responsibilities do not remove those obligations. Restrict billing routes and exports to authorized principals. Include the local projection in the account/owned-workspace data export, excluding raw webhook payloads, credentials and unrelated tenants.
 
-## Checkout
+On account/workspace deletion, detach active personal identifiers and preserve only the restricted financial fields required for the five-year retention period. Define expiry/purge and provider-side closure/deletion responsibilities. Keep dedup identities while purging integration payloads after 30 days under the existing inbox policy. Record provider roles, processing purposes, international transfer basis and the actual privacy/support contact before launch. Never claim provider deletion occurred without delivery evidence.
 
-Expose an authorized DeepRef endpoint that:
+## Verification and acceptance
 
-1. authenticates the user;
-2. checks workspace billing permission;
-3. derives the Polar customer from `WorkspaceId`;
-4. creates hosted checkout;
-5. returns only a safe redirect URL.
+Recorded provider contracts and a fake port cover every PR without credentials. Protected test-mode contract checks run separately with explicit credentials and distinguish unconfigured/skipped from passed. Cover:
 
-Do not accept arbitrary Polar customer IDs from the browser.
+- concurrent customer provisioning, ambiguous timeout and reconciliation;
+- workspace/business/mode isolation and minimal outbound customer data;
+- checkout/portal permissions, safe redirects, nullable hosted responses and secret-safe errors;
+- raw-body signature validation, rotation, wrong business/mode, malformed, duplicate and delayed webhooks;
+- transactional inbox acknowledgement, crash/replay, out-of-order events and stale reconciliation races;
+- all subscription states, closed entitlement mapping and local reads during provider outage;
+- billing export/deletion, financial retention and unknown-not-free inactivity classification;
+- usage identity replay, duplicate/ambiguous acceptance, numeric metadata, one-hour expiry, period boundaries and correction refusal;
+- audit metadata validity, tenant coverage matrix and no provider/PII leakage.
 
-Validate success/cancel return targets.
-
-## Customer portal
-
-Same authorization rule as checkout.
-
-The caller chooses a DeepRef workspace. Server-side state determines the Polar customer.
-
-## Polar webhooks
-
-Use the PostgreSQL integration inbox from 04a in `04_NATS_OUTBOX_FOUNDATION.md`. Webhook receipt and processing must not depend on NATS.
-
-Flow:
-
-```text
-raw webhook
- -> verify current Polar signature format
- -> insert idempotently
- -> acknowledge
- -> durable processor
- -> update billing/entitlement projections
-```
-
-Subscribe only to event families DeepRef consumes.
-
-Do not assume webhook ordering.
-
-Reconcile state from provider objects/customer state when ordering ambiguity requires it.
-
-## Privacy and data responsibilities
-
-Apply Brazil's LGPD to DeepRef's billing data. Polar handles Merchant-of-Record functions such as checkout, invoices and tax; DeepRef remains responsible for Workspace identity, local billing projections, entitlement/usage data, export and deletion. Record and confirm the parties' LGPD legal roles, processing purposes and notices; Merchant-of-Record duties do not remove DeepRef's responsibilities for its own processing.
-
-Minimize personal data sent to Polar:
-
-```text
-WorkspaceId as external customer identity where supported
-billing email only when a Polar flow requires it
-no workspace member roster or scientific data
-```
-
-Treat webhook payloads and billing email as personal data. Keep provider data inside the integration boundary, restrict access to billing projections, and do not copy payloads or personal data into logs unnecessarily.
-
-Include the local billing projection in workspace data export. On workspace deletion, remove or anonymize workspace-linked billing data unless legal retention requires a record to remain. Keep any legally required billing record restricted and detached from the deleted workspace's active product data; delete it when its retention period ends. Define how DeepRef requests provider-side closure or deletion where applicable.
-
-Resolve and record these policy decisions before substantial billing work:
-
-```text
-LGPD roles, processing purposes and notice
-Polar customer fields and when billing email is required
-billing projection and integration-inbox retention periods
-workspace export fields and deletion/anonymization behavior
-legal-retention fields, access, duration and expiry/deletion process
-provider-side closure/deletion responsibility
-```
-
-## Polar Customer State
-
-Use provider customer-state APIs for:
-
-```text
-reconciliation
-operator diagnostics
-repair jobs
-```
-
-Do not use them on every application request.
-
-## Credits
-
-Polar may own customer-facing commercial credit balances.
-
-Do not yet use Polar's live credit lookup as the hard concurrency boundary.
-
-The AI hard-limit implementation belongs to handoff 09.
-
-Use the immutable per-usage identity defined in `09_AI_USAGE_RESERVATION_METERING.md` for each usage fact exported to Polar. Verify Polar ingestion, correction and billing-period semantics there before enabling retries or aggregation.
-
-## Benefits
-
-Map Polar benefit identifiers to closed DeepRef `Feature` values.
-
-Do not leak benefit IDs into feature code.
-
-## Merchant of Record boundary
-
-Do not build duplicate:
-
-```text
-VAT/GST/sales-tax calculation
-invoice engine
-payment-card storage
-charge dispute system
-```
-
-DeepRef stores only commercial references needed by product behavior and audit.
-
-## Failure model
-
-Define behavior for:
-
-```text
-Polar unavailable during checkout
-webhook delayed
-duplicate webhook
-out-of-order webhook
-subscription event received after newer state
-portal creation failure
-```
-
-Already-known local entitlements must remain usable through transient Polar outages according to product policy.
-
-## Tests
-
-Use Polar Sandbox.
-
-Cover:
-
-- provider port behavior with a fake implementation; entitlements constructible without Polar;
-- customer provisioning idempotency;
-- outbound customer data minimization, including billing email only when required;
-- workspace-to-customer isolation;
-- checkout authorization;
-- portal authorization;
-- duplicate webhook through the 04a PostgreSQL integration inbox;
-- bad signature;
-- subscription activation/cancellation projection;
-- benefit to entitlement mapping;
-- workspace export includes billing projections;
-- workspace deletion applies recorded retention policy and preserves legally retained billing records;
-- Polar outage while existing entitlements are read;
-- reconciliation repairing a missed webhook.
-
-## Completion criterion
-
-The commercial readiness gate, including payout eligibility and LGPD policy decisions, is resolved before substantial billing work. A workspace can subscribe and manage billing through Polar Sandbox; the Polar adapter stays behind a DeepRef-owned port, webhooks use the 04a PostgreSQL integration inbox, personal data sent to Polar is minimized, and workspace export/deletion follows the recorded retention policy. DeepRef derives local runtime entitlements from synchronized commercial state, and no normal authorization or feature check requires a Polar network call.
+The code slice is complete when a workspace can subscribe/manage billing through the test-mode contracts, synchronize local entitlements durably, reconcile drift and export usage safely through the chosen adapter without adding provider calls to normal authorization/AI execution. Full handoff acceptance additionally requires an actual configured Dodo test-account subscription/portal cycle and protected contract evidence. Live payment/payout approval is an independent launch prerequisite. Do not mark unrun external checks as green.

@@ -26,6 +26,7 @@ use uuid::Uuid;
 /// one stage, so a wrong (stage, reason) pair cannot be expressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RejectionStage {
+    ApiKey,
     /// The provider callback was refused.
     Callback,
     /// A request presented a session the server would not accept.
@@ -39,6 +40,7 @@ pub enum RejectionStage {
 impl RejectionStage {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ApiKey => "api_key",
             Self::Callback => "callback",
             Self::Session => "session",
             Self::Refresh => "refresh",
@@ -52,6 +54,8 @@ impl RejectionStage {
 /// 0141).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RejectionReason {
+    ApiKeyInvalidCredential,
+    ApiKeyRouteDenied,
     // Callback.
     CallbackInvalidState,
     CallbackAccessDenied,
@@ -80,6 +84,8 @@ pub enum RejectionReason {
 impl RejectionReason {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ApiKeyInvalidCredential => "invalid_credential",
+            Self::ApiKeyRouteDenied => "service_route_denied",
             Self::CallbackInvalidState => "invalid_state",
             Self::CallbackAccessDenied => "access_denied",
             Self::CallbackInvalidCode => "invalid_code",
@@ -104,6 +110,7 @@ impl RejectionReason {
 
     pub const fn stage(self) -> RejectionStage {
         match self {
+            Self::ApiKeyInvalidCredential | Self::ApiKeyRouteDenied => RejectionStage::ApiKey,
             Self::CallbackInvalidState
             | Self::CallbackAccessDenied
             | Self::CallbackInvalidCode
