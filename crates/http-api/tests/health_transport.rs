@@ -91,7 +91,7 @@ async fn transport_health_requires_actual_fresh_evidence_and_never_changes_readi
                 observed_at: observed - chrono::Duration::minutes(5),
             }),
             "stale_workers",
-            "degraded",
+            "stale",
         ),
         (
             Some(TransportReadiness {

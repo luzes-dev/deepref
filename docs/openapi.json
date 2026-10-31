@@ -16907,6 +16907,7 @@
         "enum": [
           "available",
           "degraded",
+          "stale",
           "unavailable"
         ]
       },
