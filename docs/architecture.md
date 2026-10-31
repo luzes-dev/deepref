@@ -75,7 +75,6 @@ in-process configuration disagreement fails startup. When enabled, the existing
 origin-bound credentials, signed hooks and token-before-rate-limit checks remain
 authoritative.
 
-
 The durable queue port carries the pure `deepref-domain::JobKind`, not an
 arbitrary string. Producers and exhaustive worker dispatch share the same closed
 set; SQL adapters preserve existing spellings, including `run_deduplication`.
@@ -149,47 +148,66 @@ access goes through `deepref_documents::DocumentStore`, which wraps the
 configures an S3-compatible bucket with an HTTPS endpoint. Domain and
 application code never see a provider type. Object keys are built by
 `ObjectKey` from stable identifiers only, never from a user-provided filename:
-`documents/{document_id}` for uploaded PDFs and
-`projects/{project_id}/workflow-runs/{run_id}/files/{file_id}` for workflow
-export files. Authorization is checked before a key is derived or read; the key
-layout is not an access boundary. The workspace prefix from the SaaS tenancy
-program is added with that gate.
+legacy-readable `documents/{uuid}` and
+`projects/{project_id}/workflow-runs/{run_id}/files/{object_id}` during rolling
+overlap. N reads both layouts. Explicit parser-drain activation atomically
+relaxes the legacy CHECK and records the `tenant-object-keys-v1` rollback floor;
+only then do factories use
+`workspaces/{workspace_id}/projects/{project_id}/documents/{object_id}` for uploaded
+PDFs and `workspaces/{workspace_id}/projects/{project_id}/workflow-runs/{run_id}/files/{object_id}`
+for workflow export files. Existing `documents/{uuid}` and
+`projects/{project_id}/workflow-runs/{run_id}/files/{file_id}` references remain
+readable. Account exports use `account-exports/{user_id}/{export_id}` and the
+privacy feature's user-only authorization. Authorization precedes object access;
+the key layout is not an access boundary.
 
 Inventory of binary and large-text columns in `crates/app/migrations/`:
 
-| Column | Holds | Status |
-| ------ | ----- | ------ |
-| `workflow_files.content bytea` (0028, up to 16 MiB) | Workflow export files (RIS, CSV, ...) | Moving to object storage, see below |
-| `document_blocks.text` (0006) | Parsed text of one PDF block, indexed by the generated `search_vector` for full-text search | Stays: it is searched in place and each value is a single block, not a file body |
-| `documents` rows (0006, 0013) | Metadata and an object key for the PDF; the PDF bytes are already in object storage | No change |
-| `document_references.raw`, `fetched_unresolved_reference_facts.raw_unstructured`, `unresolved_references.raw_unstructured` | One citation string each | Short text, stays |
-| `jsonb` payload and `raw` columns (`records.raw`, `reports.raw`, `works.raw`, dead-letter `payload`, `trigger_data`, review artifact `payload`) | Normalized or provider JSON | Relational data, out of scope |
-| `assistant_messages.content` (0023), `notifications.body` (0024, at most 500 characters) | Chat and notification text | Stays |
+| Column                                                                                                                                          | Holds                                                                                       | Status                                                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `workflow_files.content bytea` (0028, up to 16 MiB)                                                                                             | Workflow export files (RIS, CSV, ...)                                                       | Moving to object storage, see below                                              |
+| `document_blocks.text` (0006)                                                                                                                   | Parsed text of one PDF block, indexed by the generated `search_vector` for full-text search | Stays: it is searched in place and each value is a single block, not a file body |
+| `documents` rows (0006, 0013)                                                                                                                   | Metadata and an object key for the PDF; the PDF bytes are already in object storage         | No change                                                                        |
+| `document_references.raw`, `fetched_unresolved_reference_facts.raw_unstructured`, `unresolved_references.raw_unstructured`                      | One citation string each                                                                    | Short text, stays                                                                |
+| `jsonb` payload and `raw` columns (`records.raw`, `reports.raw`, `works.raw`, dead-letter `payload`, `trigger_data`, review artifact `payload`) | Normalized or provider JSON                                                                 | Relational data, out of scope                                                    |
+| `assistant_messages.content` (0023), `notifications.body` (0024, at most 500 characters)                                                        | Chat and notification text                                                                  | Stays                                                                            |
 
 `workflow_files.content` is the only column holding file bodies. It moves in
 stages. Migration `0084` adds nullable `storage_key`, `content_sha256` and
 `byte_size` (all null or all set) and keeps `content bytea NOT NULL`.
 
-- **Dual write.** `create_workflow_file` writes the object first, then inserts
-  the row with both `content` and the reference. If the insert fails the object
-  is removed; a crash between the two leaves only an unreferenced object, never
-  a row pointing at nothing.
-- **Read.** `get_workflow_file` prefers the object and checks its size and
-  SHA-256 against the row. A null key, a missing object, an unreadable object
-  or a mismatch is logged and served from `content`; the result reports which
-  case applied (`WorkflowFileSource`).
-- **Backfill.** The durable job kind `backfill_workflow_files` is scheduled
-  per project by the worker reconciler for rows without a key. It uploads
-  `content` under the row's deterministic key, reads the object back, compares
-  its SHA-256 with `content`, and only then sets the reference. It is idempotent
-  and resumable: rows are selected by their missing reference, so a run that
-  died resumes with what is left, and an object left by a dead run is
-  overwritten and verified again.
+- **Upload intent.** `object_lifecycle` commits pending intent before external
+  upload. The writer holds its registry lock through upload and metadata commit.
+  Failed or ambiguous commits leave durable cleanup intent, rather than eager
+  deletion that could remove a committed object.
+- **Compatibility.** Ordinary upgrades preserve `content bytea NOT NULL` and
+  dual writing. `get_workflow_file` prefers size/SHA-256-verified objects and
+  falls back to compatibility bytes while those exist. After the explicit
+  contract, unavailable objects fail closed and require recovery.
+- **Backfill.** The worker reconciler schedules `backfill_workflow_files` for
+  missing references. Each attempt reserves a fresh key in the active layout, uploads
+  and reads it back, verifies size/hash, then records the reference under a row
+  lock. Crashed attempts remain collectible and live references are never
+  overwritten by a racing retry.
+- **Cutover.** Explicit `deepref-server workflow-storage object-only` and later
+  `workflow-storage contract` operator actions require phase-specific fleet-drain
+  attestations and verify every referenced object under an exclusive table lock.
+  The first relaxes `NOT NULL` and changes writers; the second drops `content`
+  in a subsequent release. A database capability guard rejects old writers after
+  cutover. No ordinary migration drops compatibility bytes.
+- **Cleanup.** Metadata triggers record obsolete references transactionally on
+  replacement/deletion, including project/workspace cascades. Platform
+  `cleanup_objects` work checks live metadata and retained export/download
+  references, commits retirement before S3 deletion, then acknowledges deletion
+  separately. Retired keys reject late attachment across worker crashes. Storage
+  errors retry with per-key backoff. N-1 workers cannot decode or starve on the
+  new kind because the database parks it in `capability_wait`.
 
-Dropping `NOT NULL` on `content`, switching writers to object-only, and dropping
-the column follow in later releases once old binaries have drained. Cleanup of
-objects for deleted projects, replaced files and failed writes through durable
-jobs is not implemented yet.
+[Object storage lifecycle and cutover](object-storage-lifecycle.md) specifies the
+upload/retention seam, guarded legacy orphan reconciliation, maintenance commands,
+S3 contract fixture and remaining deployment conditions. Operational cleanup grace
+starts after policy-approved metadata/reference release; it does not replace the
+30-day business retention window.
 
 Assistant SSE (`crates/http-api/src/routes/assistant/run_events.rs`) replays
 persisted run events from PostgreSQL by `after_seq`, so a stream can reconnect
@@ -308,20 +326,21 @@ Every job kind maps to exactly one workload class, derived from the kind at
 enqueue (`JobKind::workload_class`, stored in `jobs.workload_class`) and never
 chosen by the caller. This table is the normative mapping:
 
-| Job kind               | Workload class | Bound / isolation rationale                              |
-| ---------------------- | -------------- | -------------------------------------------------------- |
-| `assistant_agent_run`  | `ai`           | model calls, bounded by provider and usage limits          |
-| `ai_usage_reconcile`  | `ai`           | workspace-scoped recovery of fenced usage reservations    |
-| `ai_usage_export_replay` | `ai`        | bounded replay emitting usage fact export events          |
-| `retrieve_document`    | `documents`    | document pipeline: full-text retrieval feeding parsing     |
-| `parse_document`       | `documents`    | CPU/memory-bound PDF parsing                              |
-| `run_deduplication`    | `documents`    | CPU/memory-bound deduplication of imported record corpora |
-| `durable_run_step`     | `workflow`     | durable automation, workflow and review step dispatch      |
-| `backfill_workflow_files` | `workflow`     | workflow export file copy to object storage                |
-| `work_fetch_requested` | `integration`  | external metadata provider traffic, rate-limit bounded     |
-| `pmid_import`          | `integration`  | external PubMed provider traffic, rate-limit bounded       |
-| `recompute_metrics`    | `projection`   | derived read-model recomputes                             |
-| `recompute_prisma`     | `projection`   | derived read-model recomputes (compatibility)             |
+| Job kind                  | Workload class | Bound / isolation rationale                                   |
+| ------------------------- | -------------- | ------------------------------------------------------------- |
+| `assistant_agent_run`     | `ai`           | model calls, bounded by provider and usage limits             |
+| `ai_usage_reconcile`      | `ai`           | workspace-scoped recovery of fenced usage reservations        |
+| `ai_usage_export_replay`  | `ai`           | bounded replay emitting usage fact export events              |
+| `retrieve_document`       | `documents`    | document pipeline: full-text retrieval feeding parsing        |
+| `parse_document`          | `documents`    | CPU/memory-bound PDF parsing                                  |
+| `run_deduplication`       | `documents`    | CPU/memory-bound deduplication of imported record corpora     |
+| `durable_run_step`        | `workflow`     | durable automation, workflow and review step dispatch         |
+| `cleanup_objects`         | `documents`    | Platform-scoped physical blob cleanup with durable retirement |
+| `backfill_workflow_files` | `workflow`     | workflow export file copy to object storage                   |
+| `work_fetch_requested`    | `integration`  | external metadata provider traffic, rate-limit bounded        |
+| `pmid_import`             | `integration`  | external PubMed provider traffic, rate-limit bounded          |
+| `recompute_metrics`       | `projection`   | derived read-model recomputes                                 |
+| `recompute_prisma`        | `projection`   | derived read-model recomputes (compatibility)                 |
 
 The class set contains only classes real kinds need: there is no `review` class
 today because review work rides `durable_run_step` (handler kind is a dispatch

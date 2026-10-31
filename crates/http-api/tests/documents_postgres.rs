@@ -114,9 +114,54 @@ async fn document_http_upload_is_bounded_scoped_deduped_and_opaque() {
         .await
         .unwrap();
     let object_key: String = row.get("object_key");
-    assert!(object_key.starts_with("documents/"));
+    assert!(
+        object_key.starts_with("documents/"),
+        "default overlap preserves old parser shape"
+    );
     assert!(!object_key.contains("study"));
     assert_eq!(row.get::<String, _>("content_hash").len(), 64);
+
+    deepref_app::object_lifecycle::activate_tenant_object_keys(
+        &pool,
+        deepref_app::object_lifecycle::TENANT_KEY_DRAIN_ATTESTATION,
+    )
+    .await
+    .unwrap();
+    let (tenant_type, tenant_body) = multipart(b"%PDF-1.4\ntenant second document", "tenant.pdf");
+    let tenant_upload = router(state.clone(), &api_config())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/projects/{project_id}/reports/{report_id}/documents"
+                ))
+                .header("content-type", tenant_type)
+                .body(tenant_body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tenant_upload.status(), StatusCode::CREATED);
+    let tenant_value: serde_json::Value = serde_json::from_slice(
+        &to_bytes(tenant_upload.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let tenant_id: Uuid = tenant_value["id"].as_str().unwrap().parse().unwrap();
+    let tenant_key: String = sqlx::query_scalar("SELECT object_key FROM documents WHERE id=$1")
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let workspace: Uuid = sqlx::query_scalar("SELECT workspace_id FROM projects WHERE id=$1")
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(tenant_key.starts_with(&format!(
+        "workspaces/{workspace}/projects/{project_id}/documents/"
+    )));
 
     let (duplicate_type, duplicate_body) = multipart(pdf, "duplicate.pdf");
     let duplicate = router(state.clone(), &api_config())
@@ -143,6 +188,28 @@ async fn document_http_upload_is_bounded_scoped_deduped_and_opaque() {
     .await
     .unwrap();
     assert_eq!(attached_count, 1);
+    sqlx::query("UPDATE object_lifecycle SET cleanup_after=now()-interval '1 second' WHERE deleted_at IS NULL")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        deepref_app::object_lifecycle::cleanup_objects(
+            &pool,
+            state.document_store.as_ref().unwrap(),
+            10
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    // Duplicate upload cleanup must preserve the already committed document.
+    assert!(
+        state
+            .document_store
+            .as_ref()
+            .unwrap()
+            .exists(&object_key)
+            .await
+            .unwrap()
+    );
 
     let content = router(state.clone(), &api_config())
         .oneshot(

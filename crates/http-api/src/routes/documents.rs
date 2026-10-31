@@ -621,17 +621,11 @@ async fn extract_multipart_pdf(
             Ok(Some(field)) => field,
             Ok(None) => break,
             Err(error) => {
-                if let Some(existing) = stored.take() {
-                    let _ = store.delete(&existing.opaque_id).await;
-                }
                 return Err(ApiError::BadRequest(error.to_string()));
             }
         };
         if field.name() == Some("file") {
             if stored.is_some() {
-                if let Some(existing) = stored.take() {
-                    let _ = store.delete(&existing.opaque_id).await;
-                }
                 return Err(ApiError::BadRequest("only one file is accepted".to_owned()));
             }
             if field.content_type() != Some("application/pdf") {
@@ -643,9 +637,6 @@ async fn extract_multipart_pdf(
             match stream_pdf_to_store(field, store).await {
                 Ok(obj) => stored = Some(obj),
                 Err(err) => {
-                    if let Some(existing) = stored.take() {
-                        let _ = store.delete(&existing.opaque_id).await;
-                    }
                     return Err(err);
                 }
             }
@@ -657,8 +648,7 @@ async fn extract_multipart_pdf(
 }
 
 async fn persist_uploaded_document(
-    pool: &sqlx::PgPool,
-    store: &deepref_documents::DocumentStore,
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
     project_id: Uuid,
     report_id: Uuid,
     stored: &deepref_documents::StoredObject,
@@ -667,14 +657,7 @@ async fn persist_uploaded_document(
 ) -> Result<DocumentDto, ApiError> {
     let byte_size = i64::try_from(stored.byte_size)
         .map_err(|_| ApiError::BadRequest("document size exceeds supported limit".to_owned()))?;
-    let mut tx = match pool.begin().await {
-        Ok(transaction) => transaction,
-        Err(error) => {
-            let _ = store.delete(&stored.opaque_id).await;
-            return Err(ApiError::Database(error));
-        }
-    };
-    let result = deepref_app::create_document(
+    let document = deepref_app::create_document(
         &mut tx,
         deepref_app::NewDocument {
             project_id,
@@ -692,39 +675,22 @@ async fn persist_uploaded_document(
             actor_id: actor.id(),
         },
     )
-    .await;
-    let document = match result {
-        Ok(document) => {
-            match deepref_app::enqueue_parse(
-                &mut tx,
-                ProjectId::new(project_id),
-                document.id,
-                &stored.sha256,
-            )
-            .await
-            {
-                Ok(_) => match tx.commit().await {
-                    Ok(()) => document,
-                    Err(error) => {
-                        let _ = store.delete(&stored.opaque_id).await;
-                        return Err(ApiError::Database(error));
-                    }
-                },
-                Err(error) => {
-                    let _ = tx.rollback().await;
-                    let _ = store.delete(&stored.opaque_id).await;
-                    return Err(map_database_document_error(error));
-                }
-            }
-        }
-        Err(error) => {
-            let _ = store.delete(&stored.opaque_id).await;
-            let _ = tx.rollback().await;
-            return Err(map_database_document_error(error));
-        }
-    };
+    .await
+    .map_err(map_database_document_error)?;
+    deepref_app::enqueue_parse(
+        &mut tx,
+        ProjectId::new(project_id),
+        document.id,
+        &stored.sha256,
+    )
+    .await
+    .map_err(map_database_document_error)?;
+    // On ambiguous commit the pending registry intent and reference checks
+    // decide cleanup; never delete an object that may now have a live row.
+    tx.commit().await?;
     Ok(document_dto(document))
 }
+
 #[utoipa::path(
     post,
     path = "/projects/{project_id}/reports/{report_id}/documents",
@@ -747,11 +713,23 @@ pub(crate) async fn upload_document(
         .document_store
         .as_ref()
         .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
-    let (stored, original_filename) = extract_multipart_pdf(multipart, store).await?;
+    let key = deepref_app::object_lifecycle::project_document_key(
+        &state.pool,
+        ProjectId::new(project_id),
+    )
+    .await?;
+    let mut upload_tx = deepref_app::object_lifecycle::begin_object_upload(
+        &state.pool,
+        deepref_app::object_lifecycle::ObjectOwner::Project(ProjectId::new(project_id)),
+        &key,
+    )
+    .await?;
+    let upload_store = store.for_upload(key);
+    let (stored, original_filename) = extract_multipart_pdf(multipart, &upload_store).await?;
     // Re-uploading identical content for a document whose processing failed
     // retries that document instead of colliding with the unique content hash.
     if let Some(existing) = deepref_app::find_failed_document_by_hash(
-        &state.pool,
+        &mut *upload_tx,
         project_id,
         report_id,
         &stored.sha256,
@@ -759,14 +737,13 @@ pub(crate) async fn upload_document(
     .await
     .map_err(map_database_document_error)?
     {
-        let _ = store.delete(&stored.opaque_id).await;
+        upload_tx.rollback().await?;
         let document =
             requeue_document(&state.pool, project_id, report_id, existing, &actor).await?;
         return Ok((StatusCode::CREATED, Json(document)));
     }
     let document = persist_uploaded_document(
-        &state.pool,
-        store,
+        upload_tx,
         project_id,
         report_id,
         &stored,
@@ -1086,15 +1063,14 @@ pub(crate) async fn acknowledge_document_identity(
     operation_id = "deleteReportDocument",
     tag = "documents",
     params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path), ("document_id" = Uuid, Path)),
-    responses((status = 204, description = "The document and its stored file were removed"), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 500, body = ErrorResponse))
+    responses((status = 204, description = "The document was removed and file cleanup scheduled"), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 500, body = ErrorResponse))
 )]
 pub(crate) async fn delete_report_document(
     State(state): State<AppState>,
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let removed =
-        deepref_app::delete_document(&state.pool, project_id, report_id, document_id)
+    deepref_app::delete_document(&state.pool, project_id, report_id, document_id)
             .await
             .map_err(|error| {
                 // AI evidence and extracted values refer to the PDF's blocks and are kept on purpose.
@@ -1110,11 +1086,6 @@ pub(crate) async fn delete_report_document(
                 map_database_document_error(error)
             })?
             .ok_or_else(|| ApiError::NotFound("document not found".to_owned()))?;
-    if let (Some(object_key), Some(store)) = (removed, state.document_store.as_ref())
-        && let Err(error) = store.delete(&object_key).await
-    {
-        tracing::warn!(%document_id, %error, "removed document row, but its stored file could not be deleted");
-    }
     Ok(StatusCode::NO_CONTENT)
 }
 
