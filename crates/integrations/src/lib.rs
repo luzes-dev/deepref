@@ -51,3 +51,4 @@ pub use unpaywall::{UnpaywallClient, UnpaywallError, pdf_url_from_response};
 pub use workos::WorkOsIdentityProvider;
 
 pub mod dodo;
+pub mod jetstream;

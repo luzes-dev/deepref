@@ -12,6 +12,7 @@
 ## Operational Runbooks
 
 - [Assistant durability runbook](assistant-durability-runbook.md)
+- [JetStream delivery runbook](jetstream-transport-runbook.md)
 - [Database restore runbook](database-restore-runbook.md)
 - [Pre-production database baseline reset](database-baseline-reset.md)
 - [Object store reconciliation runbook](object-store-reconciliation-runbook.md)
@@ -30,3 +31,5 @@
 - [ADR 0006: Deferred mid-turn checkpoint/resume](adr/0006-deferred-mid-turn-checkpoint-resume.md)
 - [ADR 0007: Metadata provider routing](adr/0007-metadata-provider-routing.md)
 - [ADR 0008: Production deployment ownership and target](adr/0008-production-deployment-ownership-and-target.md)
+
+- [ADR 0009: JetStream work delivery](adr/0009-jetstream-work-delivery.md)
