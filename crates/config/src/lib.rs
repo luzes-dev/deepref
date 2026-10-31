@@ -11,7 +11,6 @@ mod listen;
 mod nats;
 mod origin;
 mod pdf;
-mod polar;
 mod smtp;
 mod source;
 mod telemetry;
@@ -41,7 +40,6 @@ pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, Liste
 pub use nats::{NatsConfig, WorkTransportConfig};
 pub use origin::{DEFAULT_DEVELOPMENT_PUBLIC_ORIGIN, PUBLIC_ORIGIN, PublicOrigin};
 pub use pdf::PdfConfig;
-pub use polar::{PolarConfig, PolarServer};
 pub use secrecy::{ExposeSecret, SecretString};
 pub use smtp::{SmtpConfig, SmtpTls};
 pub use source::ConfigSource;
@@ -62,7 +60,6 @@ pub struct RuntimeConfig {
     pub public_origin: PublicOrigin,
     pub auth_enabled: bool,
     pub workos: Option<WorkOsConfig>,
-    pub polar: Option<PolarConfig>,
     pub dodo: Option<DodoConfig>,
     pub database: DatabaseConfig,
     pub telemetry: TelemetryConfig,
@@ -103,7 +100,6 @@ impl RuntimeConfig {
         Ok(Self {
             public_origin: PublicOrigin::from_source(environment, get)?,
             workos: WorkOsConfig::from_source(environment, auth_enabled, get)?,
-            polar: PolarConfig::from_source(environment, get)?,
             dodo: DodoConfig::from_source(get, PublicOrigin::from_source(environment, get)?)?,
             auth_enabled,
             database: DatabaseConfig::from_source(environment, get)?,
