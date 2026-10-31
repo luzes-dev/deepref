@@ -2,6 +2,12 @@
 
 ## Scope and evidence
 
+The [local operations artifact tool](operations-observability-runbook.md) validates
+the versioned proposed rule catalog and renders a dashboard with capture expiry,
+unknown states and owner/runbook links. Its separate loopback delivery test checks
+local acknowledgement plumbing. Backend ingestion, approved targets and actual
+production notification delivery require their own evidence.
+
 The application exports OpenTelemetry metrics alongside traces when `OTEL_EXPORTER_OTLP_ENDPOINT` is configured. There is no new public metrics route. Without a collector endpoint, instruments are no-ops and the worker does not run the additional database sampler. The collector/backend is still an owner decision; this document does not claim a deployed pipeline, accepted SLOs or tested notifications.
 
 Traces and metrics use the same service name, build version and random process instance resource identity. The instance identity distinguishes independently sampled replicas. Export failures do not block scientific or financial work. Exporter construction errors fail startup so an invalid configured endpoint cannot look enabled. Configure transport security and collector authentication for the eventual deployment; the application endpoint is a collector address, never a tenant-controlled URL.
@@ -40,26 +46,26 @@ Usage settlement counts nonterminal reservations opened at least five minutes ag
 
 API boot installs the rate-limit observer. API and worker AI admission install the concurrency-mirror observer. These use the configured OTLP provider. The NATS worker installs its transport observer after configuration validation, records verified startup readiness and records subsequent management-check observations. Without OTLP export these instruments remain no-ops; they never change grants, retries or work settlement.
 
-| Instrument | Kind/unit | Attributes | Meaning |
-| --- | --- | --- | --- |
-| `deepref.rate_limit.decisions` | counter | `purpose`, `backend`, `outcome` | Allowed, limited or unavailable observations; Valkey allowance still requires PostgreSQL |
-| `deepref.rate_limit.duration` | histogram/seconds | same | Observed backend operation duration |
-| `deepref.rate_limit.fallbacks` | counter | `purpose` | Canonical PostgreSQL path used after optional accelerator error |
-| `deepref.concurrency_mirror.operations` | counter | `scope`, `operation`, `outcome` | Optional mirror check, hold, refresh and release observations |
-| `deepref.concurrency_mirror.duration` | histogram/seconds | same | Optional mirror operation duration |
-| `deepref.ai.concurrency.live` | gauge/slots | `scope` | Global non-expired PostgreSQL workspace or route slot count |
-| `deepref.project_count_cache.operations` | counter | `operation`, `outcome` | Completed, unavailable or cancelled get/put operations |
-| `deepref.project_count_cache.duration` | histogram/seconds | same | Time through completion or cancellation |
-| `deepref.project_count_cache.entries` | counter/entries | `outcome` | Hit or miss entries returned by completed reads |
-| `deepref.transport.ready` | gauge/boolean | none | Most recent JetStream management-readiness observation |
-| `deepref.transport.readiness.last_observed` | gauge/Unix seconds | none | Timestamp of that readiness observation |
-| `deepref.transport.pending` | gauge/messages | `pool` | Last observed broker consumer pending count |
-| `deepref.transport.in_flight` | gauge/messages | `pool` | Last observed broker consumer ACK-pending count |
-| `deepref.transport.redeliveries` | gauge/messages | `pool` | Current broker redelivery observation, not a cumulative local counter |
-| `deepref.transport.visibility.last_observed` | gauge/Unix seconds | `pool` | Timestamp of the corresponding broker visibility observation |
-| `deepref.transport.claims` | counter | `pool`, `outcome` | Claimed, noop, retry or failed targeted database claim |
-| `deepref.transport.claim.duration` | histogram/seconds | same | Targeted claim operation duration |
-| `deepref.transport.delivery.age` | histogram/seconds | none | Envelope age at intake, including database/outbox residence |
+| Instrument                                   | Kind/unit          | Attributes                      | Meaning                                                                                  |
+| -------------------------------------------- | ------------------ | ------------------------------- | ---------------------------------------------------------------------------------------- |
+| `deepref.rate_limit.decisions`               | counter            | `purpose`, `backend`, `outcome` | Allowed, limited or unavailable observations; Valkey allowance still requires PostgreSQL |
+| `deepref.rate_limit.duration`                | histogram/seconds  | same                            | Observed backend operation duration                                                      |
+| `deepref.rate_limit.fallbacks`               | counter            | `purpose`                       | Canonical PostgreSQL path used after optional accelerator error                          |
+| `deepref.concurrency_mirror.operations`      | counter            | `scope`, `operation`, `outcome` | Optional mirror check, hold, refresh and release observations                            |
+| `deepref.concurrency_mirror.duration`        | histogram/seconds  | same                            | Optional mirror operation duration                                                       |
+| `deepref.ai.concurrency.live`                | gauge/slots        | `scope`                         | Global non-expired PostgreSQL workspace or route slot count                              |
+| `deepref.project_count_cache.operations`     | counter            | `operation`, `outcome`          | Completed, unavailable or cancelled get/put operations                                   |
+| `deepref.project_count_cache.duration`       | histogram/seconds  | same                            | Time through completion or cancellation                                                  |
+| `deepref.project_count_cache.entries`        | counter/entries    | `outcome`                       | Hit or miss entries returned by completed reads                                          |
+| `deepref.transport.ready`                    | gauge/boolean      | none                            | Most recent JetStream management-readiness observation                                   |
+| `deepref.transport.readiness.last_observed`  | gauge/Unix seconds | none                            | Timestamp of that readiness observation                                                  |
+| `deepref.transport.pending`                  | gauge/messages     | `pool`                          | Last observed broker consumer pending count                                              |
+| `deepref.transport.in_flight`                | gauge/messages     | `pool`                          | Last observed broker consumer ACK-pending count                                          |
+| `deepref.transport.redeliveries`             | gauge/messages     | `pool`                          | Current broker redelivery observation, not a cumulative local counter                    |
+| `deepref.transport.visibility.last_observed` | gauge/Unix seconds | `pool`                          | Timestamp of the corresponding broker visibility observation                             |
+| `deepref.transport.claims`                   | counter            | `pool`, `outcome`               | Claimed, noop, retry or failed targeted database claim                                   |
+| `deepref.transport.claim.duration`           | histogram/seconds  | same                            | Targeted claim operation duration                                                        |
+| `deepref.transport.delivery.age`             | histogram/seconds  | none                            | Envelope age at intake, including database/outbox residence                              |
 
 All dimensions come from closed application/domain enums. Cache cancellation counts a dropped operation; it does not claim the subsequent primary read succeeded. Cache entry ratios cover completed reads only. Mirror counts are observations, never financial authority. Workspace and route PostgreSQL gauges describe separate ceilings over the same executions; do not sum them into unique executions or active provider calls.
 

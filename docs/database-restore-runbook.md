@@ -11,6 +11,71 @@ RTO <= 60 minutes and quarterly drills still require owner confirmation and
 measurement. Never report achieved RPO/RTO from this document or a successful
 local reconciliation alone.
 
+## Local PostgreSQL WAL mechanics harness
+
+### Symptom
+
+A restore implementation needs evidence of a real base backup and named WAL
+recovery target before composing the customer-data restore workflow.
+
+### Query
+
+The separately scoped `scripts/operations/pitr_local.py` harness has focused
+local marker-based PITR verification. Independent source review and the full
+customer restore workflow remain pending. It accepts no database URL, existing
+container or customer backup. It uses only a cached pinned PostgreSQL 17 image,
+a new internal-only Docker network and exact task-owned fixtures.
+
+Before a routed run, confirm at least 4 GiB free disk and 6 GiB available RAM.
+The harness takes the normal global fixture flock nonblocking itself; never
+wrap it in an outer flock or run it alongside another service/build batch.
+Source and one recovery instance each have 512 MiB data tmpfs and 2 GiB memory
+limits, with a separate 1 GiB tmpfs volume for backup/WAL. It preserves
+`fsync`, `full_page_writes` and `synchronous_commit` on and `max_connections=300`.
+No application test parallelism or timeout is changed.
+
+### Action
+
+Only after an explicit coordinated fixture slot, invoke from the repository:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/operations/pitr_local.py --parent-routed
+```
+
+The flag prevents accidental invocation; it is not authorization evidence. The
+harness creates a marker-only source cluster, takes a real `pg_basebackup` with
+a SHA-256 manifest, runs `pg_verifybackup`, and commits a later marker plus a
+unique named restore point. A third marker follows that point. The required
+post-backup WAL segment must actually exist in the archive and must not already
+be in the backup's WAL directory.
+
+It stops source PostgreSQL writes while keeping the private archive mount
+alive. Separate recovery copies must reject a missing required WAL segment and
+a never-created restore target. The positive copy must reach the recorded named
+target, preserve the backed-up system identity, contain markers A/B and exclude
+marker C. The archive catalog must stay unchanged. API and worker processes
+never start. The tool captures exact IDs/labels/settings/df/catalogs and removes
+only its own containers, archive volume and network before releasing the lock.
+A cleanup failure affects the exit; retain the resource manifest and resolve
+remaining owned resources before another fixture batch.
+
+### Evidence
+
+Require actual exit 0, an empty cleanup-error list and
+`local_drill_complete=true` in the recorded cache run's `result.json`.
+`pitr_mechanics_verified` reports only these local marker assertions. Setup,
+capacity or restore failures remain failures, never a semantic negative proof.
+The two intentional negatives count only when the backend actually refuses the
+configured target. Local phase durations are not signed production RPO/RTO.
+
+Even a passing marker drill always reports `full_restore_verified=false`,
+`customer_restore_verified=false` and `production_rpo_rto_verified=false`.
+Representative customer metadata, aligned historical object versions,
+read-only reconciliation, independent fulfilled-deletion replay, customer-work
+containment, actual blocked production egress, controlled candidate fixtures,
+and old-release compatibility remain separate requirements below. A private
+local Docker network alone is not deployed egress or backup-retention proof.
+
 ## Isolated restore comparison
 
 ### Symptom
