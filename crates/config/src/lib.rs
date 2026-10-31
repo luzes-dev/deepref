@@ -33,7 +33,7 @@ pub use deletion_digest::DeletionDigestConfig;
 pub use document::{
     DEFAULT_MAX_DOCUMENT_BYTES, DocumentConfig, DocumentStorageBackend, MAX_DOCUMENT_BYTES,
 };
-pub use dodo::{DodoConfig, DodoMode, DodoOffering};
+pub use dodo::{DodoConfig, DodoMeterConfig, DodoMode, DodoOffering};
 pub use environment::{APP_ENV, Environment, load_development_dotenv_files};
 pub use error::ConfigError;
 pub use integrations::{IntegrationsConfig, OpenAlexCorpus};
