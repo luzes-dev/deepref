@@ -33,7 +33,7 @@
     "docker:build": "docker buildx bake api worker web"
   },
   "devDependencies": {
-    "fallow": "3.35.0",
+    "fallow": "3.37.0",
     "jscpd": "5.4.2"
   }
 }
