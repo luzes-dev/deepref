@@ -3,6 +3,7 @@ pub mod authz;
 pub mod config;
 pub mod error;
 mod host_guard;
+mod metrics;
 mod origin_guard;
 pub mod routes;
 pub mod state;

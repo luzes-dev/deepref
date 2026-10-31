@@ -1,12 +1,13 @@
 # Handoff 05: separate work transport from durable execution, then migrate to JetStream
 
+> Owner decision (2026-10-23): implement the full target now. The adoption/product gates are superseded by `00_PROGRAM.md`; correctness, compatibility and operational acceptance requirements remain. Dodo Payments is the selected billing provider.
 ## Goal
 
 Two phases.
 
 **05a** (launch-required) runs on PostgreSQL: split `DurableExecutionStore` / `WorkTransport`, run the first `WorkTransport` implementation as the existing PostgreSQL claim loop, add workload pools, bounded batch claiming and typed job scope.
 
-**05b** (trigger-gated by `T-NATS` in `00_PROGRAM.md`): stop using PostgreSQL polling as the primary transport/wakeup mechanism for scalable durable work by adding the JetStream `WorkTransport` adapter, while preserving the existing PostgreSQL lifecycle, leases, attempts and fencing.
+**05b** (required by the 2026-10-23 owner decision in `00_PROGRAM.md`): stop using PostgreSQL polling as the primary transport/wakeup mechanism for scalable durable work by adding the JetStream `WorkTransport` adapter, while preserving the existing PostgreSQL lifecycle, leases, attempts and fencing.
 
 Read `00_PROGRAM.md`. The launch sequence places 04a before 05a; 05b needs 04a's outbox and 04b's NATS foundation. Due-time scheduling belongs to 05: 05a's PostgreSQL claim loop picks up work when persisted `available_at` is due, and in 05b a 05-owned due-time publisher writes one wakeup record through the 04a outbox when due.
 
@@ -22,7 +23,7 @@ Read `00_PROGRAM.md`. The launch sequence places 04a before 05a; 05b needs 04a's
      typed job scope: project | workspace | platform
      state-transition matrix for delivery versus authoritative state
 
-05b  JetStream WorkTransport adapter and cutover        (trigger-gated by T-NATS)
+05b  JetStream WorkTransport adapter and cutover        (required full-target work)
      outbox-driven publication of work identifiers
      delivery-to-database claim/fence flow
      retry/redelivery mapping
@@ -348,7 +349,7 @@ Do not implement:
 
 - Valkey;
 - CQRS projections;
-- WorkOS/Polar business integration;
+- WorkOS/Dodo Payments business integration;
 - Temporal;
 - event sourcing;
 - separate worker services/codebases.

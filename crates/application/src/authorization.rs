@@ -14,7 +14,7 @@
 use std::{future::Future, pin::Pin};
 
 use deepref_domain::{
-    Principal, UserId, WorkspaceId,
+    Principal, ServicePrincipal, UserId, WorkspaceId,
     authorization::{Grants, Permission, Resource},
 };
 use thiserror::Error;
@@ -54,6 +54,25 @@ impl ResourceAccess {
     }
 }
 
+/// Live credential facts, supplied by the same authorization store as human
+/// grants. The PDP owns the scope/tenant/permission decision.
+#[derive(Debug, Clone)]
+pub struct ServiceAccess {
+    pub key_workspace_id: Option<WorkspaceId>,
+    pub resource: ResourceAccess,
+    pub scopes: Vec<Permission>,
+}
+
+impl ServiceAccess {
+    pub fn unresolved() -> Self {
+        Self {
+            key_workspace_id: None,
+            resource: ResourceAccess::unresolved(),
+            scopes: Vec::new(),
+        }
+    }
+}
+
 /// Reads, in one query, the resource's workspace together with the user's
 /// status, active membership and project grant.
 pub trait AuthorizationStore: Send + Sync {
@@ -62,6 +81,15 @@ pub trait AuthorizationStore: Send + Sync {
         user: UserId,
         resource: Resource,
     ) -> AuthorizationFuture<'a, Result<ResourceAccess, AuthzError>>;
+
+    /// A store without credential support fails closed.
+    fn service_access<'a>(
+        &'a self,
+        _service: ServicePrincipal,
+        _resource: Resource,
+    ) -> AuthorizationFuture<'a, Result<ServiceAccess, AuthzError>> {
+        Box::pin(async { Ok(ServiceAccess::unresolved()) })
+    }
 }
 
 pub trait Authorizer: Send + Sync {
@@ -95,9 +123,21 @@ impl<S: AuthorizationStore> Authorizer for PolicyDecisionPoint<S> {
                 // Work DeepRef starts itself (webhook application, job
                 // handlers): trusted after the enqueue was authorized.
                 Principal::System(_) => Ok(()),
-                // API keys land with handoff 11; until then a service
-                // principal holds nothing.
-                Principal::Service(_) => Err(AuthzDenied.into()),
+                Principal::Service(service) => {
+                    if !permission_applies(permission, resource) || !permission.machine_allowed() {
+                        return Err(AuthzDenied.into());
+                    }
+                    let access = self.store.service_access(*service, resource).await?;
+                    if access.key_workspace_id == Some(service.workspace_id)
+                        && access.resource.workspace_id == Some(service.workspace_id)
+                        && access.scopes.contains(&permission)
+                        && access.resource.grants.permits(permission, resource.kind())
+                    {
+                        Ok(())
+                    } else {
+                        Err(AuthzDenied.into())
+                    }
+                }
                 Principal::User(user) => {
                     if !permission_applies(permission, resource) {
                         return Err(AuthzDenied.into());
@@ -245,13 +285,16 @@ mod tests {
     }
 
     #[test]
-    fn system_is_trusted_and_service_principals_hold_nothing() {
+    fn system_is_trusted_and_unknown_service_principals_hold_nothing() {
         let system = Principal::system();
         assert!(
             require(Broken, &system, Permission::ProjectDelete, project()).is_ok(),
             "system principals never reach the store"
         );
-        let service = Principal::service();
+        let service = Principal::service(
+            deepref_domain::ApiKeyId::new(uuid::Uuid::new_v4()),
+            deepref_domain::WorkspaceId::new(uuid::Uuid::new_v4()),
+        );
         assert!(matches!(
             require(Broken, &service, Permission::ProjectView, project()),
             Err(AuthzError::Denied(_))

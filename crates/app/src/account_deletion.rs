@@ -698,6 +698,10 @@ async fn finalize_account(
             }
         };
 
+    // Machine credentials may contain free-text names. Erase their verifiers
+    // and names even in shared workspaces, retaining lifecycle audit facts.
+    let keys_deleted = crate::api_keys::remove_user_keys(&mut tx, user, audit).await?;
+
     // The PII goes; the user id and everything that references it stays.
     // `deleted_at` is the durable marker the trigger of migration 0111 keeps,
     // and the WorkOS tombstone makes a later sign-in a NEW user. The WHERE
@@ -843,7 +847,8 @@ async fn finalize_account(
     tx.commit().await?;
     Ok(FinalizeOutcome {
         newly_fulfilled,
-        changed: users_changed > 0
+        changed: keys_deleted > 0
+            || users_changed > 0
             || sessions_deleted > 0
             || invitations_scrubbed > 0
             || legacy_mappings_scrubbed > 0

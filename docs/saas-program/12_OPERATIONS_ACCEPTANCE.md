@@ -1,5 +1,7 @@
 # Handoff 12: operations acceptance
 
+> Owner decision (2026-10-23): implement the full target now. The adoption/product gates are superseded by `00_PROGRAM.md`; correctness, compatibility and operational acceptance requirements remain. Dodo Payments is the selected billing provider.
+
 ## Goal
 
 Make the launch system operable: a recorded deployment owner and target, expand/contract migrations that survive rolling deploys, restore drills that prove PostgreSQL and object storage agree, SLOs with alerts, dependency-failure tests, and a CI service for every new infrastructure dependency.
@@ -57,7 +59,7 @@ security     docker/rust-service.Dockerfile: the API has no authentication. Do n
 
 ## Deployment ownership and target
 
-This is a decision to record, not a code task. Record it in a new ADR under `docs/adr/` before 08 starts. The region depends on the LGPD policy and the Polar payout entity from the 00 business gate. This handoff does not choose a provider.
+This is a decision to record, not a code task. Record it in a new ADR under `docs/adr/` before 08 starts. The region depends on the LGPD policy and the actual Dodo Payments merchant onboarding requirements from the 00 business decision. This handoff does not choose a provider.
 
 The ADR records:
 
@@ -164,7 +166,7 @@ Restore drill:
 3  resolve object versions as of the same timestamp into a quarantined bucket or prefix, read-only
 4  run the reconciliation below with a read-only database role
 5  before any worker starts: point the restored copy at isolated provider credentials and endpoints
-   (WorkOS, Polar, AI providers, every other outbound target) and at the quarantined bucket or prefix
+   (WorkOS, Dodo Payments, AI providers, every other outbound target) and at the quarantined bucket or prefix
    only; block production egress from the drill network; quarantine the restored `queued` and `running`
    jobs after step 4 has read them, so no candidate worker can claim production work. This needs a
    separately reviewed containment harness: no drill_quarantined state or quarantine command exists.
@@ -188,26 +190,26 @@ Restore drill:
 
 Owners set every target before launch. No row ships with `TBD`.
 
-| SLI                                                                                       | Source today                                                                | Target            | Window | Owner          |
-| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------- | ------ | -------------- |
-| API availability (non-5xx ratio)                                                          | none; needs a metric                                                        | TBD               | TBD    | API owner      |
-| API latency p95 by route class, excluding SSE streams                                     | none; needs a metric                                                        | TBD               | TBD    | API owner      |
-| API replicas below the required schema version                                            | `/health/ready`                                                             | 0 after rollout   | TBD    | API owner      |
-| Job queue age per workload pool                                                           | `worker.oldest_age_seconds`; workspace or one project; per pool after 05a   | TBD               | TBD    | Worker owner   |
-| Dead jobs                                                                                 | `worker.recent_failed` (SQL `recent_dead`: dead jobs in a 30-minute window) | TBD               | TBD    | Worker owner   |
-| Live workers against expected                                                             | `worker.live_workers` (heartbeat every 15 s, 60 s window)                   | at least expected | TBD    | Worker owner   |
-| Outbox backlog age (04a and `ai_autonomy_outbox`)                                         | SQL; no metric                                                              | TBD               | TBD    | Platform owner |
-| Inbox backlog age and webhook processing lag (WorkOS, Polar)                              | SQL after 04a                                                               | TBD               | TBD    | Billing owner  |
-| Usage settlement backlog (stale nonterminal reservations, provider-neutral usage backlog) | 09 observability; SQL                                                       | TBD               | TBD    | AI owner       |
-| Backup freshness and WAL archive lag                                                      | none                                                                        | TBD               | TBD    | Platform owner |
-| Object-store error rate and reconciliation orphan count                                   | none                                                                        | TBD               | TBD    | Platform owner |
+| SLI                                                                                       | Source today                                                              | Target            | Window | Owner          |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------- | ------ | -------------- |
+| API availability (non-5xx ratio)                                                          | `deepref.http.requests` (response starts; external probes still required) | TBD               | TBD    | API owner      |
+| API latency p95 by route class, excluding SSE streams                                     | `deepref.http.response_header.duration` (actual SSE excluded)             | TBD               | TBD    | API owner      |
+| API replicas below the required schema version                                            | `/health/ready` and `deepref.schema.behind`                               | 0 after rollout   | TBD    | API owner      |
+| Job queue age per workload pool                                                           | `deepref.worker.queue.oldest_due.age`, by canonical pool                  | TBD               | TBD    | Worker owner   |
+| Dead jobs                                                                                 | `deepref.worker.dead.depth` (all retained dead jobs; no death timestamp)  | TBD               | TBD    | Worker owner   |
+| Live workers against expected                                                             | `deepref.worker.live` (heartbeat freshness: 60 seconds)                   | at least expected | TBD    | Worker owner   |
+| Outbox backlog age (04a and `ai_autonomy_outbox`)                                         | `deepref.backlog.oldest.age`, outbox/autonomy_outbox families             | TBD               | TBD    | Platform owner |
+| Inbox backlog age and webhook processing lag (WorkOS, Dodo Payments)                      | `deepref.backlog.oldest.age`, inbox family (all providers)                | TBD               | TBD    | Billing owner  |
+| Usage settlement backlog (stale nonterminal reservations, provider-neutral usage backlog) | `deepref.backlog.depth`/`oldest.age`, usage families                      | TBD               | TBD    | AI owner       |
+| Backup freshness and WAL archive lag                                                      | none                                                                      | TBD               | TBD    | Platform owner |
+| Object-store error rate and reconciliation orphan count                                   | none                                                                      | TBD               | TBD    | Platform owner |
 
 Rules:
 
 - Each SLO has a page threshold and a ticket threshold.
 - Each alert names a runbook section and an owner. Its notification route is tested in production with a test alert. An alert without a tested route is not evidence.
 - Metric labels carry no workspace, project, user or cost identifiers (09 observability).
-- The metrics pipeline is a prerequisite. `crates/telemetry` exports traces only, and no metric instruments exist. This handoff adds the first API and worker metrics. The ADR records the backend.
+- The deployed metrics pipeline is a prerequisite. `crates/telemetry` exports OTLP metrics alongside traces when a collector is configured; the [metric catalog and alert runbook](../metrics-and-alerts-runbook.md) records instrument scope, bounded labels, replica-safe aggregation and failed-sample handling. The backend remains undecided by the owner. Instrument tests do not prove deployed ingestion, SLO acceptance or delivered notifications.
 
 ## Dependency failure tests
 
@@ -224,17 +226,17 @@ Object store down    an upload fails without committing a metadata row. A downlo
 WorkOS outage        valid sessions keep working as 02 allows. A new login returns "provider
                      unavailable", distinct from unauthenticated. The webhook inbox grows and loses
                      nothing. Reconciliation runs after recovery.
-Polar outage         locally known entitlements stay usable (08 failure model). Checkout fails
+Dodo Payments outage         locally known entitlements stay usable (08 failure model). Checkout fails
                      cleanly. The usage export backlog grows with immutable identities. No AI call
-                     waits on Polar.
+                     waits on Dodo Payments.
 ```
 
-Conditional rows, not launch-blocking. Add each one only when its trigger fires:
+Required full-target dependency rows:
 
 ```text
-NATS outage    T-NATS. The outbox backlog grows and the relay retries. No committed work is lost.
+NATS outage    The outbox backlog grows and the relay retries. No committed work is lost.
                No consumer applies a message twice.
-Valkey outage  T-VALKEY. Admission falls back to PostgreSQL leased slots with conservative limits.
+Valkey outage  Admission falls back to PostgreSQL leased slots with conservative limits.
                No authoritative state changes.
 ```
 
@@ -245,8 +247,8 @@ Fault injection uses a TCP proxy in front of PostgreSQL and the object store in 
 - PostgreSQL 17 with pgvector: the existing full-stack service in `.github/workflows/ci.yml`. Pin by digest, as the Dockerfiles pin their base images. Add a replica only if the failover test needs one.
 - S3-compatible object store: new. Required by the 07 production backend contract test. Pin by version and digest, and wait for health before tests run.
 - Fault-injection proxy: new. Used by the dependency tests above.
-- NATS JetStream and Valkey: added only with `T-NATS` and `T-VALKEY`.
-- WorkOS and Polar: recorded fixtures on every PR. Sandbox contract tests run on a schedule with protected secrets and report through the existing `.github/workflows/scheduled-failure.yml`. PR CI never receives provider secrets.
+- NATS JetStream and Valkey: required by the full-target owner decision, with pinned services and health waits.
+- WorkOS and Dodo Payments: recorded fixtures on every PR. Sandbox contract tests run on a schedule with protected secrets and report through the existing `.github/workflows/scheduled-failure.yml`. PR CI never receives provider secrets.
 
 Start each new service with the same shape as the existing PostgreSQL step in `ci.yml`: a pinned image, a health wait, and failure if the wait times out.
 
@@ -263,7 +265,7 @@ Start each new service with the same shape as the existing PostgreSQL step in `c
 
 - Choosing a provider or region in code. The ADR records the decision.
 - Multi-region failover. The target is single-region PITR unless the ADR says otherwise.
-- NATS and Valkey operations before their triggers fire.
+- Claiming production NATS or Valkey acceptance from local adapter tests alone.
 - Restoring `infra/`, `charts/` or `observability/` from `e70e800^`. They describe a target no one has chosen; treat them as reference only.
 - Rewriting historical review documents. Mark them non-normative instead.
 - Capacity planning and load testing.
@@ -290,4 +292,4 @@ Cover at minimum:
 
 ## Completion criterion
 
-Launch operations are accepted when: the ADR names the owner, target, region, secrets, migration runner and metrics backend; `migration-compat` and the append-only check pass against the first release tag; a restore drill on a restored copy, run with isolated credentials and blocked production egress, records RPO and RTO that meet the signed targets, with zero unexplained reconciliation mismatches; every SLO row has a source, a page and a ticket threshold, and a runbook; the dependency matrix passes for PostgreSQL, object storage, WorkOS and Polar; every new infrastructure dependency used by the launch set has a CI service; and every runbook is indexed from `docs/README.md`. The NATS and Valkey rows activate only when their triggers fire.
+Launch operations are accepted when: the ADR names the owner, target, region, secrets, migration runner and metrics backend; `migration-compat` and the append-only check pass against the first release tag; a restore drill on a restored copy, run with isolated credentials and blocked production egress, records RPO and RTO that meet the signed targets, with zero unexplained reconciliation mismatches; every SLO row has a source, a page and a ticket threshold, and a runbook; the dependency matrix passes for PostgreSQL, object storage, WorkOS and Dodo Payments; every new infrastructure dependency used by the launch set has a CI service; and every runbook is indexed from `docs/README.md`. The NATS and Valkey failure/service rows are also required under the full-target owner decision.

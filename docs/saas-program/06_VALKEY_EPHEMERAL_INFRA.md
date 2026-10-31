@@ -1,12 +1,13 @@
 # Handoff 06: Valkey for ephemeral distributed state
 
+> Owner decision (2026-10-23): implement the full target now. The adoption/product gates are superseded by `00_PROGRAM.md`; correctness, compatibility and operational acceptance requirements remain. Dodo Payments is the selected billing provider.
 ## Goal
 
 Introduce Valkey where shared low-latency ephemeral state improves horizontally scaled API/worker behavior.
 
-This handoff is trigger-gated after launch by `T-VALKEY` (defined in `00_PROGRAM.md`). It is not required for the initial launch milestone.
+This handoff is required now by the owner decision in `00_PROGRAM.md`; no measured trigger is needed to start implementation.
 
-Before `T-VALKEY` fires, shared limits that are needed use PostgreSQL:
+Before the verified Valkey cutover, and as its conservative fallback, shared limits use PostgreSQL:
 
 ```text
 a leased-slot table with expiry for concurrency admission
@@ -173,7 +174,7 @@ usage ledger
 AI financial reservation
 durable job state
 WorkOS canonical membership
-Polar credit authority
+Dodo Payments credit authority
 ```
 
 Do not use distributed locks to paper over a missing PostgreSQL invariant.
@@ -182,7 +183,7 @@ Do not use distributed locks to paper over a missing PostgreSQL invariant.
 
 Cover:
 
-- PostgreSQL leased-slot expiry and counter-table rate limiting prior to T-VALKEY cutover;
+- PostgreSQL leased-slot expiry and counter-table rate limiting before and during the Valkey cutover;
 - two API instances sharing one limiter;
 - TTL expiration;
 - crashed concurrency holder;
@@ -196,4 +197,4 @@ Use a real ephemeral Valkey integration test for Lua/atomic operations if the im
 
 ## Completion criterion
 
-Horizontal API/worker replicas share operational limits and useful caches through Valkey once T-VALKEY fires (relying on PostgreSQL leased slots and counter tables prior to cutover), while deleting the entire Valkey database cannot corrupt or permanently lose DeepRef state.
+Horizontal API/worker replicas share operational limits and useful caches through Valkey after its verified cutover (retaining conservative PostgreSQL leased-slot/counter fallbacks), while deleting the entire Valkey database cannot corrupt or permanently lose DeepRef state.

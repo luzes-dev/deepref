@@ -171,7 +171,60 @@ const fn project(
     }
 }
 
+/// Explicit machine-safe routes. Every one must also have a mandatory central
+/// project-view policy. New reads stay human-only until reviewed here.
+pub fn machine_safe(row: &RouteRule) -> bool {
+    row.method == Verb::Get
+        && matches!(
+            row.rule,
+            Rule::Require(
+                Permission::ProjectView,
+                ResourceFrom::PathParam("project_id")
+            )
+        )
+        && matches!(
+            row.path,
+            "/projects/{project_id}" | "/projects/{project_id}/reports"
+        )
+}
+
 pub static ROUTES: &[RouteRule] = &[
+    tested(
+        handler(
+            Verb::Get,
+            "/workspaces/{workspace_id}/api-keys",
+            Permission::ApiKeyManage,
+            "human key management; handler authorizes the named workspace",
+        ),
+        "api_keys::lifecycle_is_human_only_and_tenant_scoped",
+    ),
+    tested(
+        handler(
+            Verb::Post,
+            "/workspaces/{workspace_id}/api-keys",
+            Permission::ApiKeyManage,
+            "human key creation; full secret returned once",
+        ),
+        "api_keys::lifecycle_is_human_only_and_tenant_scoped",
+    ),
+    tested(
+        handler(
+            Verb::Delete,
+            "/workspaces/{workspace_id}/api-keys/{key_id}",
+            Permission::ApiKeyManage,
+            "human revocation; handler authorizes the workspace and key pair",
+        ),
+        "api_keys::lifecycle_is_human_only_and_tenant_scoped",
+    ),
+    tested(
+        handler(
+            Verb::Post,
+            "/workspaces/{workspace_id}/api-keys/{key_id}/rotate",
+            Permission::ApiKeyManage,
+            "human rotation; old key revoked atomically with replacement",
+        ),
+        "api_keys::lifecycle_is_human_only_and_tenant_scoped",
+    ),
     project(
         Verb::Get,
         "/projects/{project_id}/health/dependencies",
@@ -1239,9 +1292,9 @@ pub static NON_HTTP: &[NonHttpRow] = &[
     },
     NonHttpRow {
         kind: "Machine principal",
-        name: "Worker and system principals",
-        control: "`Principal::System` is trusted and never reaches the store; no HTTP request can produce it (`x-actor-*` headers are ignored for authority and cannot name `system`). `Principal::Service` (API keys, handoff 11) holds no permission yet.",
-        test: "deepref-application `system_is_trusted_and_service_principals_hold_nothing`",
+        name: "Worker, system and API-key principals",
+        control: "`Principal::System` is trusted and never reaches the store; no HTTP request can produce it (`x-actor-*` headers are ignored for authority and cannot name `system`). `Principal::Service` is authorized by the same central PDP: live credential expiry/revocation and creator status, active workspace membership/current role, explicit key scopes and resource tenant must intersect. The HTTP PEP also restricts services to the explicit machine-safe read allowlist; services cannot impersonate human scientific actors.",
+        test: "api_keys::lifecycle_is_human_only_and_tenant_scoped (positive service reads); deepref-application `system_is_trusted_and_unknown_service_principals_hold_nothing` (unknown-service denial)",
     },
     NonHttpRow {
         kind: "Job payload",

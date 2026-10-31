@@ -1,10 +1,11 @@
 # Handoff 04: Transactional outbox, integration inbox and NATS foundation
 
+> Owner decision (2026-10-23): implement the full target now. The adoption/product gates are superseded by `00_PROGRAM.md`; correctness, compatibility and operational acceptance requirements remain. Dodo Payments is the selected billing provider.
 ## Goal
 
-Ship a broker-independent PostgreSQL outbox and integration inbox for launch. Add NATS JetStream only after `T-NATS` fires.
+Ship a broker-independent PostgreSQL outbox and integration inbox for launch. Implement the NATS JetStream adapter as required full-target work after 04a.
 
-Read `00_PROGRAM.md`. Complete handoff 01 first. Part 04a proceeds alongside 02 and 03. Part 04b is trigger-gated.
+Read `00_PROGRAM.md`. Complete handoff 01 first. Part 04a proceeds alongside 02 and 03. Part 04b is now required by the owner decision.
 
 ## Architectural rule
 
@@ -30,7 +31,7 @@ Implement without a broker:
 generic PostgreSQL outbox table and persistence API
 atomic claim/lease and retry semantics
 in-process dispatcher for typed handlers or durable-job enqueue
-WorkOS and Polar webhook integration inbox
+WorkOS and Dodo Payments webhook integration inbox
 ```
 
 ### Transactional outbox
@@ -76,15 +77,15 @@ The expected recipient set is part of the message contract and is stable for a g
 
 ### Integration inbox
 
-Receive WorkOS and Polar webhooks through a PostgreSQL-backed inbox. Verify the provider's signature/authentication before inserting any event. Use a provider-scoped deduplication key, such as `(provider, provider_event_id)`, with a unique constraint.
+Receive WorkOS and Dodo Payments webhooks through a PostgreSQL-backed inbox. Verify the provider's signature/authentication before inserting any event. Use a provider-scoped deduplication key, such as `(provider, provider_event_id)`, with a unique constraint.
 
 Return durable `2xx` only after the inbox insert or duplicate check commits. A duplicate already committed for that provider is acknowledged without reprocessing. Track processing state, attempts, next retry time, and terminal/quarantine reason. Retry transient failures with backoff. Quarantine poison events after bounded retries and expose them for operational review and replay.
 
-Do not assume provider event ordering. Make handlers safe for duplicates and out-of-order events; reload authoritative state or apply provider versions/timestamps where supported. Periodically reconcile local projections against WorkOS and Polar so missed, delayed, or quarantined events can be repaired.
+Do not assume provider event ordering. Make handlers safe for duplicates and out-of-order events; reload authoritative state or apply provider versions/timestamps where supported. Periodically reconcile local projections against WorkOS and Dodo Payments so missed, delayed, or quarantined events can be repaired.
 
-## Part 04b — NATS JetStream adapter (trigger-gated by T-NATS)
+## Part 04b — NATS JetStream adapter
 
-Start only after at least one `T-NATS` trigger row in `00_PROGRAM.md` has a defined threshold, measurement window and owner, and measured evidence meets it. Cite the fired trigger row and measurements in the ADR. Until then, do not add the dependency or change the boundary rule.
+The owner authorized 04b on 2026-10-23, superseding the original measurement gate. Record that decision in the adapter ADR. Lift the SDK boundary ban only for the integration adapter; preserve domain/application separation.
 
 Implement:
 
@@ -103,7 +104,7 @@ boundary-check change permitting async-nats only in approved layers
 one low-risk production-like pilot message path
 ```
 
-Do not migrate the main durable job queue yet. That is handoff 05b and also requires `T-NATS`.
+Do not migrate the main durable job queue yet. That is handoff 05b, which is also required now.
 
 ### NATS client
 
@@ -223,7 +224,7 @@ Do not migrate consequential durable review execution yet.
 The ADR must state:
 
 - why the 04b change reverses the deliberate removal recorded by `crates/app/migrations/0008_infrastructure_collapse.sql` and the `async-nats` ban in `tools/xtask/src/boundaries.rs`;
-- which `T-NATS` trigger row fired, its threshold, measurement window, owner and measured evidence;
+- the explicit owner adoption decision and the verified rollout/rollback conditions;
 - PostgreSQL remains authoritative and JetStream is transport;
 - the generic transactional outbox is mandatory for database-triggered publication;
 - delivery is at least once and handler effects remain idempotent;
@@ -248,7 +249,7 @@ fan-out: one failing consumer does not re-run a consumer whose receipt committed
 the row is delivered only after every expected recipient receipt commits
 recipient set is fixed per message type and version; an unexpected consumer is not counted
 crash after effect commit safely replays through an idempotent handler
-invalid WorkOS/Polar signature creates no inbox row
+invalid WorkOS/Dodo Payments signature creates no inbox row
 provider-scoped duplicate webhook and concurrent duplicate receipt
 2xx follows inbox commit; failed commit does not acknowledge receipt
 processing retry, poison-event quarantine, and replay
@@ -278,6 +279,6 @@ Use integration tests with a real ephemeral NATS instance where feasible.
 
 ## Completion criterion
 
-04a is complete for launch when PostgreSQL durably accepts WorkOS and Polar events, safely dispatches committed outbox work without a broker, retries and quarantines failures, and reconciles provider state. Claims alone never count as delivery, and a row completes only after every expected recipient's receipt commits.
+04a is complete for launch when PostgreSQL durably accepts WorkOS and Dodo Payments events, safely dispatches committed outbox work without a broker, retries and quarantines failures, and reconciles provider state. Claims alone never count as delivery, and a row completes only after every expected recipient's receipt commits.
 
-04b is complete only after `T-NATS` fires and the ADR cites its evidence. The same outbox rows can then publish through JetStream without making NATS authoritative, losing messages across process crashes, bypassing PostgreSQL transaction boundaries, or republishing rows the relay already published.
+04b is complete when the ADR records the owner decision and the adapter passes its compatibility and failure acceptance. The same outbox rows can then publish through JetStream without making NATS authoritative, losing messages across process crashes, bypassing PostgreSQL transaction boundaries, or republishing rows the relay already published.

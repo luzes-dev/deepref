@@ -9,22 +9,22 @@ seller           an individual resident in Brazil; no company (CNPJ) or foreign 
 Polar            not eligible: Polar pays out through Stripe Connect Express only to the countries
                  on https://polar.sh/docs/merchant-of-record/supported-countries, and Brazil is not
                  listed (checked 2026-10-19)
-billing provider undecided
+billing provider Dodo Payments selected 2026-10-23 (see update below)
 ```
 
-Candidates, to be decided before 08 starts:
+Decision update, 2026-10-23: the owner selected **Dodo Payments** (“lets use dodo payments”). The seller remains an individual resident in Brazil, without a CNPJ or foreign entity. This replaces the previous provider-undecided decision and the original Polar-specific implementation target.
 
-```text
-Paddle                    Merchant of Record; lists Brazil as a supported country, takes Pix and Pix
-                          Automático. Confirm in writing that Paddle pays out to a Brazilian individual.
-Polar via foreign entity  keep Polar; open a company in a supported country
-Stripe Brasil / local PSP no Merchant of Record; DeepRef collects tax and issues NFS-e; needs a CNPJ
-```
+Dodo’s [merchant-country policy](https://docs.dodopayments.com/miscellaneous/accepted-countries-and-territories) lists Brazil. Individual eligibility depends on the issuing country of the merchant’s government ID, rather than residence alone. Its [verification process](https://docs.dodopayments.com/miscellaneous/verification-process) supports an Individual account without company registration, with product, identity and bank verification. Live payments and payouts have distinct approval requirements; payouts also require compliance review. The selection records an implementation target, not approval of this seller or product.
 
 Consequences:
 
-- 08 is paused. It is written for Polar and is rewritten for the chosen provider before any billing code.
-- 09 proceeds. Its downstream usage export goes through a provider-neutral port: the local ledger, settlement and outbox record are unchanged, and the provider adapter is chosen with 08. Read "Polar" in 09 as "the billing provider" until then.
+- Rewrite handoff 08 for Dodo Payments before substantial billing code. Keep its legacy filename to preserve existing links. Implement through a DeepRef-owned Rust provider port, with local entitlement projections and the existing PostgreSQL integration inbox.
+- 09’s ledger, reservations, settlement and immutable usage identities remain authoritative. Add a Dodo adapter behind the existing provider-neutral export port. Its [usage-ingestion guide](https://docs.dodopayments.com/developer-resources/usage-based-billing-guide) rejects timestamps older than one hour. Late facts must remain visible for explicit reconciliation; never change a fact’s timestamp or identity to force acceptance in a different billing period.
+- Test-mode implementation and recorded contract tests may proceed. Live activation requires the actual account/product/KYC/bank and payout approvals, configured commercial catalog, protected credentials and the published policies required by Dodo. No foreign company is created by this work.
+
+## Full-target scope
+
+Owner decision, 2026-10-23: “Replace gates; implement full target now.” NATS JetStream (04b/05b), Valkey (06), selective CQRS (10) and API keys/service principals (11A) are now required implementation work. The old measurement/product-need gates no longer defer them. Rollout compatibility, tenant isolation, conservative outage behavior and operational acceptance remain mandatory.
 
 ## Data region
 

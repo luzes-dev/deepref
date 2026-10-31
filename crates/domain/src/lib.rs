@@ -86,6 +86,7 @@ typed_id!(ProjectId);
 typed_id!(ProtocolVersionId);
 typed_id!(ExclusionReasonId);
 typed_id!(UserId);
+typed_id!(ApiKeyId);
 typed_id!(WorkspaceId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
