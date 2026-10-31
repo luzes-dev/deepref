@@ -337,16 +337,15 @@ async fn reject(
 /// publication replay. A failed step is safe to rerun with the same identity.
 pub async fn recover_terminal_sequence(
     pool: &PgPool,
-    broker: &JetStream,
-    consumer: &str,
-    sequence: u64,
+    evidence: &deepref_integrations::jetstream::TerminalRecovery,
 ) -> Result<()> {
-    let envelope = broker.retained_sequence(sequence).await?;
-    let identity = broker.sequence_identity(consumer, sequence);
+    let consumer = evidence.advisory().consumer.as_str();
+    let envelope = evidence.envelope();
+    let identity = evidence.identity();
     work_publication::record_dead_letter(
         pool,
         &identity,
-        envelope.as_ref(),
+        envelope,
         consumer,
         MAX_DELIVERIES,
         "terminal_sequence_recovered",
@@ -360,13 +359,8 @@ pub async fn recover_terminal_sequence(
     .bind(&identity)
     .fetch_one(pool)
     .await?;
-    broker
-        .dead_letter_sequence(
-            &logical_consumer,
-            sequence,
-            u64::try_from(deliveries)?,
-            &reason,
-        )
+    evidence
+        .dead_letter(&logical_consumer, u64::try_from(deliveries)?, &reason)
         .await
 }
 

@@ -180,6 +180,8 @@ export const VISUAL_PROJECTION: ProjectionStatusDto = {
 };
 
 const dependencies: DependencyStatus = {
+	object_storage: { state: 'available' },
+	jetstream: null,
 	postgresql: {
 		state: 'available',
 		lag: null,
@@ -526,100 +528,76 @@ const unreadNotifications: NotificationUnreadDto = { count: 0, latest_revision: 
 const projectPath = `/api/projects/${VISUAL_PROJECT_ID}`;
 const reportPath = `${projectPath}/reports/${VISUAL_REPORT_ID}`;
 
+function fixtureGet(path: string, body: unknown, query = ''): VisualEndpoint {
+	return { path, query, body };
+}
+
 /** Every GET the deterministic workspace answers, keyed by path and exact query. */
 export const VISUAL_GET_ENDPOINTS: readonly VisualEndpoint[] = [
 	// Workspace shell: session, projects, imports, settings, notifications and dependency health.
-	{ path: '/api/me', query: '', body: { auth_enabled: false, user: null } },
-	{
-		path: `${projectPath}/health/dependencies`,
-		query: '',
-		body: dependencies
-	},
-	{ path: '/api/projects', query: 'limit=50', body: projectsPage },
-	{ path: projectPath, query: '', body: project },
-	{ path: `${projectPath}/acquisitions`, query: 'limit=50', body: acquisitionsPage },
-	{ path: '/api/settings', query: '', body: settings },
-	{ path: '/api/notifications', query: '', body: emptyNotifications },
-	{
-		path: '/api/notifications/unread-count',
-		query: `project_id=${VISUAL_PROJECT_ID}`,
-		body: unreadNotifications
-	},
-	{ path: '/api/ai/status', query: '', body: aiStatus },
-	{ path: '/api/automations/catalog', query: '', body: automationCatalog },
-	{ path: '/api/automations/templates', query: '', body: automationTemplates },
+	fixtureGet('/api/me', { auth_enabled: false, user: null }),
+	fixtureGet(`${projectPath}/health/dependencies`, dependencies),
+	fixtureGet('/api/projects', projectsPage, 'limit=50'),
+	fixtureGet(projectPath, project),
+	fixtureGet(`${projectPath}/acquisitions`, acquisitionsPage, 'limit=50'),
+	fixtureGet('/api/settings', settings),
+	fixtureGet('/api/notifications', emptyNotifications),
+	fixtureGet(
+		'/api/notifications/unread-count',
+		unreadNotifications,
+		`project_id=${VISUAL_PROJECT_ID}`
+	),
+	fixtureGet('/api/ai/status', aiStatus),
+	fixtureGet('/api/automations/catalog', automationCatalog),
+	fixtureGet('/api/automations/templates', automationTemplates),
 
 	// Plan: protocol, review progress and PRISMA.
-	{ path: `${projectPath}/protocol`, query: '', body: reviewProtocol },
-	{ path: `${projectPath}/review/protocol`, query: '', body: reviewProtocol },
-	{ path: `${projectPath}/review/protocol/versions`, query: '', body: protocolVersions },
-	{ path: `${projectPath}/projection`, query: '', body: VISUAL_PROJECTION },
-	{ path: `${projectPath}/prisma`, query: '', body: prisma },
+	fixtureGet(`${projectPath}/protocol`, reviewProtocol),
+	fixtureGet(`${projectPath}/review/protocol`, reviewProtocol),
+	fixtureGet(`${projectPath}/review/protocol/versions`, protocolVersions),
+	fixtureGet(`${projectPath}/projection`, VISUAL_PROJECTION),
+	fixtureGet(`${projectPath}/prisma`, prisma),
 
 	// Collect: the corpus, its acquisitions and deduplication.
-	{ path: `${projectPath}/reports`, query: 'limit=50', body: reportsPage },
-	{ path: `${projectPath}/reports`, query: 'limit=100', body: reportsPage },
-	{ path: reportPath, query: '', body: reportDetails },
-	{ path: `${reportPath}/screening/history`, query: '', body: noScreeningHistory },
-	{ path: `${reportPath}/documents`, query: 'limit=10', body: noDocuments },
-	{
-		path: `${projectPath}/acquisitions`,
-		query: 'strategy=file_import&limit=50',
-		body: emptyAcquisitions
-	},
-	{
-		path: `${projectPath}/acquisitions`,
-		query: 'strategy=pmid_import&limit=50',
-		body: emptyAcquisitions
-	},
-	{
-		path: `${projectPath}/deduplication/proposals`,
-		query: 'limit=100&status=pending',
-		body: dedupeProposalsPage
-	},
-	{
-		path: `${projectPath}/ai/proposals`,
-		query: `status=pending&task_kind=duplicate_candidate_detection&limit=1&target_record_id=visual-record&candidate_report_id=${VISUAL_REPORT_ID}`,
-		body: emptyAiProposals
-	},
+	fixtureGet(`${projectPath}/reports`, reportsPage, 'limit=50'),
+	fixtureGet(`${projectPath}/reports`, reportsPage, 'limit=100'),
+	fixtureGet(reportPath, reportDetails),
+	fixtureGet(`${reportPath}/screening/history`, noScreeningHistory),
+	fixtureGet(`${reportPath}/documents`, noDocuments, 'limit=10'),
+	fixtureGet(`${projectPath}/acquisitions`, emptyAcquisitions, 'strategy=file_import&limit=50'),
+	fixtureGet(`${projectPath}/acquisitions`, emptyAcquisitions, 'strategy=pmid_import&limit=50'),
+	fixtureGet(
+		`${projectPath}/deduplication/proposals`,
+		dedupeProposalsPage,
+		'limit=100&status=pending'
+	),
+	fixtureGet(
+		`${projectPath}/ai/proposals`,
+		emptyAiProposals,
+		`status=pending&task_kind=duplicate_candidate_detection&limit=1&target_record_id=visual-record&candidate_report_id=${VISUAL_REPORT_ID}`
+	),
 
 	// Review: screening queues, full text, studies, appraisal and extraction.
-	{ path: `${projectPath}/screening`, query: 'status=maybe&limit=1', body: screeningQueue },
-	{
-		path: `${projectPath}/screening`,
-		query: 'status=unscreened&sort=created_asc&limit=25',
-		body: screeningQueue
-	},
-	{ path: `${projectPath}/screening/full-text`, query: 'limit=100', body: fullTextQueue },
-	{
-		path: `${projectPath}/screening/full-text/missing`,
-		query: 'limit=100',
-		body: missingFullText
-	},
-	{
-		path: `${projectPath}/screening/full-text/reasons`,
-		query: '',
-		body: fullTextExclusionReasons
-	},
-	{ path: `${projectPath}/studies`, query: 'limit=100', body: emptyStudies },
-	{ path: `${projectPath}/studies/ungrouped-reports`, query: '', body: emptyUngrouped },
-	{ path: `${projectPath}/appraisal-definitions`, query: '', body: noAppraisalDefinitions },
-	{ path: `${projectPath}/extraction/fields`, query: '', body: noExtractionFields },
+	fixtureGet(`${projectPath}/screening`, screeningQueue, 'status=maybe&limit=1'),
+	fixtureGet(
+		`${projectPath}/screening`,
+		screeningQueue,
+		'status=unscreened&sort=created_asc&limit=25'
+	),
+	fixtureGet(`${projectPath}/screening/full-text`, fullTextQueue, 'limit=100'),
+	fixtureGet(`${projectPath}/screening/full-text/missing`, missingFullText, 'limit=100'),
+	fixtureGet(`${projectPath}/screening/full-text/reasons`, fullTextExclusionReasons),
+	fixtureGet(`${projectPath}/studies`, emptyStudies, 'limit=100'),
+	fixtureGet(`${projectPath}/studies/ungrouped-reports`, emptyUngrouped),
+	fixtureGet(`${projectPath}/appraisal-definitions`, noAppraisalDefinitions),
+	fixtureGet(`${projectPath}/extraction/fields`, noExtractionFields),
 
 	// Operate: automations, the assistant and the AI activity log.
-	{ path: `${projectPath}/automations/workflows`, query: '', body: workflows },
-	{
-		path: `${projectPath}/automations/workflows/${visualWorkflow.id}`,
-		query: '',
-		body: visualWorkflow
-	},
-	{
-		path: `${projectPath}/automations/workflow-runs`,
-		query: 'limit=100',
-		body: workflowRuns
-	},
-	{ path: `${projectPath}/assistant/conversations`, query: '', body: noConversations },
-	{ path: `${projectPath}/ai/budget`, query: '', body: aiBudget },
-	{ path: `${projectPath}/ai/activity/overview`, query: '', body: aiActivityOverview },
-	{ path: `${projectPath}/ai/activity`, query: 'limit=3&undone=false', body: emptyAiActivity }
+	fixtureGet(`${projectPath}/automations/workflows`, workflows),
+	fixtureGet(`${projectPath}/automations/workflows/${visualWorkflow.id}`, visualWorkflow),
+	fixtureGet(`${projectPath}/automations/workflow-runs`, workflowRuns, 'limit=100'),
+	fixtureGet(`${projectPath}/assistant/conversations`, noConversations),
+	fixtureGet(`${projectPath}/ai/budget`, aiBudget),
+	fixtureGet(`${projectPath}/ai/activity/overview`, aiActivityOverview),
+	fixtureGet(`${projectPath}/ai/activity`, emptyAiActivity, 'limit=3&undone=false')
 ];

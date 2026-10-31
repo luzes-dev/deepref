@@ -33,3 +33,7 @@
 - [ADR 0008: Production deployment ownership and target](adr/0008-production-deployment-ownership-and-target.md)
 
 - [ADR 0009: JetStream work delivery](adr/0009-jetstream-work-delivery.md)
+
+- [Dependency health evidence](dependency-health-runbook.md)
+
+- [Database roles and audit retention](database-roles-runbook.md)

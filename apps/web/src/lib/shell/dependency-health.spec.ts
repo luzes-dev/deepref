@@ -4,7 +4,8 @@ import type { DependencyStatus } from '#lib/api/generated/models/index.js';
 
 const allAvailable: DependencyStatus = {
 	postgresql: { state: 'available' },
-	worker: { state: 'available' }
+	worker: { state: 'available' },
+	object_storage: { state: 'available' }
 };
 
 describe('dependencyLabel', () => {
@@ -17,10 +18,55 @@ describe('dependencyLabel', () => {
 });
 
 describe('summarizeDependencyHealth', () => {
+	it('accepts the absent transport detail in valid PostgreSQL mode', () => {
+		expect.hasAssertions();
+		expect(summarizeDependencyHealth({ ...allAvailable, jetstream: null }, null)).toEqual({
+			level: 'ok',
+			issues: []
+		});
+	});
+
 	it('is silent while everything is available or nothing has loaded yet', () => {
 		expect.hasAssertions();
 		expect(summarizeDependencyHealth(allAvailable, null)).toEqual({ level: 'ok', issues: [] });
 		expect(summarizeDependencyHealth(undefined, null).level).toBe('ok');
+	});
+
+	it('explains storage failure and unconfirmed background delivery', () => {
+		expect.hasAssertions();
+		const transport: NonNullable<DependencyStatus['jetstream']> = {
+			state: 'degraded',
+			expected_mode: 'jetstream',
+			live_workers: 1,
+			fresh_ready_workers: 0,
+			not_ready_workers: 0,
+			unknown_workers: 0,
+			stale_workers: 1,
+			future_workers: 0,
+			mismatched_workers: 0
+		};
+		const summary = summarizeDependencyHealth(
+			{
+				...allAvailable,
+				object_storage: { state: 'unavailable' },
+				jetstream: transport
+			},
+			null
+		);
+		expect(summary.level).toBe('unavailable');
+		expect(summary.issues).toHaveLength(2);
+		expect(summary.issues[0]).toMatchObject({
+			name: 'object_storage',
+			label: 'Document storage',
+			message:
+				'Document storage cannot be checked right now. Uploads and downloads may be unavailable.'
+		});
+		expect(summary.issues[1]).toMatchObject({
+			name: 'jetstream',
+			label: 'Background delivery',
+			message:
+				'Background delivery health is not confirmed. Imports and automations may be delayed.'
+		});
 	});
 
 	it('reports a degraded worker with its backlog', () => {
@@ -38,7 +84,11 @@ describe('summarizeDependencyHealth', () => {
 	it('escalates to unavailable when the database is down', () => {
 		expect.hasAssertions();
 		const summary = summarizeDependencyHealth(
-			{ postgresql: { state: 'unavailable' }, worker: { state: 'degraded' } },
+			{
+				...allAvailable,
+				postgresql: { state: 'unavailable' },
+				worker: { state: 'degraded' }
+			},
 			null
 		);
 		expect(summary.level).toBe('unavailable');

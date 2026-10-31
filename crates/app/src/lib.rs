@@ -37,6 +37,7 @@ mod legacy_actors;
 pub mod mirrored_concurrency;
 mod notifications;
 pub mod object_lifecycle;
+mod operational_read;
 pub mod outbox;
 mod persistence;
 mod pmid_import;
@@ -262,8 +263,9 @@ pub use usage_export::{
 };
 pub use worker_runtime::{
     MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,
-    record_worker_heartbeat, record_worker_heartbeat_with_capacities, recover_expired_worker_state,
-    remove_worker_heartbeat, reserve_provider_permit,
+    record_worker_heartbeat, record_worker_heartbeat_with_capacities,
+    record_worker_heartbeat_with_transport, recover_expired_worker_state, remove_worker_heartbeat,
+    reserve_provider_permit,
 };
 pub use workflow_files::{
     MAX_WORKFLOW_FILE_BYTES, NewWorkflowFile, WORKFLOW_FILE_BACKFILL_BATCH, WorkflowFile,
@@ -291,3 +293,5 @@ pub mod billing;
 pub mod work_publication;
 
 pub mod project_counts;
+
+pub mod database_roles;

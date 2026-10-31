@@ -695,10 +695,38 @@ async fn final_delivery_failure(fail_dlq: bool) -> Result<()> {
         1,
         "retained advisory owns terminal sequence evidence"
     );
-    deepref_worker::jetstream_transport::recover_terminal_sequence(
-        &pool, &broker, "terminal", sequence,
+    let page = broker.terminal_advisories(0, 10).await?;
+    anyhow::ensure!(page.complete_to_observed_end && page.entries.len() == 1);
+    let advisory_sequence = page.entries[0].advisory_sequence;
+    anyhow::ensure!(page.entries[0].advisory.stream_seq == sequence);
+    anyhow::ensure!(broker.terminal_advisories(u64::MAX, 10).await.is_err());
+    let untouched = enqueue(&pool, JobKind::RecomputeMetrics).await?;
+    sqlx::query("UPDATE jobs SET attempts=2 WHERE id=$1")
+        .bind(untouched)
+        .execute(&pool)
+        .await?;
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(j) FROM jobs j WHERE id=$1")
+            .bind(untouched)
+            .fetch_one(&pool)
+            .await?;
+    let result = deepref_worker::transport_operator::recover_terminal_advisory(
+        &pool,
+        &broker,
+        advisory_sequence,
     )
     .await?;
+    anyhow::ensure!(
+        result["business_replayed"] == false && result["delivery_budget_reset"] == false
+    );
+    let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(j) FROM jobs j WHERE id=$1")
+        .bind(untouched)
+        .fetch_one(&pool)
+        .await?;
+    anyhow::ensure!(
+        before == after,
+        "diagnostic recovery must not reset real queued business state"
+    );
     assert_eq!(broker.dead_letter_count().await?, 1);
     let reason: String =
         sqlx::query_scalar("SELECT reason FROM transport_dead_letters WHERE delivery_id=$1")
@@ -707,8 +735,10 @@ async fn final_delivery_failure(fail_dlq: bool) -> Result<()> {
             .await?;
     assert!(!reason.contains("private-terminal"));
     // Recovery is idempotent and never resets/advances the exhausted consumer.
-    deepref_worker::jetstream_transport::recover_terminal_sequence(
-        &pool, &broker, "terminal", sequence,
+    deepref_worker::transport_operator::recover_terminal_advisory(
+        &pool,
+        &broker,
+        advisory_sequence,
     )
     .await?;
     assert_eq!(broker.dead_letter_count().await?, 1);
@@ -1259,5 +1289,149 @@ async fn stream_subject_transform_and_routing_drift_fails_closed_before_startup(
     .await?;
     assert!(restored.get("error").is_none());
     assert!(JetStream::connect(config).await.is_ok());
+    Ok(())
+}
+
+#[tokio::test]
+async fn terminal_recovery_refuses_routing_drift_before_metadata_and_never_creates_consumers()
+-> Result<()> {
+    use deepref_integrations::jetstream::ConsumerScope;
+    use deepref_worker::transport_operator::{
+        recover_terminal_advisory, recover_terminal_advisory_with_scope,
+    };
+    let Some((pool, broker, config)) = fixture().await else {
+        return Ok(());
+    };
+    let work = nats_request(
+        &config,
+        &format!("{}.jobs.documents", config.subject_prefix),
+        serde_json::json!({"malformed":"private-routing-value"}),
+    )
+    .await?;
+    let work_sequence = work["seq"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("missing work ACK"))?;
+    let _consumer = broker.consumer("scope-events", None).await?;
+    let before = nats_request(
+        &config,
+        &format!("$JS.API.STREAM.INFO.{}", config.stream),
+        serde_json::json!({}),
+    )
+    .await?;
+    let metadata = serde_json::json!({"type":"io.nats.jetstream.advisory.v1.max_deliver","timestamp":chrono::Utc::now(),"stream":config.stream,"consumer":"scope-events","stream_seq":work_sequence,"deliveries":5});
+    // Same valid metadata on another retained consumer subject must refuse.
+    let mismatch = nats_request(
+        &config,
+        &format!(
+            "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.{}.different-consumer",
+            config.stream
+        ),
+        metadata.clone(),
+    )
+    .await?;
+    let mismatch_sequence = mismatch["seq"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("missing advisory ACK"))?;
+    anyhow::ensure!(
+        recover_terminal_advisory(&pool, &broker, mismatch_sequence)
+            .await
+            .is_err()
+    );
+    // Exact advisory subject still cannot bind an events consumer to work.
+    let advisory = nats_request(
+        &config,
+        &format!(
+            "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.{}.scope-events",
+            config.stream
+        ),
+        metadata,
+    )
+    .await?;
+    let advisory_sequence = advisory["seq"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("missing advisory ACK"))?;
+    anyhow::ensure!(
+        recover_terminal_advisory(&pool, &broker, advisory_sequence)
+            .await
+            .is_err()
+    );
+    let refused_count: i64 = sqlx::query_scalar("SELECT count(*) FROM transport_dead_letters")
+        .fetch_one(&pool)
+        .await?;
+    anyhow::ensure!(
+        refused_count == 0 && broker.dead_letter_count().await? == 0,
+        "mismatched routing became durable evidence"
+    );
+    let after = nats_request(
+        &config,
+        &format!("$JS.API.STREAM.INFO.{}", config.stream),
+        serde_json::json!({}),
+    )
+    .await?;
+    anyhow::ensure!(
+        before["state"]["consumer_count"].is_u64()
+            && before["state"]["consumer_count"] == after["state"]["consumer_count"],
+        "read-only recovery changed consumer inventory"
+    );
+    // A deleted consumer is metadata-only history until explicitly scoped.
+    let deleted = nats_request(
+        &config,
+        &format!("$JS.API.CONSUMER.DELETE.{}.scope-events", config.stream),
+        serde_json::json!({}),
+    )
+    .await?;
+    anyhow::ensure!(deleted["success"] == true);
+    broker.terminal_advisories(mismatch_sequence, 10).await?;
+    anyhow::ensure!(
+        recover_terminal_advisory(&pool, &broker, advisory_sequence)
+            .await
+            .is_err()
+    );
+    anyhow::ensure!(
+        recover_terminal_advisory_with_scope(
+            &pool,
+            &broker,
+            advisory_sequence,
+            Some(ConsumerScope::Events)
+        )
+        .await
+        .is_err()
+    );
+    let missing = nats_request(
+        &config,
+        &format!("$JS.API.CONSUMER.INFO.{}.scope-events", config.stream),
+        serde_json::json!({}),
+    )
+    .await?;
+    anyhow::ensure!(
+        missing["error"]["err_code"] == 10014,
+        "missing consumer was provisioned during refusal"
+    );
+    let recovered = recover_terminal_advisory_with_scope(
+        &pool,
+        &broker,
+        advisory_sequence,
+        Some(ConsumerScope::Work(WorkloadClass::Documents)),
+    )
+    .await?;
+    anyhow::ensure!(
+        recovered["consumer_contract_evidence"] == "operator_declared_historical"
+            && recovered["business_replayed"] == false
+            && recovered["delivery_budget_reset"] == false
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM transport_dead_letters")
+        .fetch_one(&pool)
+        .await?;
+    anyhow::ensure!(count == 1 && broker.dead_letter_count().await? == 1);
+    let still_missing = nats_request(
+        &config,
+        &format!("$JS.API.CONSUMER.INFO.{}.scope-events", config.stream),
+        serde_json::json!({}),
+    )
+    .await?;
+    anyhow::ensure!(
+        still_missing["error"]["err_code"] == 10014,
+        "historical recovery provisioned a consumer"
+    );
     Ok(())
 }
