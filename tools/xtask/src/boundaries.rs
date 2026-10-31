@@ -289,7 +289,7 @@ fn is_forbidden_external_dependency(
         return source != "deepref-integrations" || layer != Layer::Adapter;
     }
     if name == "async-nats" {
-        return true;
+        return source != "deepref-integrations" || layer != Layer::Adapter;
     }
     if matches!(layer, Layer::Domain | Layer::Application | Layer::Review)
         && INFRASTRUCTURE.contains(&name)
@@ -314,7 +314,7 @@ fn validate_external_dependency(
     let normal = dependency.kind.is_none();
     if is_forbidden_external_dependency(&source.name, layer, &dependency.name, normal) {
         errors.push(format!(
-            "{} -> {}\nsource layer: {layer}\ntarget layer: external\ndependency violates the pure dependency contract or removed NATS guard",
+            "{} -> {}\nsource layer: {layer}\ntarget layer: external\ndependency violates the pure dependency contract or JetStream adapter boundary",
             source.name, dependency.name
         ));
     }
@@ -416,6 +416,28 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn nats_sdk_is_confined_to_the_transport_adapter_crate() {
+        assert!(!is_forbidden_external_dependency(
+            "deepref-integrations",
+            Layer::Adapter,
+            "async-nats",
+            true
+        ));
+        for (name, layer) in [
+            ("deepref-domain", Layer::Domain),
+            ("deepref-application", Layer::Application),
+            ("deepref-app", Layer::Persistence),
+            ("deepref-worker", Layer::Worker),
+            ("deepref-documents", Layer::Adapter),
+        ] {
+            assert!(
+                is_forbidden_external_dependency(name, layer, "async-nats", true),
+                "{name}"
+            );
         }
     }
 

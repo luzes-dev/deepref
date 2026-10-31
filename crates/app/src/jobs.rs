@@ -146,6 +146,25 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
     Ok(recovered.len() as u64)
 }
 
+/// Targeted lease recovery for a delivered hint. Uses the same persisted
+/// backoff and attempt budget as the reconciliation recovery above, under the
+/// caller's job row lock; an old hint ACKs only after this transaction commits.
+pub(crate) async fn recover_expired_job(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> anyhow::Result<bool> {
+    let kinds = JobKind::known_kinds();
+    sqlx::query("SELECT set_config('deepref.job_kinds',$1,true)")
+        .bind(kinds.join(","))
+        .execute(&mut **tx)
+        .await?;
+    Ok(sqlx::query("UPDATE jobs SET state=CASE WHEN attempts>=max_attempts THEN 'dead' ELSE 'queued' END,
+        last_error='lease expired',available_at=now()+least(30*power(2,greatest(attempts-1,0)),900)*interval '1 second',
+        lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL
+        WHERE id=$1 AND state='running' AND leased_until<now() AND kind=ANY($2)")
+        .bind(id).bind(&kinds).execute(&mut **tx).await?.rows_affected()==1)
+}
+
 /// Claim up to `limit` eligible jobs in `pools` (empty = every
 /// workload class) in one statement. This is the claim/fence authority: each
 /// returned job carries a monotonic claim identity for `renew`, `complete`,
@@ -221,7 +240,7 @@ pub async fn claim_job(
     Ok(claim_jobs(pool, owner, lease, &[], 1).await?.pop())
 }
 
-fn row_job(row: &PgRow) -> anyhow::Result<ClaimedJob> {
+pub(crate) fn row_job(row: &PgRow) -> anyhow::Result<ClaimedJob> {
     let id: Uuid = row.try_get("id")?;
     let kind: String = row.try_get("kind")?;
     let scope: String = row.try_get("scope")?;

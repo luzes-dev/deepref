@@ -132,6 +132,9 @@ jobs:
       - name: Require Valkey contracts
         continue-on-error: true
         run: python3 scripts/ci/diagnose.py run-check integration.valkey
+      - name: Probe required JetStream contracts
+        continue-on-error: true
+        run: python3 scripts/ci/diagnose.py run-check integration.nats
       - name: Gate integration
         if: always()
         run: python3 scripts/ci/diagnose.py gate integration

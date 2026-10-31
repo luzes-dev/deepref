@@ -8,6 +8,7 @@ mod environment;
 mod error;
 mod integrations;
 mod listen;
+mod nats;
 mod origin;
 mod pdf;
 mod polar;
@@ -37,6 +38,7 @@ pub use environment::{APP_ENV, Environment, load_development_dotenv_files};
 pub use error::ConfigError;
 pub use integrations::{IntegrationsConfig, OpenAlexCorpus};
 pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, ListenConfig};
+pub use nats::{NatsConfig, WorkTransportConfig};
 pub use origin::{DEFAULT_DEVELOPMENT_PUBLIC_ORIGIN, PUBLIC_ORIGIN, PublicOrigin};
 pub use pdf::PdfConfig;
 pub use polar::{PolarConfig, PolarServer};
@@ -71,6 +73,7 @@ pub struct RuntimeConfig {
     pub integrations: IntegrationsConfig,
     pub usage_export: UsageExportConfig,
     pub valkey: Option<ValkeyConfig>,
+    pub work_transport: WorkTransportConfig,
 }
 
 impl RuntimeConfig {
@@ -112,6 +115,7 @@ impl RuntimeConfig {
             integrations: IntegrationsConfig::from_source(get)?,
             usage_export: UsageExportConfig::from_source(environment, get)?,
             valkey: ValkeyConfig::from_source(environment, get)?,
+            work_transport: WorkTransportConfig::from_source(environment, get)?,
             environment,
         })
     }
