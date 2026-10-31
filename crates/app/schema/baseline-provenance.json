@@ -1,0 +1,22 @@
+{
+  "source_commit": "8d1ab733c6c1c11fa545bd82dd8a39b0eee18083",
+  "source_migrations": 149,
+  "reset_reason": "Unshipped pre-production database; new empty databases only",
+  "baseline_sha256": "ed65b1adaad590ddafd511dddde8288ce717daf6af9d1918e8266aab8978bbe9",
+  "postgres_image": "pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d",
+  "postgres_version": "17.11",
+  "comparison": {
+    "schema_functions_triggers_acl_exact": true,
+    "constraints_equivalent": true,
+    "dump_parser_normalization": "only api_keys_scopes_check AND-association parentheses; no OR/NOT; all other bytes exact",
+    "required_seed_rows_equivalent": true,
+    "creation_timestamps_dynamic": true,
+    "UTC_current_month_platform_bucket": true,
+    "migration_registry": "1|t",
+    "old_migration_count": 149,
+    "baseline_migration_count": 1
+  },
+  "named_role_provisioning_performed": false,
+  "rollouts_activated": false,
+  "production_or_existing_database_modified": false
+}

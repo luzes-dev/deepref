@@ -1,9 +1,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-//! Audit CHECK snapshots must preserve both the released AI contracts and 11B.
+//! The current audit schema accepts closed AI/security metadata and rejects extra fields.
 
 use deepref_app::MIGRATOR;
 use serde_json::{Value, json};
-use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 async fn empty_database() -> Option<PgPool> {
@@ -220,39 +220,6 @@ async fn fresh_database_accepts_ai_and_security_audit_without_loosening_metadata
     };
     MIGRATOR.run(&pool).await.expect("fresh migrations");
     let principal = user(&pool).await;
-    ai_events(&pool, principal).await;
-    security_events_and_rejections(&pool, principal).await;
-}
-
-#[tokio::test]
-async fn current_main_with_ai_audit_rows_upgrades_to_security_audit() {
-    let Some(pool) = empty_database().await else {
-        return;
-    };
-    // Exactly the released migration set through 0140, excluding unmerged 11B.
-    Migrator::with_migrations(
-        MIGRATOR
-            .iter()
-            .filter(|m| !(111..=117).contains(&m.version) && m.version <= 140)
-            .cloned()
-            .collect(),
-    )
-    .run(&pool)
-    .await
-    .expect("current main migrations");
-    let principal = user(&pool).await;
-    let existing_ids = ai_events(&pool, principal).await;
-    MIGRATOR
-        .run(&pool)
-        .await
-        .expect("upgrade with existing AI audit rows");
-    let retained: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM admin_audit_events WHERE id=ANY($1)")
-            .bind(&existing_ids)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(usize::try_from(retained).unwrap(), existing_ids.len());
     ai_events(&pool, principal).await;
     security_events_and_rejections(&pool, principal).await;
 }

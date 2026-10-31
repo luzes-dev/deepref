@@ -219,17 +219,6 @@ fn reservation_and_settlement_use_each_captured_token_rate() {
     ));
 }
 
-#[test]
-fn concurrent_index_migrations_are_marked_no_transaction() {
-    for version in [123, 125, 126, 131] {
-        let index_migration = deepref_app::MIGRATOR
-            .iter()
-            .find(|migration| migration.version == version)
-            .expect("each concurrent reservation index has its own migration");
-        assert!(index_migration.no_tx, "migration {version}");
-    }
-}
-
 async fn bucket(
     pool: &PgPool,
     kind: &str,

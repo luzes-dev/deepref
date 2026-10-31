@@ -15,6 +15,6 @@ fn claims_and_doi_leases_have_owner_expiry_and_attempts() {
         "completed_at",
         "heartbeat_at",
     ] {
-        assert!(support::DURABILITY_MIGRATION.contains(field));
+        assert!(support::BASELINE_SCHEMA.contains(field));
     }
 }

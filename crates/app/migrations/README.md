@@ -1,42 +1,29 @@
 # Migrations
 
-SQLx applies these files in version order and records a SHA-384 checksum of
-each file's full text in `_sqlx_migrations`.
+`0001_baseline.sql` is the fresh-database baseline for the pre-production
+application. It replaces the 149 unshipped migrations present at commit
+`8d1ab733c6c1c11fa545bd82dd8a39b0eee18083`.
 
-**An applied migration file is immutable.** sqlx re-hashes the file on every
-`Migrator::run` and fails with `MigrateError::VersionMismatch` if a single
-byte changed — comments and whitespace included. Change the schema with a new
-numbered migration; never edit an existing one.
+The baseline contains the final schema, functions, triggers, indexes, constraints,
+PUBLIC privilege restrictions and required seed rows. Seed creation timestamps
+and the platform usage bucket's UTC month are evaluated when it runs. Operational
+rollout controls remain inactive; creating a database does not attest a fleet
+drain or activate privacy, object-key or commercial usage features.
 
-- File name: `NNNN_snake_case_description.sql`, four-digit version prefix.
-- One logical change per migration. Header comments describe the change
-  itself, not the review or change series it was authored under.
-- Header comments declare `-- phase: expand` or `-- phase: contract`; a contract
-  migration also names `-- requires-release-out-of-service: <release>`.
-- A migration that has shipped anywhere may only be rewritten after every
-  database that applied it is dropped and recreated — including the
-  `deepref_test_template` database used by
-  `deepref_app::test_isolation`.
+This is a reset boundary, not an upgrade migration. A database that applied the
+old chain must be replaced by a new empty database. Do not clear its
+`_sqlx_migrations` table or run the baseline over its existing objects. Existing
+development data must be backed up or explicitly discarded by its owner. See the
+[reset procedure](../../../docs/database-baseline-reset.md).
 
-## DOI acquisition plane retirement
+SQLx applies files in version order and stores SHA-384 checksums in
+`_sqlx_migrations`. Once this baseline is adopted, applied migration files are
+immutable. Add future changes as `0002_description.sql`, `0003_description.sql`,
+and so on, with `-- phase: expand` or `-- phase: contract` headers. Contract
+migrations must name the release that must be out of service.
 
-Migrations 0080–0081 are an offline expand/backfill/contract cutover. Stop API
-producers and all workers before applying them, then deploy the canonical
-acquisition API and worker together. Do not run a legacy worker against the new
-schema. The migrations preserve report UUIDs through identifier mappings, run
-IDs and historical depth, every DOI item, cache leases, unresolved references,
-and existing job IDs/dedupe/queue leases. Unmapped pending event claims and
-ambiguous DOI-alias citation provenance fail migration instead of losing work.
-
-The unshipped 0070 migration preserves preexisting run depths above three with
-private nullable `historical_max_depth` provenance. New ordinary inserts and
-public DOI inputs remain bounded to 0–3; active settings/project defaults are
-strictly bounded. Never populate that marker from user input.
-
-`acquisition_runs` / `acquisition_items` own DOI progress; `report_fetch_state`
-owns reusable provider success independently of item failures. `works` and
-fetched provider facts remain metadata caches, not project graph authority.
-Project `metric_requested_revision` is the request counter; projection
-revision/watermark describe completed output. Legacy ingestion routes, importer,
-DOI graph/event tables and the old metric function are removed without views.
-
+The retired SQL remains in Git history. Historical upgrade-only tests were
+retired with this reset; current application and database-contract tests remain.
+The small resources under `crates/app/schema/role_contracts` and
+`crates/review/schema-contracts` are verification/provenance inputs, not another
+executable migration chain.
