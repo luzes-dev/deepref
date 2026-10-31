@@ -180,3 +180,99 @@ pub fn commercial_review_required(event_type: &str) -> bool {
         || event_type.starts_with("dispute.")
         || event_type.starts_with("credit.")
 }
+
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DodoUsageEvent {
+    pub customer_id: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DodoEventRecord {
+    pub business_id: String,
+    pub customer_id: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub timestamp: String,
+    #[serde(default)]
+    pub metadata: Option<BTreeMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DodoIngestOutcome {
+    Accepted,
+    Conflict,
+    Refused(String),
+    Ambiguous,
+}
+
+impl DodoEventRecord {
+    /// Compares the complete canonical wire payload against the expected event.
+    /// Returns true if and only if business_id, customer_id, event_id, event_name,
+    /// timestamp (the exact parsed instant), and all metadata keys/values
+    /// are identical.
+    pub fn matches_canonical(&self, expected: &DodoUsageEvent, expected_business_id: &str) -> bool {
+        if self.business_id != expected_business_id {
+            return false;
+        }
+        if self.customer_id != expected.customer_id {
+            return false;
+        }
+        if self.event_id != expected.event_id {
+            return false;
+        }
+        if self.event_name != expected.event_name {
+            return false;
+        }
+        match (
+            DateTime::parse_from_rfc3339(&self.timestamp),
+            DateTime::parse_from_rfc3339(&expected.timestamp),
+        ) {
+            (Ok(rec_ts), Ok(exp_ts)) => {
+                if rec_ts != exp_ts {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        let empty_map = BTreeMap::new();
+        let self_meta = self.metadata.as_ref().unwrap_or(&empty_map);
+        let exp_meta = expected.metadata.as_ref().unwrap_or(&empty_map);
+        self_meta == exp_meta
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageEnvironment {
+    Test,
+    Live,
+}
+
+impl UsageEnvironment {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Test => "test_mode",
+            Self::Live => "live_mode",
+        }
+    }
+}
+
+pub trait BillingUsageProvider: Send + Sync {
+    fn usage_environment(&self) -> UsageEnvironment;
+    fn usage_namespace(&self) -> &str;
+    fn business_id(&self) -> &str;
+    fn ingest_usage_event<'a>(
+        &'a self,
+        event: DodoUsageEvent,
+    ) -> BillingFuture<'a, DodoIngestOutcome>;
+    fn lookup_usage_event<'a>(
+        &'a self,
+        event_id: &'a str,
+    ) -> BillingFuture<'a, Option<DodoEventRecord>>;
+}

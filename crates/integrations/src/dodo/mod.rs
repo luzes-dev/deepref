@@ -63,7 +63,7 @@ impl DodoBilling {
             req = req.json(&payload);
         }
         // No automatic POST retries: no documented endpoint idempotency guarantee.
-        let mut response = req.send().await.map_err(|_| {
+        let response = req.send().await.map_err(|_| {
             if post {
                 BillingError::Ambiguous
             } else {
@@ -83,6 +83,13 @@ impl DodoBilling {
                 BillingError::Refused
             });
         }
+        Self::read_json(response, post).await
+    }
+
+    async fn read_json<T: DeserializeOwned>(
+        mut response: reqwest::Response,
+        post: bool,
+    ) -> Result<T, BillingError> {
         if response
             .content_length()
             .is_some_and(|n| n > MAX_RESPONSE as u64)
@@ -117,6 +124,93 @@ impl DodoBilling {
                 BillingError::Contract
             }
         })
+    }
+
+    pub fn business_id(&self) -> &str {
+        &self.config.business_id
+    }
+
+    pub async fn ingest_usage_event(
+        &self,
+        event: DodoUsageEvent,
+    ) -> Result<DodoIngestOutcome, BillingError> {
+        self.ingest_usage_event_internal(event).await
+    }
+
+    pub async fn lookup_usage_event(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<DodoEventRecord>, BillingError> {
+        self.lookup_usage_event_internal(event_id).await
+    }
+
+    async fn ingest_usage_event_internal(
+        &self,
+        event: DodoUsageEvent,
+    ) -> Result<DodoIngestOutcome, BillingError> {
+        let path = "/events/ingest";
+        let req = self
+            .client
+            .request(Method::POST, format!("{}{path}", self.origin))
+            .bearer_auth(self.config.token())
+            .json(&serde_json::json!({
+                "events": [event]
+            }));
+        let response = match req.send().await {
+            Ok(res) => res,
+            Err(_) => return Ok(DodoIngestOutcome::Ambiguous),
+        };
+        let status = response.status();
+        if status.is_success() {
+            #[derive(Deserialize)]
+            struct IngestResponse {
+                ingested_count: usize,
+            }
+            let ingest_res: IngestResponse = match Self::read_json(response, true).await {
+                Ok(value) => value,
+                Err(_) => return Ok(DodoIngestOutcome::Ambiguous),
+            };
+            if ingest_res.ingested_count >= 1 {
+                return Ok(DodoIngestOutcome::Accepted);
+            }
+            return Ok(DodoIngestOutcome::Ambiguous);
+        }
+        if status.as_u16() == 409 {
+            return Ok(DodoIngestOutcome::Conflict);
+        }
+        if status.is_server_error() || status.as_u16() == 429 {
+            return Ok(DodoIngestOutcome::Ambiguous);
+        }
+        // Refusal bodies may echo PII, credentials or capability links. They
+        // are deliberately discarded, including on oversized error responses.
+        Ok(DodoIngestOutcome::Refused(
+            "provider refused usage event".into(),
+        ))
+    }
+
+    async fn lookup_usage_event_internal(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<DodoEventRecord>, BillingError> {
+        let path = format!("/events/{event_id}");
+        let req = self
+            .client
+            .request(Method::GET, format!("{}{path}", self.origin))
+            .bearer_auth(self.config.token());
+        let response = req.send().await.map_err(|_| BillingError::Unavailable)?;
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(
+                if response.status().is_server_error() || response.status().as_u16() == 429 {
+                    BillingError::Unavailable
+                } else {
+                    BillingError::Refused
+                },
+            );
+        }
+        Self::read_json(response, false).await.map(Some)
     }
 
     fn return_url(&self, path: &str) -> Result<String, BillingError> {
@@ -445,3 +539,33 @@ fn observation(
 
 #[cfg(test)]
 mod tests;
+
+impl BillingUsageProvider for DodoBilling {
+    fn usage_environment(&self) -> UsageEnvironment {
+        match self.config.mode {
+            deepref_config::DodoMode::Test => UsageEnvironment::Test,
+            deepref_config::DodoMode::Live => UsageEnvironment::Live,
+        }
+    }
+    fn usage_namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    fn business_id(&self) -> &str {
+        &self.config.business_id
+    }
+
+    fn ingest_usage_event<'a>(
+        &'a self,
+        event: DodoUsageEvent,
+    ) -> BillingFuture<'a, DodoIngestOutcome> {
+        Box::pin(self.ingest_usage_event_internal(event))
+    }
+
+    fn lookup_usage_event<'a>(
+        &'a self,
+        event_id: &'a str,
+    ) -> BillingFuture<'a, Option<DodoEventRecord>> {
+        Box::pin(self.lookup_usage_event_internal(event_id))
+    }
+}
