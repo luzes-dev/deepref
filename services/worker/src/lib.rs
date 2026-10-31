@@ -229,6 +229,13 @@ pub async fn run_with_shutdown(
         .max_lifetime(Some(database.max_lifetime))
         .connect(database.url())
         .await?;
+    if !config.runtime.environment.is_development() {
+        deepref_app::database_roles::verify_database_role(
+            &pool,
+            deepref_app::database_roles::DatabaseRolePurpose::Runtime,
+        )
+        .await?;
+    }
     let control_pool = lease_control_pool(&pool);
     // Validate the reserved connection at boot rather than discovering a
     // missing database connection allowance after consequential work starts.
@@ -242,10 +249,12 @@ pub async fn run_with_shutdown(
     let store = PostgresDurableExecutionStore {
         pool: control_pool.clone(),
     };
+    let mut transport_readiness = None;
     let broker = match &config.runtime.work_transport {
         deepref_config::WorkTransportConfig::Postgres => None,
         deepref_config::WorkTransportConfig::JetStream(settings) => {
             let observer = Arc::new(transport_metrics::RuntimeTransportObserver::default());
+            transport_readiness = Some(observer.readiness());
             let broker = deepref_integrations::jetstream::JetStream::connect(settings.clone())
                 .await?
                 .with_observer(observer);
@@ -420,12 +429,13 @@ pub async fn run_with_shutdown(
             )
         })
         .collect::<Vec<_>>();
-    let heartbeat_task = tokio::spawn(heartbeat::run(
+    let heartbeat_task = tokio::spawn(heartbeat::run_with_transport(
         control_pool.clone(),
         owner.clone(),
         heartbeat::HEARTBEAT_INTERVAL,
         heartbeat_signal,
         pool_capacities,
+        transport_readiness,
     ));
     // Sampling is opt-in with the configured OTLP pipeline; no collector
     // means no additional operational queries on the application database.
@@ -1275,3 +1285,5 @@ mod lease_deadline_tests {
         );
     }
 }
+
+pub mod transport_operator;

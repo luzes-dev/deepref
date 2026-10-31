@@ -33,6 +33,8 @@ pub enum Command {
     Accounts(AccountsCommand),
     AiUsage(AiUsageCommand),
     Projection(ProjectionCommand),
+    Transport(deepref_worker::transport_operator::TransportOperatorCommand),
+    DatabaseRoles(crate::database_operator::DatabaseOperatorCommand),
     PrintOpenApi,
 }
 
@@ -155,6 +157,12 @@ impl Command {
                 pools: Self::all_pools(),
             }),
             [command] if command == "migrate" => Ok(Self::Migrate),
+            [command, rest @ ..] if command == "database-roles" => Ok(Self::DatabaseRoles(
+                crate::database_operator::DatabaseOperatorCommand::parse(rest)?,
+            )),
+            [command, rest @ ..] if command == "transport" => Ok(Self::Transport(
+                deepref_worker::transport_operator::TransportOperatorCommand::parse(rest)?,
+            )),
             [command, phase, flag, attestation]
                 if command == "workflow-storage"
                     && flag == "--confirm-drained"
@@ -566,7 +574,7 @@ impl Command {
                 Ok(Self::Audit(AuditCommand::Query(params)))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|projection status <project-uuid>|projection rebuild <project-uuid>|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
+                "usage: deepref-server [database-roles check <runtime|migration|maintenance>|database-roles provision --runtime-login <role> --migration-login <role> --maintenance-login <role>|transport terminal-status [--after <sequence>] [--limit <1..100>]|transport recover-terminal --advisory <sequence>|serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|projection status <project-uuid>|projection rebuild <project-uuid>|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
             ),
         }
     }

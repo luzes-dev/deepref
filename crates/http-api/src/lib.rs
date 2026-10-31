@@ -1,3 +1,4 @@
+pub use deepref_app::database_roles::DatabaseRolePurpose;
 pub mod auth;
 pub mod authz;
 pub mod config;
@@ -19,7 +20,11 @@ use crate::{config::ApiConfig, state::AppState};
 const DEFAULT_USAGE_EXPORT_REPLAY_LIMIT: i64 = 10_000;
 
 pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
-    let pool = database_pool(config).await?;
+    let pool = database_pool_for(
+        config,
+        deepref_app::database_roles::DatabaseRolePurpose::Migration,
+    )
+    .await?;
     deepref_app::migrate(&pool).await?;
     tracing::info!("database migrations completed");
     Ok(())
@@ -166,9 +171,16 @@ pub async fn audit_query(config: &ApiConfig, params: AuditQueryParams) -> anyhow
 /// and security rows, 5 years for the deletion-proof completion record
 /// (BUSINESS_DECISIONS). With `dry_run` nothing is deleted.
 pub async fn audit_purge(config: &ApiConfig, dry_run: bool) -> anyhow::Result<String> {
-    let pool = database_pool(config).await?;
+    let pool = database_pool_for(
+        config,
+        deepref_app::database_roles::DatabaseRolePurpose::Maintenance,
+    )
+    .await?;
     let report = deepref_app::audit_admin::purge_admin_audit(&pool, dry_run, None).await?;
-    Ok(serde_json::to_string_pretty(&report)?)
+    let remaining = deepref_app::audit_admin::remaining_retention_eligible(&pool).await?;
+    let mut output = serde_json::to_value(report)?;
+    output["remaining_eligible"] = serde_json::Value::Bool(remaining);
+    Ok(serde_json::to_string_pretty(&output)?)
 }
 
 /// Completes every account deletion whose 30-day window has passed, and
@@ -550,6 +562,7 @@ pub async fn serve_with_shutdown(
         "API and worker workflow feature configuration must agree"
     );
     let mut state = AppState::new(pool.clone())
+        .with_work_transport(&config.runtime.work_transport)
         .with_document_store(document_store)
         .with_smtp(config.runtime.smtp.clone())
         .with_workflow_config(config.runtime.workflow.clone())
@@ -706,6 +719,33 @@ fn price_book(config: &deepref_config::AiProviderConfig) -> deepref_ai::PriceBoo
 }
 
 async fn database_pool(config: &ApiConfig) -> anyhow::Result<PgPool> {
+    database_pool_for(
+        config,
+        deepref_app::database_roles::DatabaseRolePurpose::Runtime,
+    )
+    .await
+}
+
+async fn database_pool_for(
+    config: &ApiConfig,
+    purpose: deepref_app::database_roles::DatabaseRolePurpose,
+) -> anyhow::Result<PgPool> {
+    let pool = unchecked_database_pool(
+        config,
+        purpose == deepref_app::database_roles::DatabaseRolePurpose::Migration
+            && !config.runtime.environment.is_development(),
+    )
+    .await?;
+    if !config.runtime.environment.is_development() {
+        deepref_app::database_roles::verify_database_role(&pool, purpose).await?;
+    }
+    Ok(pool)
+}
+
+async fn unchecked_database_pool(
+    config: &ApiConfig,
+    migration_role: bool,
+) -> anyhow::Result<PgPool> {
     let database = &config.runtime.database;
     Ok(PgPoolOptions::new()
         .min_connections(database.pool_min)
@@ -713,8 +753,45 @@ async fn database_pool(config: &ApiConfig) -> anyhow::Result<PgPool> {
         .acquire_timeout(database.acquire_timeout)
         .idle_timeout(Some(database.idle_timeout))
         .max_lifetime(Some(database.max_lifetime))
+        .after_connect(move |connection, _| {
+            Box::pin(async move {
+                if migration_role {
+                    sqlx::query("SET ROLE deepref_migration_owner")
+                        .execute(connection)
+                        .await?;
+                }
+                Ok(())
+            })
+        })
         .connect(database.url())
         .await?)
+}
+
+/// Explicit administrator action, separate from runtime and migration startup.
+pub async fn provision_database_roles(
+    config: &ApiConfig,
+    runtime: &str,
+    migration: &str,
+    maintenance: &str,
+) -> anyhow::Result<String> {
+    let pool = unchecked_database_pool(config, false).await?;
+    deepref_app::database_roles::provision_database_roles(&pool, runtime, migration, maintenance)
+        .await?;
+    Ok(serde_json::json!({"contract_active":true,"runtime":"deepref_runtime","migration":"deepref_migration_owner","maintenance":"deepref_maintenance"}).to_string())
+}
+
+pub async fn check_database_role(
+    config: &ApiConfig,
+    purpose: deepref_app::database_roles::DatabaseRolePurpose,
+) -> anyhow::Result<String> {
+    let pool = unchecked_database_pool(
+        config,
+        purpose == deepref_app::database_roles::DatabaseRolePurpose::Migration,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(
+        &deepref_app::database_roles::verify_database_role(&pool, purpose).await?,
+    )?)
 }
 
 async fn shutdown_signal() {

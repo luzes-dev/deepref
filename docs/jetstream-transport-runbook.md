@@ -109,23 +109,59 @@ recovery of the missing diagnostic evidence is not guaranteed.
 
 ### Recover an exhausted sequence
 
-1. Restore PostgreSQL/NATS availability and storage capacity. In the correct
-   scoped NATS account, inspect `nats stream view <stream>_TERMINAL` and identify
-   `stream`, `consumer`, `stream_seq` and `deliveries`. Inspect only metadata in
-   shared incident logs. `nats consumer info <stream> <consumer> --json` confirms
-   the exhausted durable; it does not authorize deleting it or resetting ACKs.
-2. Before retention expires, an approved maintenance process calls
-   `JetStream::retained_sequence(sequence)`. Retrieval failure is an actionable
-   missing/expired-evidence error. `Some(envelope)` is validated wire data;
-   `None` means malformed retained content. Inspection never logs the body.
-3. Call
-   `deepref_worker::jetstream_transport::recover_terminal_sequence(pool, broker,
-physical_consumer_name, sequence)` with that exact advisory identity. It
-   checks the retained sequence, idempotently commits DB evidence, then publishes
-   its DLQ metadata using the committed consumer/reason/count. Rerun the same
-   call after a failed step. It does not retry business handlers, reset budgets,
-   ACK an exhausted delivery, or remove a shared stream message. Malformed
-   sequences stop here; retain them under the controlled stream retention.
+1. Restore PostgreSQL/NATS availability and capacity. With explicitly scoped
+   operator credentials and `WORK_TRANSPORT=jetstream`, run:
+
+   ```bash
+   deepref-server transport terminal-status --limit 25
+   deepref-server transport terminal-status --after <next_after> --limit 25
+   ```
+
+   This read-only command never provisions streams or consumers. It reports
+   retained first/last advisory sequence, cursor, count and whether this bounded
+   page reached the observed end. An expired/ahead cursor, missing retained
+   sequence or malformed advisory fails explicitly. Empty retention is not proof
+   that no failures occurred. The whole operation has a 30-second deadline;
+   limit is 1..100. No message body is printed.
+
+2. Match the retained metadata to the incident and use its **advisory sequence**:
+
+   ```bash
+   deepref-server transport recover-terminal --advisory <advisory_sequence>
+   ```
+
+   The command loads that exact retained server advisory, requires this stream's
+   finite-five contract and exact advisory subject, then resolves its `consumer`
+   and original `stream_seq`. Before any DB insertion, a read-only consumer INFO
+   request verifies the existing exact events/work filter and finite-five policy.
+   The retained original subject must match that scope; a decodable envelope
+   must also match its work pool or event route. Recovery never creates a missing
+   consumer. Foreign streams, malformed names, unexpected delivery budgets and
+   missing
+   advisory/work retention are refused. See the [NATS MaxDeliver advisory
+   contract](https://beta-docs.nats.io/reference/2.14/jetstream/advisory/max-deliver).
+
+   If the durable consumer was deleted, default recovery refuses. Inspect
+   retained incident/release evidence, then explicitly declare its historical
+   scope with `--historical-scope events` or `--historical-scope work:documents`
+   (replace documents with the recorded pool). This fallback is allowed only
+   for a broker-confirmed missing consumer, never outages or permission errors;
+   it still checks advisory and retained work routing. Output marks this as
+   `operator_declared_historical`, not a verified historical policy. A live
+   consumer reports `live_consumer`; supplying a historical scope for one is
+   refused. Metadata-only status does not require a live consumer. Record the
+   scope declaration with the incident; it confers no business retry authority.
+
+3. Recovery idempotently commits `transport_dead_letters` evidence before the
+   diagnostic DLQ copy, retaining an already committed consumer/reason/count.
+   Rerun the same command after a partial failure. Its result explicitly states
+   `business_replayed=false` and `delivery_budget_reset=false`. It does not create
+   a sixth delivery, ACK an exhausted delivery, remove the shared message, run a
+   handler, or change business attempts. This is diagnostic evidence under the
+   database/operator credential, not a user-attributed financial adjustment.
+   After timeout inspect persisted evidence before retrying; no all-or-nothing
+   cross-system commit is promised. Retention/quota loss can still require manual
+   incident investigation; this command cannot reconstruct absent evidence.
 4. For a valid envelope with missing business receipts, inspect its authoritative
    outbox/job state and business budget. For a pending generic event, invoke
    `replay_publication(event_id)` and let the ordinary relay publish the new epoch.
@@ -141,9 +177,9 @@ physical_consumer_name, sequence)` with that exact advisory identity. It
    ACK subject, delete a durable, replay malformed bytes indefinitely, reset
    attempts, or delete the shared original to clear an incident.
 
-The procedure requires a maintenance context linked against these explicit APIs;
-this slice adds no public/admin HTTP endpoint or credential-handling CLI. Real
-service tests cover fifth-delivery DB and full-DLQ failures, absence of a sixth
+The operator CLI uses the configured scoped runtime database credential and
+broker account; there is no public/admin HTTP recovery endpoint. Authored real
+service tests exercise fifth-delivery DB and full-DLQ failures, absence of a sixth
 delivery, retained advisory evidence and idempotent explicit diagnostic recovery.
 
 Transport progress heartbeats prevent healthy slow handlers from exhausting

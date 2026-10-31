@@ -215,22 +215,22 @@ BUSINESS_DECISIONS fixes retention:
 Archival is not needed: the rows are the record, and the purge removes them
 when their retention ends.
 
-**Mechanism.** The append-only trigger (rewritten in migration 0112) honours
-a transaction-local setting, `SET LOCAL deepref.audit_purge = 'on'`, and only
-for rows already past their retention cutoff — 6 months, or 5 years for
-`account.deletion_completed`. Everything else is still refused: every
-UPDATE, every TRUNCATE, every DELETE outside the purge, and every purge
-attempt at a row inside its window. Because the setting is `SET LOCAL` it
-cannot leak past its transaction, and because the cutoff is re-checked row by
-row in the trigger, no caller with the setting can remove retained history.
+**Mechanism.** Migration 0188 separates runtime, migration-owner and
+maintenance credentials. The maintenance role can execute the fixed
+`public.purge_retention_records(integer)` SECURITY DEFINER function and read
+only the retention columns needed for diagnostics. Runtime cannot invoke that
+function or directly delete audit/proof rows. The function uses
+`search_path=pg_catalog` and qualified relations; the append-only trigger
+requires its trusted owner, a transaction-local purge setting, and each row's
+retention cutoff. A caller-controlled setting alone grants no authority.
+UPDATE remains restricted to the separate authorized account-redaction path;
+TRUNCATE and attempts to remove retained history are refused.
 
-This was chosen over a SECURITY DEFINER purge function owned by the
-migration role because the purge must run from the same operator command and
-connection pool as everything else (there is no separate privileged role in
-the deployment), while the narrow gate gives the same guarantee that matters
-here: *retained rows are unremovable*. The trade-off is explicit: a caller
-who can open a transaction can delete rows that are already past retention —
-which is exactly what the purge is meant to do — and nothing else.
+Adoption is an explicit administrator action, followed by checks using all
+three actual LOGIN credentials. The repository's local tests do not establish
+production activation, credential rotation, old-process drain or scheduling.
+See [database-roles-runbook.md](database-roles-runbook.md) for activation,
+privilege drift checks and the bounded maintenance workflow.
 
 **Command and cadence.** Run daily (a cron entry or the platform scheduler),
 with a dry run first when the query is new:
@@ -240,8 +240,12 @@ deepref-server audit purge --dry-run   # report only
 deepref-server audit purge             # delete in batches of 1000
 ```
 
-Each batch is its own transaction; the command is safe to interrupt and rerun
-and prints a JSON report (`batches`, `audit_rows_purged`,
+Each call commits at most 32 audit batches and one batch each for sessions and
+fulfilled-deletion proofs
+in a single transaction with its audit summary. Repeat bounded calls while
+`remaining_eligible` is true; after an interrupted command inspect committed
+evidence before repeating. The command prints a JSON report (`batches`,
+`audit_rows_purged`,
 `fulfilled_deletion_rows_purged`, `session_rows_purged`). Every real run records `audit.purged`.
 
 ---

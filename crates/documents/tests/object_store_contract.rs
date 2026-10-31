@@ -8,6 +8,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 async fn contract(store: &DocumentStore) {
+    store
+        .check_read_health()
+        .await
+        .expect("actual backend read health probe");
     let workspace = Uuid::new_v4();
     let project = Uuid::new_v4();
     let key = ObjectKey::tenant_document(workspace, project, Uuid::new_v4());
@@ -95,4 +99,24 @@ async fn tls_s3_compatible_contract() {
         .build()
         .unwrap();
     contract(&DocumentStore::from_object_store(Arc::new(backend))).await;
+    let certificate =
+        std::fs::read(std::env::var("DEEPREF_S3_CONTRACT_CA").expect("fixture CA path")).unwrap();
+    let client = object_store::ClientOptions::new()
+        .with_root_certificate(object_store::Certificate::from_pem(&certificate).unwrap());
+    let missing_bucket = object_store::aws::AmazonS3Builder::new()
+        .with_endpoint(std::env::var("DEEPREF_S3_CONTRACT_ENDPOINT").unwrap())
+        .with_bucket_name(format!("absent-health-{}", Uuid::new_v4()))
+        .with_region("us-east-1")
+        .with_access_key_id("deepref-fixture")
+        .with_secret_access_key("deepref-local-fixture-only")
+        .with_client_options(client)
+        .build()
+        .unwrap();
+    assert!(
+        DocumentStore::from_object_store(Arc::new(missing_bucket))
+            .check_read_health()
+            .await
+            .is_err(),
+        "an absent bucket must never look healthy because HEAD returns 404"
+    );
 }

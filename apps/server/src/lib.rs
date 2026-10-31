@@ -3,6 +3,7 @@ use std::future::Future;
 use tokio::sync::watch;
 
 pub mod command;
+pub mod database_operator;
 
 pub use command::{
     AccountsCommand, AiUsageCommand, AiUsageResolutionCommand, AuditCommand, Command,
@@ -13,6 +14,16 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
     let source = deepref_config::ConfigSource::from_env();
     let get = |name: &str| source.get(name);
     match command {
+        Command::DatabaseRoles(action) => database_operator::run(action, &get).await,
+        Command::Transport(action) => {
+            let config =
+                deepref_config::RuntimeConfig::from_source("deepref-transport-operator", &get)?;
+            println!(
+                "{}",
+                deepref_worker::transport_operator::run(config, action).await?
+            );
+            Ok(())
+        }
         Command::Serve => {
             let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
             with_telemetry(
