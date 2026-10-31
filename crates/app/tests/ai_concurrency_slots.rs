@@ -1003,15 +1003,6 @@ async fn long_expired_rows_are_swept_and_recent_ones_are_kept() {
     assert_eq!(remaining, 2);
 }
 
-#[test]
-fn concurrent_index_migrations_are_marked_no_transaction() {
-    let index_migration = deepref_app::MIGRATOR
-        .iter()
-        .find(|migration| migration.version == 137)
-        .expect("the concurrent expiry index has its own migration");
-    assert!(index_migration.no_tx, "migration 137");
-}
-
 #[tokio::test]
 async fn an_expired_lease_cannot_be_resurrected_without_takeover() {
     let Some(pool) = database().await else {

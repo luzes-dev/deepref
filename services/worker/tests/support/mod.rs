@@ -4,5 +4,5 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
-pub const DURABILITY_MIGRATION: &str =
-    include_str!("../../../../crates/app/migrations/0004_ingestion_durability.sql");
+pub const BASELINE_SCHEMA: &str =
+    include_str!("../../../../crates/app/migrations/0001_baseline.sql");

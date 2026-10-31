@@ -8,13 +8,7 @@ mod support;
 
 #[test]
 fn durability_schema_supports_idempotent_repair() {
-    assert!(support::DURABILITY_MIGRATION.contains("work_event_id"));
-    assert!(
-        include_str!("../../../crates/app/migrations/0008_infrastructure_collapse.sql")
-            .contains("jobs_expired_running_idx")
-    );
-    assert!(
-        include_str!("../../../crates/app/migrations/0009_acquisition_runs.sql")
-            .contains("record_identifiers")
-    );
+    assert!(support::BASELINE_SCHEMA.contains("work_event_id"));
+    assert!(support::BASELINE_SCHEMA.contains("jobs_expired_running_idx"));
+    assert!(support::BASELINE_SCHEMA.contains("record_identifiers"));
 }

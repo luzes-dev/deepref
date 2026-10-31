@@ -235,13 +235,13 @@ pub(crate) const IMPLEMENTATION_BOUNDARY: &[BoundaryEntry] = &[
         reason: "AI-first eligibility, authority, inference and blinded routing policy",
     },
     BoundaryEntry {
-        path: "crates/app/migrations/0054_ai_first_cohorts.sql",
+        path: "crates/review/schema-contracts/ai_first_cohorts.sql",
         kind: Kind::File,
         presence: Presence::Required,
         reason: "AI-first eligibility, authority, inference and blinded routing policy",
     },
     BoundaryEntry {
-        path: "crates/app/migrations/0055_ai_first_blind_controls.sql",
+        path: "crates/review/schema-contracts/ai_first_blind_controls.sql",
         kind: Kind::File,
         presence: Presence::Required,
         reason: "AI-first blind audit read boundary",
@@ -295,7 +295,7 @@ pub(crate) const IMPLEMENTATION_BOUNDARY: &[BoundaryEntry] = &[
         reason: "second-reviewer activity blinding and exposure recording",
     },
     BoundaryEntry {
-        path: "crates/app/migrations/0052_ai_opinion_availability.sql",
+        path: "crates/review/schema-contracts/ai_opinion_availability.sql",
         kind: Kind::File,
         presence: Presence::Required,
         reason: "database availability policy and waiting-proposal blinding",
