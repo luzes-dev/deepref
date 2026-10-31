@@ -134,13 +134,13 @@ pub(super) async fn package(
     // Completion means the declared inventory was packaged, not that every
     // product table is exported. The manifest records that distinction.
     let manifest = serde_json::json!({
-        "version": 1, "user_id": user.as_uuid(), "generated_at": chrono::Utc::now(),
+        "version": 2, "user_id": user.as_uuid(), "generated_at": chrono::Utc::now(),
         "is_partial": true,
-        "partial_reasons": ["This export covers the named relational sections and original document/workflow files; other scientific derived state is excluded."],
+        "partial_reasons": ["This export covers the named scientific sections and original document/workflow files. Credentials, executable workflow state, raw provider envelopes and internal operational data are excluded."],
         "included_workspaces": inventory.workspaces,
         "json_sections": inventory.json_files.iter().map(|(name,_)|name).collect::<Vec<_>>(),
         "total_source_files": inventory.blobs.len(),
-        "exclusions": ["session cookies and access/refresh tokens", "WorkOS identity IDs", "API key secrets and verifiers", "raw connector/provider payloads", "administrative/security audit", "internal financial retention notes", "workflow secrets and executable workflow configuration", "derived document blocks, appraisal/extraction and review automation state", "non-owned workspaces"],
+        "exclusions": ["session cookies and access/refresh tokens", "WorkOS identity IDs", "API key secrets and verifiers", "raw connector/provider payloads", "administrative/security audit", "internal financial retention notes", "workflow secrets and executable workflow configuration", "reconstructable embeddings and graph caches", "workflow node input/output and trigger bodies", "internal execution errors and prepared model requests", "non-owned workspaces"],
         "limits": {"rows": super::collector::MAX_ROWS,"files":super::collector::MAX_FILES,"json_bytes":super::collector::MAX_JSON_BYTES,"source_bytes":super::collector::MAX_SOURCE_BYTES,"seconds":600}
     });
     archive.start_file("manifest.json", options)?;

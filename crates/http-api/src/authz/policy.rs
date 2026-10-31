@@ -343,6 +343,14 @@ pub static ROUTES: &[RouteRule] = &[
     authenticated(Verb::Get, "/me", "the caller reads their own profile"),
     tested(
         authenticated(
+            Verb::Get,
+            "/me/workspaces",
+            "human current membership discovery for account settings; actions recheck central PDP",
+        ),
+        "account_settings::only_current_memberships_and_pdp_capabilities_are_listed",
+    ),
+    tested(
+        authenticated(
             Verb::Delete,
             "/me/deletion-request",
             "the caller cancels their own pending account deletion",
