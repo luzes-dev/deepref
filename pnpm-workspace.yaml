@@ -5,7 +5,7 @@ packages:
 onlyBuiltDependencies:
   - esbuild
 allowBuilds:
-  '@parcel/watcher': false
+  "@parcel/watcher": false
   esbuild: true
   msw: true
   svelte-preprocess: false
@@ -13,28 +13,30 @@ allowBuilds:
 overrides:
   # Keep security-patched transitive overrides aligned with the dependency audit.
   cookie: ^0.7.2
-  '@sveltejs/kit>cookie': ^2.0.1
-  'msw>cookie': ^2.0.1
+  "@sveltejs/kit>cookie": ^2.0.1
+  "msw>cookie": ^2.0.1
   brace-expansion: ^5.0.11
   js-yaml: 4.3.2
   linkify-it: ^6.1.0
   markdown-it: ^15.0.3
+  minimatch: ^11.0.1
   fast-uri: ^3.1.9
   postcss: 8.5.23
-  qs: '>=6.16.0'
+  qs: ">=6.16.1"
   uuid: ^11.1.1
   devalue: ^5.9.3
   source-map-js: ^1.2.2
-  zod: '>=4.6.6'
-  undici: '>=8.12.2'
+  zod: ">=4.6.6"
+  undici: ">=8.12.2"
   # svelte-eslint-parser 1.9.0 loads the newest TypeScript reachable in the tree
   # (TS 7 via fallow-type-aware), whose JS API no longer exports NodeFlags, and
   # crashes parsing script-less .svelte files. Pin back until upstream guards it.
-  'svelte-eslint-parser@1.9.0': 1.8.1
+  "svelte-eslint-parser@1.9.0": 1.8.1
 
 minimumReleaseAgeExclude:
-  - '@tanstack/query-core@5.101.1'
-  - '@tanstack/svelte-query@6.1.35'
+  - "@tanstack/query-core@5.101.1"
+  - "@tanstack/svelte-query@6.1.35"
 
 patchedDependencies:
-  '@tanstack/svelte-store@0.12.2': patches/@tanstack__svelte-store@0.12.2.patch
+  "@tanstack/svelte-store@0.12.2": patches/@tanstack__svelte-store@0.12.2.patch
+  deepmerge@4.3.1: patches/deepmerge@4.3.1.patch
