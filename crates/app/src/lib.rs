@@ -42,6 +42,7 @@ pub mod outbox;
 mod persistence;
 mod pmid_import;
 mod prisma;
+pub mod privacy_erasure;
 mod project_audit;
 mod project_deletion;
 mod protocol;

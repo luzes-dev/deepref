@@ -1057,7 +1057,20 @@ async fn account_deletion_keeps_orphan_workspace_liability_recoverable() {
         complete_account_deletions(&pool, "test-deletion-digest-key", AuditRequest::default())
             .await
             .unwrap();
-    assert_eq!(report.completed, 1);
+    assert_eq!(report.logically_anonymized, 1);
+    assert_eq!(report.completed, 0);
+    assert_eq!(report.physically_pending, 1);
+    let fulfilled: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM fulfilled_account_deletions WHERE user_id=$1)",
+    )
+    .bind(owner.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !fulfilled,
+        "logical deletion preserves liabilities without claiming physical erasure"
+    );
     assert_eq!(report.workspaces_deleted, 1);
     let remains: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1)")
         .bind(workspace.as_uuid())
