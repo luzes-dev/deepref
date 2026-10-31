@@ -535,3 +535,263 @@ async fn semantic_metrics(pool: &PgPool, project: Uuid) -> Vec<(Uuid, i64, i64, 
     sqlx::query_as("SELECT report_id,total_citations,references_count,internal_citations,outbound_internal_references,rank_score FROM project_reports WHERE project_id=$1 ORDER BY report_id")
         .bind(project).fetch_all(pool).await.unwrap()
 }
+
+type Degrees = std::collections::BTreeMap<Uuid, (i64, i64)>;
+
+/// The authoritative answer, straight from canonical rows: members of the
+/// project and the per-member in/out degree over citations whose endpoints are
+/// both members. It shares no code with the projection writer.
+async fn canonical_degrees(pool: &PgPool, project: Uuid) -> Degrees {
+    let rows: Vec<(Uuid, i64, i64)> = sqlx::query_as(
+        "SELECT pr.report_id,
+           (SELECT count(*) FROM citations c JOIN project_reports s
+              ON s.project_id=c.project_id AND s.report_id=c.source_report_id
+            WHERE c.project_id=pr.project_id AND c.target_report_id=pr.report_id),
+           (SELECT count(*) FROM citations c JOIN project_reports t
+              ON t.project_id=c.project_id AND t.report_id=c.target_report_id
+            WHERE c.project_id=pr.project_id AND c.source_report_id=pr.report_id)
+         FROM project_reports pr WHERE pr.project_id=$1",
+    )
+    .bind(project)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    rows.into_iter().map(|(id, i, o)| (id, (i, o))).collect()
+}
+
+async fn canonical_edges(pool: &PgPool, project: Uuid) -> std::collections::BTreeSet<(Uuid, Uuid)> {
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT c.source_report_id, c.target_report_id FROM citations c
+         WHERE c.project_id=$1
+           AND EXISTS (SELECT 1 FROM project_reports p WHERE p.project_id=$1 AND p.report_id=c.source_report_id)
+           AND EXISTS (SELECT 1 FROM project_reports p WHERE p.project_id=$1 AND p.report_id=c.target_report_id)",
+    )
+    .bind(project)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    rows.into_iter().collect()
+}
+
+/// Projected degrees as both persisted and served by the strict read path.
+async fn projected_degrees(pool: &PgPool, project: Uuid) -> (Degrees, Degrees) {
+    let stored: Vec<(Uuid, i64, i64)> = sqlx::query_as(
+        "SELECT report_id, internal_citations, outbound_internal_references
+         FROM project_reports WHERE project_id=$1",
+    )
+    .bind(project)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    let (graph, _) = load_project_graph_strict(pool, project, GraphFieldSelection::all())
+        .await
+        .unwrap();
+    let served = graph
+        .nodes
+        .iter()
+        .map(|node| {
+            let metrics = node.metrics.as_ref().expect("metrics overlay selected");
+            (
+                node.report_id,
+                (
+                    metrics.internal_citations,
+                    metrics.outbound_internal_references,
+                ),
+            )
+        })
+        .collect();
+    (
+        stored.into_iter().map(|(id, i, o)| (id, (i, o))).collect(),
+        served,
+    )
+}
+
+async fn workspace_project(pool: &PgPool, name: &str) -> Uuid {
+    let workspace = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO workspaces (id, kind, name, slug) VALUES ($1, 'organization', $2, $3)",
+    )
+    .bind(workspace)
+    .bind(name)
+    .bind(format!("ws-{}", workspace.simple()))
+    .execute(pool)
+    .await
+    .unwrap();
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)")
+        .bind(project)
+        .bind(workspace)
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    project
+}
+
+#[tokio::test]
+async fn projection_equals_canonical_answer_and_never_leaks_across_workspaces() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    // Two tenants whose projects share the middle reports, so any query that
+    // forgets the project predicate would mix their citation graphs.
+    let alpha = workspace_project(&pool, "Alpha").await;
+    let beta = workspace_project(&pool, "Beta").await;
+    let reports: Vec<Uuid> = (0..12).map(|_| Uuid::new_v4()).collect();
+    for (index, id) in reports.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO reports (id, title, publication_year, total_citations, references_count, raw)
+             VALUES ($1, $2, $3, $4, 3, '{}'::jsonb)",
+        )
+        .bind(id)
+        .bind(format!("Report {index}"))
+        .bind(2000 + i32::try_from(index).unwrap())
+        .bind(i64::try_from(index * 7).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let members = [(alpha, &reports[0..8]), (beta, &reports[4..12])];
+    for (project, ids) in members {
+        for id in ids {
+            sqlx::query("INSERT INTO project_reports (project_id, report_id) VALUES ($1, $2)")
+                .bind(project)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+    // Deterministic pseudo-random edges over all reports, including edges to
+    // non-members (which the projection must ignore) and self-citations.
+    let mut seed: u64 = 0x5eed_cafe;
+    let mut next = |bound: usize| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        usize::try_from(seed >> 33).unwrap() % bound
+    };
+    for project in [alpha, beta] {
+        for _ in 0..40 {
+            let (source, target) = (reports[next(12)], reports[next(12)]);
+            sqlx::query(
+                "INSERT INTO citations (project_id, source_report_id, target_report_id)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            )
+            .bind(project)
+            .bind(source)
+            .bind(target)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    }
+    // Guarantee a shared report whose correct degree differs per tenant.
+    sqlx::query(
+        "INSERT INTO citations (project_id, source_report_id, target_report_id)
+         VALUES ($1,$2,$3),($1,$4,$3),($1,$5,$3) ON CONFLICT DO NOTHING",
+    )
+    .bind(alpha)
+    .bind(reports[0])
+    .bind(reports[5])
+    .bind(reports[1])
+    .bind(reports[2])
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM citations WHERE project_id=$1 AND target_report_id=$2")
+        .bind(beta)
+        .bind(reports[5])
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    recompute_project_metrics(&pool, alpha).await.unwrap();
+    // Projecting one tenant must not touch the other tenant's read model.
+    let beta_untouched: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM project_reports WHERE project_id=$1 AND metrics_computed_at IS NOT NULL",
+    )
+    .bind(beta)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(beta_untouched, 0);
+    assert_ne!(
+        get_projection_status(&pool, beta)
+            .await
+            .unwrap()
+            .map(|s| s.state),
+        Some(ProjectionState::Ready)
+    );
+    recompute_project_metrics(&pool, beta).await.unwrap();
+
+    for project in [alpha, beta] {
+        let expected = canonical_degrees(&pool, project).await;
+        let (stored, served) = projected_degrees(&pool, project).await;
+        assert_eq!(stored, expected, "persisted projection equals canonical");
+        assert_eq!(served, expected, "served projection equals canonical");
+        let (graph, status) = load_project_graph_strict(&pool, project, GraphFieldSelection::all())
+            .await
+            .unwrap();
+        assert_eq!(status.state, ProjectionState::Ready);
+        let edges: std::collections::BTreeSet<_> =
+            graph.edges.iter().map(|e| (e.source, e.target)).collect();
+        assert_eq!(edges, canonical_edges(&pool, project).await);
+    }
+    let alpha_degrees = canonical_degrees(&pool, alpha).await;
+    let beta_degrees = canonical_degrees(&pool, beta).await;
+    assert!(alpha_degrees[&reports[5]].0 >= 3);
+    assert_eq!(beta_degrees[&reports[5]].0, 0, "tenant edges do not leak");
+
+    // Repairing one tenant leaves the other tenant's projection as it was.
+    let beta_before = (
+        get_projection_status(&pool, beta).await.unwrap(),
+        semantic_metrics(&pool, beta).await,
+    );
+    rebuild_project_projection(&pool, alpha).await.unwrap();
+    assert_eq!(
+        get_projection_status(&pool, alpha)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ProjectionState::Rebuilding
+    );
+    assert_eq!(
+        (
+            get_projection_status(&pool, beta).await.unwrap(),
+            semantic_metrics(&pool, beta).await,
+        ),
+        beta_before
+    );
+    recompute_project_metrics(&pool, alpha).await.unwrap();
+    assert_eq!(projected_degrees(&pool, alpha).await.0, alpha_degrees);
+
+    // A canonical change in one tenant marks only that tenant stale.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("DELETE FROM citations WHERE project_id=$1 AND target_report_id=$2")
+        .bind(alpha)
+        .bind(reports[5])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    enqueue_metrics_recompute(&mut tx, alpha).await.unwrap();
+    tx.commit().await.unwrap();
+    let (_, alpha_status) = load_project_graph_strict(&pool, alpha, GraphFieldSelection::all())
+        .await
+        .unwrap();
+    assert_eq!(alpha_status.state, ProjectionState::Lagging);
+    assert_eq!(
+        get_projection_status(&pool, beta)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ProjectionState::Ready
+    );
+    recompute_project_metrics(&pool, alpha).await.unwrap();
+    assert_eq!(
+        projected_degrees(&pool, alpha).await.0,
+        canonical_degrees(&pool, alpha).await
+    );
+}
