@@ -20,6 +20,8 @@
 - [Release and migration runbook](release-and-migration-runbook.md)
 - [SLO incident runbook](slo-incident-runbook.md)
 - [Metrics pipeline and alert preparation](metrics-and-alerts-runbook.md)
+- [Local operations catalog, dashboard and delivery tests](operations-observability-runbook.md)
+- [Bounded local fault injection](operations-fault-injection-runbook.md)
 
 ## Architecture Decision Records
 
