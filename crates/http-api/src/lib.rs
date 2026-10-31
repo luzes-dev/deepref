@@ -5,6 +5,7 @@ pub mod error;
 mod host_guard;
 mod metrics;
 mod origin_guard;
+mod rate_limits;
 pub mod routes;
 pub mod state;
 
@@ -483,6 +484,19 @@ pub async fn serve_with_shutdown(
         ));
     }
 
+    if let Some(valkey) = &config.runtime.valkey {
+        match deepref_integrations::valkey::ValkeyRateAccelerator::from_config(valkey) {
+            Ok(accelerator) => {
+                state = state.with_rate_limiter(std::sync::Arc::new(
+                    deepref_app::rate_limits::PostgresRateLimiter::new(pool.clone())
+                        .with_accelerator(std::sync::Arc::new(accelerator)),
+                ));
+            }
+            Err(_) => tracing::warn!(
+                "Valkey configuration cannot initialize acceleration; using shared PostgreSQL ceiling"
+            ),
+        }
+    }
     if config.runtime.integrations.contact_email.is_empty() {
         tracing::warn!(
             "DEEPREF_CONTACT_EMAIL is not set; DOI imports, PubMed imports and open-access lookups will be refused"
