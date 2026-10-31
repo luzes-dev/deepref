@@ -44,6 +44,9 @@ struct Fake {
     gate: Gate,
     create_gate: Gate,
     link_gate: Gate,
+    /// 0 = cancelled, 1 = manual step required, 2 = provider unavailable.
+    cancel_mode: AtomicUsize,
+    cancel_calls: AtomicUsize,
 }
 impl Fake {
     fn new() -> Self {
@@ -55,6 +58,8 @@ impl Fake {
             gate: Gate::new(),
             create_gate: Gate::new(),
             link_gate: Gate::new(),
+            cancel_mode: AtomicUsize::new(0),
+            cancel_calls: AtomicUsize::new(0),
         }
     }
 }
@@ -147,6 +152,22 @@ impl BillingProvider for Fake {
             adverse: event_type.starts_with("dispute.") || event_type.starts_with("credit."),
             event_type,
             payload,
+        })
+    }
+    fn cancel_subscription<'a>(
+        &'a self,
+        customer: &'a CustomerReference,
+        subscription: &'a CustomerReference,
+    ) -> BillingFuture<'a, SubscriptionCancellation> {
+        Box::pin(async move {
+            assert_eq!(customer.expose(), "cus_fixture");
+            assert_eq!(subscription.expose(), "sub_fixture");
+            self.cancel_calls.fetch_add(1, Ordering::SeqCst);
+            match self.cancel_mode.load(Ordering::SeqCst) {
+                0 => Ok(SubscriptionCancellation::Cancelled),
+                1 => Ok(SubscriptionCancellation::ManualRequired),
+                _ => Err(BillingError::Unavailable),
+            }
         })
     }
 }
@@ -579,4 +600,324 @@ async fn workspace_deletion_preserves_original_restricted_closure_context() -> a
         "another tenant's mapping was changed"
     );
     Ok(())
+}
+
+async fn setup_wide() -> Option<(PgPool, UserId, WorkspaceId, Arc<Fake>, BillingService)> {
+    let pool = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 6).await?;
+    let (u, w) = seed(&pool).await;
+    let fake = Arc::new(Fake::new());
+    let service = BillingService::new(pool.clone(), fake.clone());
+    Some((pool, u, w, fake, service))
+}
+
+/// Provision, observe the fixture subscription, then delete the workspace.
+async fn detached(pool: &PgPool, service: &BillingService, u: UserId, w: WorkspaceId) -> Uuid {
+    provision(service, u, w).await;
+    service.reconcile_workspace(w).await.unwrap();
+    deepref_app::workspaces::delete_workspace(
+        pool,
+        u,
+        w,
+        deepref_app::identity::AuditRequest::default(),
+    )
+    .await
+    .unwrap();
+    sqlx::query_scalar("SELECT id FROM billing_accounts WHERE closure_workspace_id=$1")
+        .bind(w.as_uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn closure_state(pool: &PgPool, account: Uuid) -> Option<String> {
+    sqlx::query_scalar("SELECT provider_closure FROM billing_accounts WHERE id=$1")
+        .bind(account)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn deletion_queues_provider_cancellation_once_and_never_claims_deletion() {
+    let Some((pool, u, w, fake, service)) = setup_wide().await else {
+        return;
+    };
+    let account = detached(&pool, &service, u, w).await;
+    assert_eq!(
+        closure_state(&pool, account).await.as_deref(),
+        Some("cancel_pending")
+    );
+
+    // Provider outage: nothing recorded, retried after the claim delay.
+    fake.cancel_mode.store(2, Ordering::SeqCst);
+    let pass = service.close_detached().await.unwrap();
+    assert_eq!(pass.retry_later, 1);
+    assert_eq!(
+        closure_state(&pool, account).await.as_deref(),
+        Some("cancel_pending")
+    );
+    sqlx::query("UPDATE billing_accounts SET reconcile_after=now() WHERE id=$1")
+        .bind(account)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Concurrent passes claim the row once: exactly one provider call.
+    fake.cancel_mode.store(0, Ordering::SeqCst);
+    fake.cancel_calls.store(0, Ordering::SeqCst);
+    let (a, b, c) = tokio::join!(
+        service.close_detached(),
+        service.close_detached(),
+        service.close_detached()
+    );
+    let cancelled = a.unwrap().cancelled + b.unwrap().cancelled + c.unwrap().cancelled;
+    assert_eq!(cancelled, 1);
+    assert_eq!(fake.cancel_calls.load(Ordering::SeqCst), 1);
+    // Subscription ended, but the customer record still needs a manual request.
+    assert_eq!(
+        closure_state(&pool, account).await.as_deref(),
+        Some("customer_manual")
+    );
+    sqlx::query("UPDATE billing_accounts SET reconcile_after=now() WHERE id=$1")
+        .bind(account)
+        .execute(&pool)
+        .await
+        .unwrap();
+    service.close_detached().await.unwrap();
+    assert_eq!(fake.cancel_calls.load(Ordering::SeqCst), 1);
+
+    // Only the operator closes it, with evidence, and state never regresses.
+    let evidence = Uuid::new_v4();
+    assert!(
+        billing::record_provider_closure(&pool, account, evidence)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !billing::record_provider_closure(&pool, account, Uuid::new_v4())
+            .await
+            .unwrap()
+    );
+    let regress =
+        sqlx::query("UPDATE billing_accounts SET provider_closure='customer_manual' WHERE id=$1")
+            .bind(account)
+            .execute(&pool)
+            .await
+            .unwrap_err();
+    assert_eq!(
+        regress
+            .as_database_error()
+            .and_then(|e| e.code())
+            .as_deref(),
+        Some("23514")
+    );
+    let status = billing::provider_closure_status(&pool).await.unwrap();
+    assert_eq!(status.closed, 1);
+}
+
+#[tokio::test]
+async fn provider_refusal_is_recorded_as_manual_step() {
+    let Some((pool, u, w, fake, service)) = setup_wide().await else {
+        return;
+    };
+    let account = detached(&pool, &service, u, w).await;
+    fake.cancel_mode.store(1, Ordering::SeqCst);
+    assert_eq!(service.close_detached().await.unwrap().manual_required, 1);
+    assert_eq!(
+        closure_state(&pool, account).await.as_deref(),
+        Some("cancel_failed")
+    );
+}
+
+async fn deliver(service: &BillingService, id: &str, event: &str, subscription: &str) {
+    let body = serde_json::json!({
+        "type": event,
+        "data": {"customer_id": "cus_fixture", "subscription_id": subscription}
+    })
+    .to_string();
+    billing::receive(
+        service,
+        body.as_bytes(),
+        WebhookHeaders {
+            id,
+            timestamp: "0",
+            signatures: "fixture-authenticated",
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn detached_customer_webhooks_complete_and_only_move_closure_forward() {
+    let Some((pool, u, w, fake, service)) = setup_wide().await else {
+        return;
+    };
+    let account = detached(&pool, &service, u, w).await;
+    fake.cancel_mode.store(1, Ordering::SeqCst);
+    service.close_detached().await.unwrap();
+    assert_eq!(
+        closure_state(&pool, account).await.as_deref(),
+        Some("cancel_failed")
+    );
+    // Out of order: a late "active" first, a foreign subscription, the real
+    // cancellation, then a duplicate delivery of that cancellation.
+    deliver(
+        &service,
+        "evt_late_active",
+        "subscription.active",
+        "sub_fixture",
+    )
+    .await;
+    deliver(&service, "evt_other", "subscription.cancelled", "sub_other").await;
+    deliver(
+        &service,
+        "evt_cancel",
+        "subscription.cancelled",
+        "sub_fixture",
+    )
+    .await;
+    deliver(
+        &service,
+        "evt_cancel",
+        "subscription.cancelled",
+        "sub_fixture",
+    )
+    .await;
+    let registry = billing::registry(service.clone()).unwrap();
+    let mut processed = 0;
+    for _ in 0..4 {
+        processed += deepref_app::inbox::process_inbox_batch(
+            &pool,
+            &registry,
+            "billing-test",
+            std::time::Duration::from_secs(30),
+            1,
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        processed, 3,
+        "duplicate delivery is deduplicated at receipt"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM integration_inbox_events WHERE processing_state='processed'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        3,
+        "detached-customer events must complete, not retry forever"
+    );
+    assert_eq!(
+        closure_state(&pool, account).await.as_deref(),
+        Some("customer_manual")
+    );
+}
+
+async fn ledger(pool: &PgPool, workspace: Uuid, years: i32) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ai_usage_ledger(id,profile,provider,model,purpose,cost_micros,workspace_id,created_at,reservation_id)
+         VALUES($1,'fixture','fixture','fixture','chat',1,$2,now()-make_interval(years=>$3),gen_random_uuid())",
+    )
+    .bind(id)
+    .bind(workspace)
+    .bind(years)
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+async fn exists(pool: &PgPool, table: &str, id: Uuid) -> bool {
+    let sql = match table {
+        "ai_usage_ledger" => "SELECT EXISTS(SELECT 1 FROM ai_usage_ledger WHERE id=$1)",
+        _ => "SELECT EXISTS(SELECT 1 FROM billing_accounts WHERE id=$1)",
+    };
+    sqlx::query_scalar(sql)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn financial_records_are_purged_only_after_five_years_past_closure() {
+    let Some((pool, u, w, _fake, service)) = setup_wide().await else {
+        return;
+    };
+    let (_, live) = seed(&pool).await;
+    let old_closed = ledger(&pool, w.as_uuid(), 6).await;
+    let recent_closed = ledger(&pool, w.as_uuid(), 1).await;
+    let old_live = ledger(&pool, live.as_uuid(), 6).await;
+    let account = detached(&pool, &service, u, w).await;
+
+    // Ordinary code can never delete a retained financial record.
+    let denied = sqlx::query("DELETE FROM ai_usage_ledger WHERE id=$1")
+        .bind(old_closed)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        denied.as_database_error().and_then(|e| e.code()).as_deref(),
+        Some("23514")
+    );
+    // The tombstone is inside its five years: nothing for this workspace goes.
+    let report = billing::retention::purge_financial_retention(&pool, false, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(report.usage_ledger, 0);
+    assert_eq!(report.billing_accounts, 0);
+    assert!(exists(&pool, "ai_usage_ledger", old_closed).await);
+    // Even with the gate, an ineligible row is refused at the database.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('deepref.billing_purge','on',true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("DELETE FROM billing_accounts WHERE id=$1")
+            .bind(account)
+            .execute(&mut *tx)
+            .await
+            .is_err()
+    );
+    tx.rollback().await.unwrap();
+
+    // Five years after closure.
+    sqlx::query("UPDATE billing_accounts SET purge_after=now()-interval '1 day' WHERE id=$1")
+        .bind(account)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let dry = billing::retention::purge_financial_retention(&pool, true, None)
+        .await
+        .unwrap();
+    assert_eq!((dry.usage_ledger, dry.billing_accounts), (1, 1));
+    assert!(exists(&pool, "ai_usage_ledger", old_closed).await);
+    let report = billing::retention::purge_financial_retention(&pool, false, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(report.usage_ledger, 1);
+    assert_eq!(report.billing_accounts, 1);
+    assert!(!exists(&pool, "ai_usage_ledger", old_closed).await);
+    assert!(!exists(&pool, "billing_accounts", account).await);
+    assert!(
+        exists(&pool, "ai_usage_ledger", recent_closed).await,
+        "records younger than five years stay"
+    );
+    assert!(
+        exists(&pool, "ai_usage_ledger", old_live).await,
+        "a live workspace's records are never purged"
+    );
+    let fact: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_usage_fact_ids WHERE fact_id=$1)")
+            .bind(old_closed)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(fact, "dedup identity is kept");
 }

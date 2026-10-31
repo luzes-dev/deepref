@@ -54,6 +54,13 @@ impl BillingProvider for Fake {
     ) -> Result<VerifiedBillingWebhook, BillingError> {
         Err(BillingError::Refused)
     }
+    fn cancel_subscription<'a>(
+        &'a self,
+        _: &'a CustomerReference,
+        _: &'a CustomerReference,
+    ) -> BillingFuture<'a, SubscriptionCancellation> {
+        Box::pin(async { Err(BillingError::Unavailable) })
+    }
 }
 #[tokio::test]
 async fn human_management_is_tenant_scoped() {

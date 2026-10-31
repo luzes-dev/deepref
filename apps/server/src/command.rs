@@ -64,6 +64,12 @@ pub enum AccountsCommand {
     ActivateErasure { confirm_drained: String },
     /// Activates retained object references for account data exports after confirming eager-deleting binaries are drained.
     ActivateExportRetention { confirm_drained: String },
+    /// Deletes billing and usage records past their five-year retention.
+    PurgeFinancialRetention { dry_run: bool },
+    /// Counts detached billing accounts per provider-closure state.
+    BillingClosureStatus,
+    /// Records operator evidence that provider-side closure happened.
+    RecordProviderClosure { account_id: Uuid, evidence_id: Uuid },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -513,6 +519,31 @@ impl Command {
                     project_id: parse_uuid(project_id, "project UUID")?,
                 }))
             }
+            [command, action, rest @ ..]
+                if command == "accounts" && action == "purge-financial-retention" =>
+            {
+                let dry_run = match rest {
+                    [] => false,
+                    [flag] if flag == "--dry-run" => true,
+                    _ => anyhow::bail!("usage: accounts purge-financial-retention [--dry-run]"),
+                };
+                Ok(Self::Accounts(AccountsCommand::PurgeFinancialRetention {
+                    dry_run,
+                }))
+            }
+            [command, action] if command == "accounts" && action == "billing-closure-status" => {
+                Ok(Self::Accounts(AccountsCommand::BillingClosureStatus))
+            }
+            [command, action, account, flag, evidence]
+                if command == "accounts"
+                    && action == "record-provider-closure"
+                    && flag == "--evidence" =>
+            {
+                Ok(Self::Accounts(AccountsCommand::RecordProviderClosure {
+                    account_id: parse_uuid(account, "billing account UUID")?,
+                    evidence_id: parse_uuid(evidence, "evidence UUID")?,
+                }))
+            }
             [command, action] if command == "accounts" && action == "complete-deletions" => {
                 Ok(Self::Accounts(AccountsCommand::CompleteDeletions))
             }
@@ -590,7 +621,7 @@ impl Command {
                 Ok(Self::Audit(AuditCommand::Query(params)))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [database-roles check <runtime|migration|maintenance>|database-roles provision --runtime-login <role> --migration-login <role> --maintenance-login <role>|transport terminal-status [--after <sequence>] [--limit <1..100>]|transport recover-terminal --advisory <sequence>|serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|projection status <project-uuid>|projection rebuild <project-uuid>|accounts complete-deletions|accounts erasure-status|accounts activate-erasure --confirm-drained <token>|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
+                "usage: deepref-server [database-roles check <runtime|migration|maintenance>|database-roles provision --runtime-login <role> --migration-login <role> --maintenance-login <role>|transport terminal-status [--after <sequence>] [--limit <1..100>]|transport recover-terminal --advisory <sequence>|serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|projection status <project-uuid>|projection rebuild <project-uuid>|accounts complete-deletions|accounts purge-financial-retention [--dry-run]|accounts billing-closure-status|accounts record-provider-closure <account-uuid> --evidence <uuid>|accounts erasure-status|accounts activate-erasure --confirm-drained <token>|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
             ),
         }
     }
@@ -939,6 +970,33 @@ mod tests {
         assert_eq!(
             Command::parse(["audit".into(), "purge".into(), "--dry-run".into()]).unwrap(),
             Command::Audit(AuditCommand::Purge { dry_run: true })
+        );
+        assert_eq!(
+            Command::parse([
+                "accounts".into(),
+                "purge-financial-retention".into(),
+                "--dry-run".into()
+            ])
+            .unwrap(),
+            Command::Accounts(AccountsCommand::PurgeFinancialRetention { dry_run: true })
+        );
+        assert!(
+            Command::parse([
+                "accounts".into(),
+                "purge-financial-retention".into(),
+                "--force".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            Command::parse([
+                "accounts".into(),
+                "record-provider-closure".into(),
+                "not-a-uuid".into(),
+                "--evidence".into(),
+                Uuid::nil().to_string()
+            ])
+            .is_err()
         );
         assert_eq!(
             Command::parse(["accounts".into(), "complete-deletions".into()]).unwrap(),

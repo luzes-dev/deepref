@@ -467,6 +467,57 @@ impl BillingProvider for DodoBilling {
     ) -> Result<VerifiedBillingWebhook, BillingError> {
         webhook::verify(&self.config, &self.keys, body, headers, now)
     }
+    /// `GET /subscriptions/{id}` first, so an already-ended subscription is not
+    /// patched again; otherwise `PATCH /subscriptions/{id}` with
+    /// `{"status":"cancelled"}` (immediate cancellation, see
+    /// docs/dodo-billing.md). Repeating the call is safe: the second read
+    /// observes the ended state.
+    fn cancel_subscription<'a>(
+        &'a self,
+        customer: &'a CustomerReference,
+        subscription: &'a CustomerReference,
+    ) -> BillingFuture<'a, SubscriptionCancellation> {
+        Box::pin(async move {
+            let path = format!("/subscriptions/{}", subscription.expose());
+            let current: Subscription = match self.request(Method::GET, &path, None).await {
+                Ok(current) => current,
+                Err(BillingError::Refused | BillingError::Contract) => {
+                    return Ok(SubscriptionCancellation::ManualRequired);
+                }
+                Err(error) => return Err(error),
+            };
+            if current.subscription_id != subscription.expose()
+                || current.customer.customer_id != customer.expose()
+            {
+                return Ok(SubscriptionCancellation::ManualRequired);
+            }
+            if subscription_ended(&current.status) {
+                return Ok(SubscriptionCancellation::Cancelled);
+            }
+            let updated: Subscription = match self
+                .request(Method::PATCH, &path, Some(json!({"status": "cancelled"})))
+                .await
+            {
+                Ok(updated) => updated,
+                Err(BillingError::Refused | BillingError::Contract) => {
+                    return Ok(SubscriptionCancellation::ManualRequired);
+                }
+                Err(error) => return Err(error),
+            };
+            if updated.subscription_id == subscription.expose()
+                && subscription_ended(&updated.status)
+            {
+                Ok(SubscriptionCancellation::Cancelled)
+            } else {
+                // A 2xx without the ended state proves nothing; read again later.
+                Err(BillingError::Unavailable)
+            }
+        })
+    }
+}
+
+fn subscription_ended(status: &str) -> bool {
+    matches!(status, "cancelled" | "expired" | "failed")
 }
 
 fn observation(

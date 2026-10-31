@@ -100,9 +100,24 @@ pub fn registry(service: BillingService) -> Result<InboxRegistry, InboxRegistryE
                         )
                     })?;
                 let workspace:Option<Uuid>=sqlx::query_scalar("SELECT workspace_id FROM billing_accounts WHERE provider_scope=$1 AND customer_ref=$2 AND provisioning='mapped'").bind(service.provider.namespace()).bind(customer).fetch_optional(&service.pool).await.map_err(|_|InboxHandlerError::Transient("billing storage unavailable".into()))?;
-                let workspace = workspace.ok_or_else(|| {
-                    InboxHandlerError::Transient("billing customer mapping unresolved".into())
-                })?;
+                let Some(workspace) = workspace else {
+                    // A detached (deleted-workspace) customer has no projection to
+                    // update; only closure evidence is recorded. Anything else may
+                    // still be a receipt before provisioning and stays pending.
+                    let handled = service
+                        .detached_event(customer, &payload, &context)
+                        .await
+                        .map_err(|_| {
+                            InboxHandlerError::Transient("billing closure evidence pending".into())
+                        })?;
+                    return if handled {
+                        Ok(())
+                    } else {
+                        Err(InboxHandlerError::Transient(
+                            "billing customer mapping unresolved".into(),
+                        ))
+                    };
+                };
                 invalidate_replay(&service, WorkspaceId::new(workspace), &context)
                     .await
                     .map_err(|_| {

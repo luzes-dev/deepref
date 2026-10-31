@@ -547,3 +547,67 @@ async fn usage_refusal_discards_provider_body_marker() {
     assert!(matches!(outcome, DodoIngestOutcome::Refused(_)));
     task.abort();
 }
+
+fn subscription(status: &str, customer: &str) -> Value {
+    json!({"subscription_id":"sub_closure","customer":{"customer_id":customer},"product_id":"pdt_reviewed","status":status})
+}
+
+#[tokio::test]
+async fn cancel_subscription_reads_first_patches_once_and_never_claims_on_refusal() {
+    let (dodo, f, _task) = adapter(vec![
+        // Active: read, then PATCH reporting cancelled.
+        (200, subscription("active", "cus_closure")),
+        (200, subscription("cancelled", "cus_closure")),
+        // Already ended: read only, no second PATCH.
+        (200, subscription("expired", "cus_closure")),
+        // Foreign customer: manual, no PATCH.
+        (200, subscription("active", "cus_other")),
+        // Provider refuses the PATCH.
+        (200, subscription("active", "cus_closure")),
+        (422, json!({"error":"x"})),
+        // Outage: retryable error, not a recorded outcome.
+        (503, json!({})),
+        // 2xx without the ended state proves nothing.
+        (200, subscription("active", "cus_closure")),
+        (200, subscription("active", "cus_closure")),
+    ])
+    .await;
+    let c = CustomerReference::new("cus_closure".into()).unwrap();
+    let s = CustomerReference::new("sub_closure".into()).unwrap();
+    assert_eq!(
+        dodo.cancel_subscription(&c, &s).await.unwrap(),
+        SubscriptionCancellation::Cancelled
+    );
+    assert_eq!(
+        dodo.cancel_subscription(&c, &s).await.unwrap(),
+        SubscriptionCancellation::Cancelled
+    );
+    assert_eq!(
+        dodo.cancel_subscription(&c, &s).await.unwrap(),
+        SubscriptionCancellation::ManualRequired
+    );
+    assert_eq!(
+        dodo.cancel_subscription(&c, &s).await.unwrap(),
+        SubscriptionCancellation::ManualRequired
+    );
+    assert_eq!(
+        dodo.cancel_subscription(&c, &s).await,
+        Err(BillingError::Unavailable)
+    );
+    assert_eq!(
+        dodo.cancel_subscription(&c, &s).await,
+        Err(BillingError::Unavailable)
+    );
+    let requests = f.requests.lock().unwrap();
+    let patches: Vec<_> = requests
+        .iter()
+        .filter(|(_, body)| !body.is_null())
+        .collect();
+    assert_eq!(patches.len(), 3);
+    assert!(
+        patches
+            .iter()
+            .all(|(path, body)| path == "/subscriptions/sub_closure"
+                && *body == json!({"status":"cancelled"}))
+    );
+}

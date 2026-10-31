@@ -142,6 +142,16 @@ pub struct WebhookHeaders<'a> {
     pub signatures: &'a str,
 }
 
+/// Result of asking the provider to end a detached account's subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionCancellation {
+    /// The provider reports the subscription cancelled, expired or failed.
+    Cancelled,
+    /// The provider refused, or the subscription does not belong to the
+    /// customer: an operator has to finish closure by hand.
+    ManualRequired,
+}
+
 pub trait BillingProvider: Send + Sync {
     /// Stable provider/business/mode namespace, supplied by configured adapter.
     fn namespace(&self) -> &str;
@@ -171,6 +181,14 @@ pub trait BillingProvider: Send + Sync {
         headers: WebhookHeaders<'_>,
         now: DateTime<Utc>,
     ) -> Result<VerifiedBillingWebhook, BillingError>;
+    /// End the subscription captured when a workspace was deleted. Must be
+    /// safe to repeat: an already-ended subscription is `Cancelled`. Transport
+    /// failures return an error and are retried later.
+    fn cancel_subscription<'a>(
+        &'a self,
+        customer: &'a CustomerReference,
+        subscription: &'a CustomerReference,
+    ) -> BillingFuture<'a, SubscriptionCancellation>;
 }
 
 /// These signals require relevant commercial evidence before a new grant or

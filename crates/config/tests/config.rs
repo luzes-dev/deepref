@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use deepref_config::{
     ApiSettings, ConfigError, DeletionDigestConfig, DocumentConfig, DocumentStorageBackend,
-    Environment, ExposeSecret, ListenConfig, PolarServer, RuntimeConfig,
+    Environment, ExposeSecret, ListenConfig, RuntimeConfig,
 };
 
 fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -89,12 +89,6 @@ const WORKOS: [(&str, &str); 4] = [
     ("WORKOS_WEBHOOK_SECRET", "workos-webhook-secret"),
 ];
 
-const POLAR: [(&str, &str); 3] = [
-    ("POLAR_ACCESS_TOKEN", "polar-access-secret"),
-    ("POLAR_WEBHOOK_SECRET", "polar-webhook-secret"),
-    ("POLAR_SERVER", "production"),
-];
-
 #[test]
 fn missing_app_env_is_an_error_and_never_development() {
     let error = runtime(&[]).unwrap_err();
@@ -137,7 +131,7 @@ fn development_has_disposable_defaults() {
     assert!(!config.database.acquire_timeout.is_zero());
     assert_eq!(config.public_origin.as_str(), "http://127.0.0.1:5173");
     assert!(!config.auth_enabled);
-    assert!(config.workos.is_none() && config.polar.is_none());
+    assert!(config.workos.is_none());
     assert_eq!(
         runtime(&[("APP_ENV", "dev")]).unwrap().environment,
         Environment::Development
@@ -317,60 +311,9 @@ fn workos_is_all_or_nothing_and_required_with_production_auth() {
 }
 
 #[test]
-fn polar_is_all_or_nothing_and_production_requires_the_production_server() {
-    let config = production_with(&POLAR).unwrap();
-    let polar = config.polar.as_ref().unwrap();
-    assert_eq!(polar.server, PolarServer::Production);
-    assert_eq!(polar.access_token(), "polar-access-secret");
-    assert_eq!(polar.webhook_secret(), "polar-webhook-secret");
-
-    for (omitted, (name, _)) in POLAR.iter().enumerate() {
-        let partial: Vec<_> = POLAR
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != omitted)
-            .map(|(_, pair)| *pair)
-            .collect();
-        let error = production_with(&partial).unwrap_err();
-        assert!(
-            matches!(
-                error,
-                ConfigError::PartialSection {
-                    section: "Polar",
-                    ..
-                }
-            ),
-            "omitting {} gave {error}",
-            name
-        );
-    }
-
-    let sandbox = [
-        ("POLAR_ACCESS_TOKEN", "t"),
-        ("POLAR_WEBHOOK_SECRET", "w"),
-        ("POLAR_SERVER", "sandbox"),
-    ];
-    let error = production_with(&sandbox).unwrap_err();
-    assert!(error.to_string().contains("POLAR_SERVER"), "{error}");
-    let mut development = vec![("APP_ENV", "development")];
-    development.extend_from_slice(&sandbox);
-    let polar = runtime(&development).unwrap().polar.unwrap();
-    assert_eq!(polar.server.as_str(), "sandbox");
-
-    let mut bogus = vec![("APP_ENV", "development")];
-    bogus.extend_from_slice(&[
-        ("POLAR_ACCESS_TOKEN", "t"),
-        ("POLAR_WEBHOOK_SECRET", "w"),
-        ("POLAR_SERVER", "staging"),
-    ]);
-    assert!(runtime(&bogus).is_err());
-}
-
-#[test]
 fn no_secret_appears_in_debug_output() {
     let mut pairs = PRODUCTION.to_vec();
     pairs.extend_from_slice(&WORKOS);
-    pairs.extend_from_slice(&POLAR);
     pairs.extend_from_slice(&[
         ("DEEPREF_AUTH_ENABLED", "1"),
         ("OPENCODE_API_KEY", "ai-provider-secret"),
@@ -401,8 +344,6 @@ fn no_secret_appears_in_debug_output() {
         "sk_live_workos-api-secret",
         "workos-cookie-secret",
         "workos-webhook-secret",
-        "polar-access-secret",
-        "polar-webhook-secret",
         "ai-provider-secret",
         "smtp-password-secret",
         "openalex-secret",

@@ -1,10 +1,13 @@
 //! Durable local billing orchestration. Provider effects run without DB locks;
 //! every response is fenced against current tenant, permission and generation.
+mod closure;
 mod reconcile;
+pub mod retention;
 mod store;
 pub mod usage_resolution;
 pub mod usage_sink;
 mod webhooks;
+pub use closure::{ClosurePass, ClosureStatus, provider_closure_status, record_provider_closure};
 pub use reconcile::BillingReconciler;
 pub use usage_resolution::*;
 pub use usage_sink::DodoUsageExportSink;
