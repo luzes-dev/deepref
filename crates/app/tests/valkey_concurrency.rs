@@ -692,7 +692,7 @@ async fn an_expired_pg_lease_is_reclaimed_and_its_late_release_cannot_free_the_n
     };
     let mirror: Arc<dyn ConcurrencyMirror> = Arc::new(control.concurrency_mirror().unwrap());
     let stale = MirroredAiConcurrencyAdmission::new(
-        canonical(&pool, Duration::from_millis(300)),
+        canonical(&pool, Duration::from_secs(1)),
         mirror.clone(),
     );
     let fresh =
@@ -706,7 +706,7 @@ async fn an_expired_pg_lease_is_reclaimed_and_its_late_release_cannot_free_the_n
 
     // The stale holder stops heartbeating; both the PG lease and its mirror
     // entry (bounded by the same renew interval) expire.
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
     let reclaimed = fresh.acquire(scope.clone()).await.unwrap();
     assert_eq!(
         stale.renew(&expired).await.unwrap_err(),
