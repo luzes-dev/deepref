@@ -14,6 +14,8 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::future::Future;
 use uuid::Uuid;
 
+pub use deepref_app::delivery_recovery::DeliveryAction;
+
 use crate::{config::ApiConfig, state::AppState};
 
 /// Facts one `ai-usage export-replay` invocation inspects without `--limit`.
@@ -879,3 +881,46 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
+/// Operator terminal-delivery recovery (`deepref-server deliveries ...`).
+/// Every action has an absolute deadline covering connect and queries.
+pub async fn deliveries_run(
+    config: &ApiConfig,
+    action: deepref_app::delivery_recovery::DeliveryAction,
+) -> anyhow::Result<String> {
+    use deepref_app::delivery_recovery as recovery;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let pool = database_pool(config).await?;
+        let output = match action {
+            recovery::DeliveryAction::List { kind, after, limit } => serde_json::to_string_pretty(
+                &recovery::list_terminal_deliveries(&pool, kind, after.as_deref(), limit).await?,
+            )?,
+            recovery::DeliveryAction::Inspect { reference } => {
+                match recovery::inspect_delivery(&pool, &reference).await? {
+                    Some(delivery) => serde_json::to_string_pretty(&delivery)?,
+                    None => anyhow::bail!("delivery not found"),
+                }
+            }
+            recovery::DeliveryAction::Replay {
+                reference,
+                request_id,
+                operator_user_id,
+                reason,
+            } => serde_json::to_string_pretty(
+                &recovery::replay_terminal_delivery(
+                    &pool,
+                    &reference,
+                    request_id,
+                    operator_user_id,
+                    &reason,
+                )
+                .await?,
+            )?,
+        };
+        pool.close().await;
+        Ok(output)
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("delivery recovery deadline exceeded; inspect the audit before retrying")
+    })?
+}

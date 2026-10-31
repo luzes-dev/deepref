@@ -24,6 +24,17 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Command::Deliveries(action) => {
+            let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
+            with_telemetry(config.runtime.telemetry.clone(), async move {
+                println!(
+                    "{}",
+                    deepref_http_api::deliveries_run(&config, action).await?
+                );
+                Ok(())
+            })
+            .await
+        }
         Command::Serve => {
             let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
             with_telemetry(

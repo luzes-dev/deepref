@@ -732,6 +732,15 @@ pub async fn settle_outbox_event(
 /// kept and are never re-run.
 pub async fn replay_outbox_event(pool: &PgPool, event_id: Uuid) -> anyhow::Result<bool> {
     let mut tx = pool.begin().await?;
+    let reopened = replay_outbox_event_in(&mut tx, event_id).await?;
+    tx.commit().await?;
+    Ok(reopened)
+}
+
+pub(crate) async fn replay_outbox_event_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event_id: Uuid,
+) -> anyhow::Result<bool> {
     let reopened = sqlx::query!(
         r#"UPDATE outbox_events
            SET delivery_state = 'pending', attempts = 0, next_attempt_at = now(),
@@ -739,7 +748,7 @@ pub async fn replay_outbox_event(pool: &PgPool, event_id: Uuid) -> anyhow::Resul
            WHERE event_id = $1 AND delivery_state = 'quarantined'"#,
         event_id,
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?
     .rows_affected()
         == 1;
@@ -751,10 +760,9 @@ pub async fn replay_outbox_event(pool: &PgPool, event_id: Uuid) -> anyhow::Resul
                WHERE event_id = $1 AND state = 'quarantined'"#,
             event_id,
         )
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(reopened)
 }
 
