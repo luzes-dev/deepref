@@ -44,6 +44,7 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+zip = { version = "9.1.1", default-features = false }
 deepref-domain = { path = "crates/domain" }
 deepref-application = { path = "crates/application" }
 deepref-documents = { path = "crates/documents" }

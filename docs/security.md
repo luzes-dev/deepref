@@ -265,7 +265,8 @@ refused by the guard in migration 0116 (recovery: `docs/architecture.md`,
 
 There is deliberately no HTTP route for this query yet: no principal holds
 `PlatformOperator` (03b), so an operator HTTP surface needs its own design.
-Follow-up, together with "Download my data".
+That operator route remains follow-up. Human account exports use the separate
+[bounded account export workflow](account-data-exports.md).
 
 ---
 
@@ -424,7 +425,7 @@ logged deletion end `completed`. No audit row is written twice.
 
 ### Out of scope here
 
-- **"Download my data"** (ZIP of JSON plus uploaded files) — follow-up.
+- **"Download my data"** has a separate [bounded implementation](account-data-exports.md), with explicit partial scientific coverage and a deployment attestation gate.
 - Billing and AI usage records are kept 5 years linked to the billing account
   rather than the person; billing is undecided (BUSINESS_DECISIONS) and no
   `billing.*` events exist yet.

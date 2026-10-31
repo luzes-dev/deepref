@@ -17,7 +17,13 @@ import type {
 	QueryKey
 } from '@tanstack/svelte-query';
 
-import type { ApiErrorBody, CompleteLoginParams, MeResponse, StartLoginParams } from '../models';
+import type {
+	AccountExportResponse,
+	ApiErrorBody,
+	CompleteLoginParams,
+	MeResponse,
+	StartLoginParams
+} from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType } from '../../custom-fetch.ts';
@@ -633,4 +639,450 @@ export const createCancelAccountDeletion = <TError = ErrorType<ApiErrorBody>, TC
 		() => ({ ...getCancelAccountDeletionMutationOptions(options?.()) }),
 		queryClient
 	);
+};
+export type getAccountExportStatusResponse200 = {
+	data: AccountExportResponse | null;
+	status: 200;
+};
+
+export type getAccountExportStatusResponse401 = {
+	data: ApiErrorBody;
+	status: 401;
+};
+
+export type getAccountExportStatusResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getAccountExportStatusResponseSuccess = getAccountExportStatusResponse200 & {
+	headers: Headers;
+};
+export type getAccountExportStatusResponseError = (
+	getAccountExportStatusResponse401 | getAccountExportStatusResponse404
+) & {
+	headers: Headers;
+};
+
+export const getGetAccountExportStatusUrl = () => {
+	return `/api/me/export`;
+};
+
+export const getAccountExportStatus = async (
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAccountExportStatusResponseSuccess> => {
+	return customFetch<getAccountExportStatusResponseSuccess>(getGetAccountExportStatusUrl(), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAccountExportStatusQueryKey = () => {
+	return [`/api/me/export`] as const;
+};
+
+export const getGetAccountExportStatusQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAccountExportStatus>>,
+	TError = ErrorType<ApiErrorBody>
+>(options?: {
+	query?: Partial<
+		CreateQueryOptions<Awaited<ReturnType<typeof getAccountExportStatus>>, TError, TData>
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAccountExportStatusQueryKey();
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAccountExportStatus>>> = ({
+		signal
+	}) => getAccountExportStatus({ signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof getAccountExportStatus>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAccountExportStatusQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getAccountExportStatus>>
+>;
+export type GetAccountExportStatusQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAccountExportStatus<
+	TData = Awaited<ReturnType<typeof getAccountExportStatus>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAccountExportStatus>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAccountExportStatusQueryOptions(options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAccountExportStatusQuery = async <
+	TData = Awaited<ReturnType<typeof getAccountExportStatus>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAccountExportStatus>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAccountExportStatusQueryOptions(options);
+
+	await queryClient.query(queryOptions).catch(() => {});
+
+	return queryClient;
+};
+
+export type requestAccountExportResponse202 = {
+	data: AccountExportResponse;
+	status: 202;
+};
+
+export type requestAccountExportResponse401 = {
+	data: ApiErrorBody;
+	status: 401;
+};
+
+export type requestAccountExportResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type requestAccountExportResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type requestAccountExportResponseSuccess = requestAccountExportResponse202 & {
+	headers: Headers;
+};
+export type requestAccountExportResponseError = (
+	| requestAccountExportResponse401
+	| requestAccountExportResponse404
+	| requestAccountExportResponse409
+) & {
+	headers: Headers;
+};
+
+export const getRequestAccountExportUrl = () => {
+	return `/api/me/export`;
+};
+
+export const requestAccountExport = async (
+	options?: Parameters<typeof customFetch>[1]
+): Promise<requestAccountExportResponseSuccess> => {
+	return customFetch<requestAccountExportResponseSuccess>(getRequestAccountExportUrl(), {
+		...options,
+		method: 'POST'
+	});
+};
+
+export const getRequestAccountExportMutationKey = () => ['requestAccountExport'] as const;
+
+export const getRequestAccountExportMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof requestAccountExport>>,
+		TError,
+		void,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof requestAccountExport>>,
+	TError,
+	void,
+	TContext
+> => {
+	const mutationKey = getRequestAccountExportMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof requestAccountExport>>,
+		void
+	> = () => {
+		return requestAccountExport(requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RequestAccountExportMutationResult = NonNullable<
+	Awaited<ReturnType<typeof requestAccountExport>>
+>;
+
+export type RequestAccountExportMutationError = ErrorType<ApiErrorBody>;
+
+export const createRequestAccountExport = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof requestAccountExport>>,
+			TError,
+			void,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof requestAccountExport>>,
+	TError,
+	void,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRequestAccountExportMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type cancelAccountExportResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type cancelAccountExportResponse401 = {
+	data: ApiErrorBody;
+	status: 401;
+};
+
+export type cancelAccountExportResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type cancelAccountExportResponseSuccess = cancelAccountExportResponse204 & {
+	headers: Headers;
+};
+export type cancelAccountExportResponseError = (
+	cancelAccountExportResponse401 | cancelAccountExportResponse404
+) & {
+	headers: Headers;
+};
+
+export const getCancelAccountExportUrl = (id: string) => {
+	return `/api/me/export/${id}`;
+};
+
+export const cancelAccountExport = async (
+	id: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<cancelAccountExportResponseSuccess> => {
+	return customFetch<cancelAccountExportResponseSuccess>(getCancelAccountExportUrl(id), {
+		...options,
+		method: 'DELETE'
+	});
+};
+
+export const getCancelAccountExportMutationKey = () => ['cancelAccountExport'] as const;
+
+export const getCancelAccountExportMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof cancelAccountExport>>,
+		TError,
+		CancelAccountExportMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof cancelAccountExport>>,
+	TError,
+	CancelAccountExportMutationVariables,
+	TContext
+> => {
+	const mutationKey = getCancelAccountExportMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof cancelAccountExport>>,
+		CancelAccountExportMutationVariables
+	> = (props) => {
+		const { id } = props ?? {};
+
+		return cancelAccountExport(id, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type CancelAccountExportMutationResult = NonNullable<
+	Awaited<ReturnType<typeof cancelAccountExport>>
+>;
+
+export type CancelAccountExportMutationError = ErrorType<ApiErrorBody>;
+export type CancelAccountExportMutationVariables = { id: string };
+
+export const createCancelAccountExport = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof cancelAccountExport>>,
+			TError,
+			CancelAccountExportMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof cancelAccountExport>>,
+	TError,
+	CancelAccountExportMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getCancelAccountExportMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type downloadAccountExportResponse200 = {
+	data: void;
+	status: 200;
+};
+
+export type downloadAccountExportResponse401 = {
+	data: ApiErrorBody;
+	status: 401;
+};
+
+export type downloadAccountExportResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type downloadAccountExportResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type downloadAccountExportResponseSuccess = downloadAccountExportResponse200 & {
+	headers: Headers;
+};
+export type downloadAccountExportResponseError = (
+	| downloadAccountExportResponse401
+	| downloadAccountExportResponse404
+	| downloadAccountExportResponse409
+) & {
+	headers: Headers;
+};
+
+export const getDownloadAccountExportUrl = (id: string) => {
+	return `/api/me/export/${id}/download`;
+};
+
+export const downloadAccountExport = async (
+	id: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<downloadAccountExportResponseSuccess> => {
+	return customFetch<downloadAccountExportResponseSuccess>(getDownloadAccountExportUrl(id), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getDownloadAccountExportQueryKey = (id: string) => {
+	return [`/api/me/export/${id}/download`] as const;
+};
+
+export const getDownloadAccountExportQueryOptions = <
+	TData = Awaited<ReturnType<typeof downloadAccountExport>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	id: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof downloadAccountExport>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getDownloadAccountExportQueryKey(id);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof downloadAccountExport>>> = ({
+		signal
+	}) => downloadAccountExport(id, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: id !== null && id !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof downloadAccountExport>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type DownloadAccountExportQueryResult = NonNullable<
+	Awaited<ReturnType<typeof downloadAccountExport>>
+>;
+export type DownloadAccountExportQueryError = ErrorType<ApiErrorBody>;
+
+export function createDownloadAccountExport<
+	TData = Awaited<ReturnType<typeof downloadAccountExport>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	id: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof downloadAccountExport>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getDownloadAccountExportQueryOptions(id(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchDownloadAccountExportQuery = async <
+	TData = Awaited<ReturnType<typeof downloadAccountExport>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	id: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof downloadAccountExport>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getDownloadAccountExportQueryOptions(id, options);
+
+	await queryClient.query(queryOptions).catch(() => {});
+
+	return queryClient;
 };
