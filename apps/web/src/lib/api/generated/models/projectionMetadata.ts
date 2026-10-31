@@ -4,10 +4,6 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
+import type { ProjectionStatusDto } from './projectionStatusDto.ts';
 
-export interface ProjectionMetadata {
-	lag: number;
-	/** @nullable */
-	last_success_at?: string | null;
-	revision: number;
-}
+export type ProjectionMetadata = ProjectionStatusDto;

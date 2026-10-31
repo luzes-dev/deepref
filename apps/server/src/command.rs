@@ -32,7 +32,14 @@ pub enum Command {
     Audit(AuditCommand),
     Accounts(AccountsCommand),
     AiUsage(AiUsageCommand),
+    Projection(ProjectionCommand),
     PrintOpenApi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionCommand {
+    Rebuild { project_id: Uuid },
+    Status { project_id: Uuid },
 }
 
 /// Administrative audit tooling (handoff 11 Part B).
@@ -482,6 +489,16 @@ impl Command {
                     fields().deny()
                 }))
             }
+            [command, action, project_id] if command == "projection" && action == "rebuild" => {
+                Ok(Self::Projection(ProjectionCommand::Rebuild {
+                    project_id: parse_uuid(project_id, "project UUID")?,
+                }))
+            }
+            [command, action, project_id] if command == "projection" && action == "status" => {
+                Ok(Self::Projection(ProjectionCommand::Status {
+                    project_id: parse_uuid(project_id, "project UUID")?,
+                }))
+            }
             [command, action] if command == "accounts" && action == "complete-deletions" => {
                 Ok(Self::Accounts(AccountsCommand::CompleteDeletions))
             }
@@ -526,7 +543,7 @@ impl Command {
                 Ok(Self::Audit(AuditCommand::Query(params)))
             }
             _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
+                "usage: deepref-server [serve|worker [--pool <class>[,<class>]]|all [--pool <class>[,<class>]]|migrate|backfill-project-workspaces|legacy-actor map <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor deny <user> <legacy-id> <user-uuid> <operator-uuid> <source>|legacy-actor list|audit purge [--dry-run]|audit query [--workspace <uuid>] [--principal <uuid>] [--target <uuid>] [--event-type <type>] [--since <rfc3339>] [--until <rfc3339>] [--limit <n>]|projection status <project-uuid>|projection rebuild <project-uuid>|accounts complete-deletions|ai-usage backfill [--batch-size <1..1000>]|ai-usage enable-hard-caps --quiet-window-seconds <seconds> <operator-user-uuid>|ai-usage disable-hard-caps <operator-user-uuid>|ai-usage enable-export [--quiet-window-seconds <seconds>] <operator-user-uuid>|ai-usage disable-export <operator-user-uuid>|ai-usage resolve <reservation-uuid> --settle <micros> --operator <user-uuid>|ai-usage resolve <reservation-uuid> --void --reason <text> --operator <user-uuid>|ai-usage reconcile [workspace-uuid]|ai-usage export-replay [--since <rfc3339>] [--limit <rows>]|ai-usage waive-overage <workspace-uuid> <operator-user-uuid>|ai-usage set-cap <platform|workspace|project> <-|scope-uuid> <limit-micros> <operator-user-uuid>|ai-usage list-unresolved-exports [--limit <rows>]|ai-usage resolve-export-hold <fact-uuid> --operator <user-uuid> --evidence <resolution-uuid> --action <action> --reason <reason> [--notes <text>]|--print-openapi]"
             ),
         }
     }
@@ -789,6 +806,53 @@ mod tests {
             })
         );
         assert!(Command::parse(["import-legacy".into()]).is_err());
+    }
+
+    #[test]
+    fn parses_projection_commands() {
+        let project_id = Uuid::new_v4();
+        assert_eq!(
+            Command::parse([
+                "projection".into(),
+                "rebuild".into(),
+                project_id.to_string()
+            ])
+            .unwrap(),
+            Command::Projection(ProjectionCommand::Rebuild { project_id })
+        );
+        assert_eq!(
+            Command::parse(["projection".into(), "status".into(), project_id.to_string()]).unwrap(),
+            Command::Projection(ProjectionCommand::Status { project_id })
+        );
+        assert!(Command::parse(["projection".into(), "rebuild".into()]).is_err());
+        assert!(
+            Command::parse([
+                "projection".into(),
+                "invalid".into(),
+                project_id.to_string()
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn projection_help_and_invalid_scope_are_explicit() {
+        let help = Command::parse(["--help".into()]).unwrap_err().to_string();
+        assert!(help.contains("projection status <project-uuid>"));
+        assert!(help.contains("projection rebuild <project-uuid>"));
+        for args in [
+            vec!["projection", "status"],
+            vec!["projection", "rebuild", "not-a-uuid"],
+            vec!["projection", "status", "all"],
+            vec![
+                "projection",
+                "rebuild",
+                "00000000-0000-0000-0000-000000000001",
+                "extra",
+            ],
+        ] {
+            assert!(Command::parse(args.into_iter().map(String::from)).is_err());
+        }
     }
 
     #[test]

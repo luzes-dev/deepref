@@ -1456,8 +1456,8 @@ async fn project_report_count(pool: &PgPool, project_id: Uuid) -> i64 {
         .unwrap()
 }
 
-async fn recompute_job_count(pool: &PgPool, project_id: Uuid) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='recompute_metrics'")
+async fn metrics_event_count(pool: &PgPool, project_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM outbox_events WHERE (payload->>'project_id')::uuid=$1 AND message_type='graph.metrics_recompute_requested'")
         .bind(project_id)
         .fetch_one(pool)
         .await
@@ -1786,7 +1786,7 @@ async fn rejecting_a_proposal_for_an_already_linked_record_does_not_create_a_rep
 }
 
 #[tokio::test]
-async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
+async fn dedupe_run_that_creates_reports_emits_one_metrics_event() {
     let Some(pool) = database().await else { return };
     let project_id = project(&pool, "dedupe metrics job").await;
     import(
@@ -1807,10 +1807,10 @@ async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
         .await
         .unwrap();
     assert_eq!(summary.created_reports, 2);
-    assert_eq!(recompute_job_count(&pool, project_id).await, 1);
+    assert_eq!(metrics_event_count(&pool, project_id).await, 1);
 
     let payload: Value = sqlx::query_scalar(
-        "SELECT payload FROM jobs WHERE project_id=$1 AND kind='recompute_metrics'",
+        "SELECT payload FROM outbox_events WHERE (payload->>'project_id')::uuid=$1 AND message_type='graph.metrics_recompute_requested'",
     )
     .bind(project_id)
     .fetch_one(&pool)
@@ -1826,6 +1826,36 @@ async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
     assert_eq!(payload["project_id"], serde_json::json!(project_id));
     assert_eq!(payload["revision"], revision);
 
+    let jobs_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='recompute_metrics'",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(jobs_before, 0);
+    let mut registry = deepref_application::outbox::OutboxRegistry::new();
+    deepref_app::register_metrics_projection(&pool, &mut registry).unwrap();
+    assert_eq!(
+        deepref_app::outbox::dispatch_outbox_batch(
+            &pool,
+            &registry,
+            "dedupe-consumer",
+            std::time::Duration::from_secs(30),
+            10
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    let jobs_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='recompute_metrics'",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(jobs_after, 1);
     deepref_app::recompute_project_metrics(&pool, project_id)
         .await
         .unwrap();
@@ -1852,7 +1882,7 @@ async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
     run_deduplication(&pool, run_request(project_id, 100))
         .await
         .unwrap();
-    assert_eq!(recompute_job_count(&pool, project_id).await, 1);
+    assert_eq!(metrics_event_count(&pool, project_id).await, 1);
     let unchanged_revision: i64 =
         sqlx::query_scalar("SELECT metric_requested_revision FROM projects WHERE id=$1")
             .bind(project_id)

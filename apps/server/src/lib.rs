@@ -6,7 +6,7 @@ pub mod command;
 
 pub use command::{
     AccountsCommand, AiUsageCommand, AiUsageResolutionCommand, AuditCommand, Command,
-    LegacyActorCommand,
+    LegacyActorCommand, ProjectionCommand,
 };
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
@@ -86,6 +86,8 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
 
         Command::Accounts(action) => run_accounts(action).await,
         Command::AiUsage(action) => run_ai_usage(action).await,
+
+        Command::Projection(action) => run_projection(action).await,
 
         Command::PrintOpenApi => {
             println!(
@@ -401,4 +403,34 @@ async fn wait_for_signal() {
     }
     #[cfg(not(unix))]
     let _ = tokio::signal::ctrl_c().await;
+}
+
+async fn run_projection(action: ProjectionCommand) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let config = deepref_http_api::config::ApiConfig::from_source(&|name| source.get(name))?;
+    let telemetry = config.runtime.telemetry.clone();
+    with_telemetry(telemetry, async move {
+        match action {
+            ProjectionCommand::Rebuild { project_id } => {
+                let job_id =
+                    deepref_http_api::rebuild_project_projection(&config, project_id).await?;
+                println!("emitted projection rebuild event {job_id} for project {project_id}");
+                Ok(())
+            }
+            ProjectionCommand::Status { project_id } => {
+                let status =
+                    deepref_http_api::get_project_projection_status(&config, project_id).await?;
+                match status {
+                    Some(s) => {
+                        println!("{}", serde_json::to_string_pretty(&s)?);
+                        Ok(())
+                    }
+                    None => {
+                        anyhow::bail!("project {project_id} not found");
+                    }
+                }
+            }
+        }
+    })
+    .await
 }

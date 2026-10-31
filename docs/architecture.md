@@ -112,9 +112,11 @@ are intentionally outside that source rule.
 Handoff 04a is foundation-only until 02/08 wire real WorkOS/Polar verifiers,
 handlers, and reconciliation. Acceptance still needs provider fixtures for real
 signatures, out-of-order projection updates, missed-event reconciliation, and
-commit-before-ack behavior. Production registries are empty; metrics recompute
-continues to enqueue jobs directly. Dispatcher effects are synthetic test
-fixtures until the production pilot in 04b.
+commit-before-ack behavior. Graph invalidation emits `graph.metrics_recompute_requested` v1 transactionally.
+The registered 04a `graph_metrics_queue` consumer commits a project-scoped
+Projection queue job and its receipt together. Heavy computation stays in the
+Projection workload pool; the event/consumer contract remains broker-independent
+for future 04b/05b integration. See [graph projection operations](graph-projection-operations.md).
 
 Heartbeat ownership checks are polled before ready handler work where possible.
 Database effects must commit with the generation-fenced receipt or inbox

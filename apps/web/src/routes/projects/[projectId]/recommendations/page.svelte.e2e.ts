@@ -1,4 +1,4 @@
-import { expect, test } from '../../../../tests/e2e-test';
+import { expect, readyProjection, test } from '../../../../tests/e2e-test';
 import type { Page } from '@playwright/test';
 
 const projectId = 'project-1';
@@ -34,14 +34,7 @@ async function mockRecommendationsWorkspace(page: Page): Promise<void> {
 	);
 	await page.route(`${api}/projects/${projectId}/projection`, (route) =>
 		route.fulfill({
-			json: {
-				project_id: projectId,
-				state: 'ready',
-				watermark: 3,
-				revision: 3,
-				lag: 0,
-				last_success_at: '2026-01-01T00:00:00Z'
-			}
+			json: readyProjection({ projectId, revision: 3 })
 		})
 	);
 	await page.route(`${api}/projects/${projectId}/recommendations`, (route) =>
@@ -58,7 +51,7 @@ async function mockRecommendationsWorkspace(page: Page): Promise<void> {
 				],
 				core_to_project: [],
 				underexplored: [],
-				projection: { revision: 3, lag: 0, last_success_at: '2026-01-01T00:00:00Z' }
+				projection: readyProjection({ projectId, revision: 3 })
 			}
 		})
 	);

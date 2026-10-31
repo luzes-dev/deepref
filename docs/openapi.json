@@ -6635,6 +6635,17 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "strict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -19708,39 +19719,44 @@
         }
       },
       "ProjectionMetadata": {
-        "type": "object",
-        "required": [
-          "revision",
-          "lag"
-        ],
-        "properties": {
-          "lag": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "last_success_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProjectionStatusDto"
           }
-        }
+        ]
+      },
+      "ProjectionRebuildStateDto": {
+        "type": "string",
+        "enum": [
+          "rebuilding"
+        ]
+      },
+      "ProjectionStateDto": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "ready",
+          "lagging",
+          "rebuilding",
+          "failed"
+        ]
       },
       "ProjectionStatusDto": {
         "type": "object",
         "required": [
           "project_id",
           "state",
+          "requested_revision",
+          "applied_revision",
           "revision",
           "watermark",
           "lag"
         ],
         "properties": {
+          "applied_revision": {
+            "type": "integer",
+            "format": "int64"
+          },
           "lag": {
             "type": "integer",
             "format": "int64"
@@ -19763,17 +19779,25 @@
             "format": "uuid"
           },
           "rebuild_state": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProjectionRebuildStateDto"
+              },
+              {
+                "type": "null"
+              }
             ]
+          },
+          "requested_revision": {
+            "type": "integer",
+            "format": "int64"
           },
           "revision": {
             "type": "integer",
             "format": "int64"
           },
           "state": {
-            "type": "string"
+            "$ref": "#/components/schemas/ProjectionStateDto"
           },
           "watermark": {
             "type": "integer",

@@ -296,7 +296,7 @@ pub async fn run_with_shutdown(
         provider_reconcilers,
         config.runtime.usage_export.clone(),
     ));
-    let usage_export_registry = if config.runtime.usage_export.enabled {
+    let mut usage_export_registry = if config.runtime.usage_export.enabled {
         let sink: Arc<dyn deepref_application::usage_export::UsageExportSink> =
             if let Some(dodo) = &config.runtime.dodo {
                 if dodo.meter.enabled {
@@ -323,6 +323,7 @@ pub async fn run_with_shutdown(
         tracing::info!("AI usage export is disabled; retained usage facts wait for a later replay");
         deepref_application::outbox::OutboxRegistry::new()
     };
+    deepref_app::register_metrics_projection(&pool, &mut usage_export_registry)?;
     let outbox_task = {
         let pool = pool.clone();
         let owner = owner.clone();

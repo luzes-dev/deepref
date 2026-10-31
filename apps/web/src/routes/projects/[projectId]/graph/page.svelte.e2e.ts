@@ -1,4 +1,4 @@
-import { expect, test } from '../../../../tests/e2e-test';
+import { expect, readyProjection, test } from '../../../../tests/e2e-test';
 import type { Page } from '@playwright/test';
 
 const projectId = 'project-1';
@@ -61,14 +61,7 @@ async function mockGraphWorkspace(
 	});
 	await page.route(`${api}/projects/${projectId}/projection`, (route) =>
 		route.fulfill({
-			json: {
-				project_id: projectId,
-				state: 'ready',
-				watermark: 3,
-				revision: 3,
-				lag: 0,
-				last_success_at: '2026-01-01T00:00:00Z'
-			}
+			json: readyProjection({ projectId, revision: 3 })
 		})
 	);
 	await page.route(new RegExp(`/api/projects/${projectId}/graph(?:\\?.*)?$`), async (route) => {
@@ -130,7 +123,7 @@ async function mockGraphWorkspace(
 						target: '00000000-0000-4000-8000-000000000002'
 					}
 				],
-				projection: { revision: 3, lag: 0, last_success_at: '2026-01-01T00:00:00Z' },
+				projection: readyProjection({ projectId, revision: 3 }),
 				truncated: false
 			}
 		});
