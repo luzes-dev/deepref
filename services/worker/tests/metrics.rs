@@ -60,6 +60,138 @@ fn value(
 }
 
 #[tokio::test]
+async fn cleanup_and_live_slot_samples_keep_last_good_values_without_mutating_obligations()
+-> anyhow::Result<()> {
+    use deepref_ai::{AiConcurrencyAdmission, AiConcurrencyLimits, AiConcurrencyScope};
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
+    else {
+        return Ok(());
+    };
+    let admission = deepref_app::PostgresAiConcurrencyAdmission::new(&pool);
+    let held = admission
+        .acquire(AiConcurrencyScope::new(
+            WorkspaceId::new(Uuid::new_v4()),
+            "provider",
+            "metric-route",
+            AiConcurrencyLimits {
+                workspace: 1,
+                route: 1,
+            },
+        ))
+        .await?;
+    sqlx::query("INSERT INTO ai_concurrency_slots(scope_kind,scope_key,slot_index,holder_id,generation,acquired_at,lease_expires_at) VALUES('route','expired-fixture',0,$1,1,now()-interval '2 minutes',now()-interval '1 minute')")
+        .bind(Uuid::new_v4()).execute(&pool).await?;
+    sqlx::query("INSERT INTO object_lifecycle(storage_key,cleanup_after,retired_at,deleted_at) VALUES ('documents/00000000-0000-4000-8000-000000000001',now()-interval '10 minutes',NULL,NULL),('documents/00000000-0000-4000-8000-000000000002',now()+interval '5 minutes',now()-interval '1 hour',NULL),('documents/00000000-0000-4000-8000-000000000003',NULL,now()-interval '2 hours',now()),('documents/00000000-0000-4000-8000-000000000004',NULL,NULL,NULL)")
+        .execute(&pool).await?;
+    let valid:bool=sqlx::query_scalar("SELECT indisvalid AND indisready FROM pg_index WHERE indexrelid='object_lifecycle_unfinished_retirement_idx'::regclass").fetch_one(&pool).await?;
+    assert!(valid);
+    let before_slots: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT to_jsonb(s) FROM ai_concurrency_slots s ORDER BY scope_kind,scope_key,slot_index",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let before_objects: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT to_jsonb(o) FROM object_lifecycle o ORDER BY storage_key")
+            .fetch_all(&pool)
+            .await?;
+    let exporter = InMemoryMetricExporter::default();
+    let provider = SdkMeterProvider::builder()
+        .with_reader(
+            PeriodicReader::builder(exporter.clone())
+                .with_interval(Duration::from_secs(3600))
+                .build(),
+        )
+        .build();
+    let metrics = WorkerMetrics::new(&provider.meter("cleanup-and-slot-test"));
+    deepref_worker::metrics::sample_once(&pool, &metrics).await?;
+    provider.force_flush()?;
+    assert_eq!(
+        value(
+            &exporter,
+            "deepref.ai.concurrency.live",
+            Some(("scope", "workspace"))
+        ),
+        Some(1.0)
+    );
+    assert_eq!(
+        value(
+            &exporter,
+            "deepref.ai.concurrency.live",
+            Some(("scope", "route"))
+        ),
+        Some(1.0),
+        "expired slot is not active"
+    );
+    assert_eq!(
+        value(
+            &exporter,
+            "deepref.backlog.depth",
+            Some(("family", "object_cleanup"))
+        ),
+        Some(1.0)
+    );
+    assert_eq!(
+        value(
+            &exporter,
+            "deepref.backlog.depth",
+            Some(("family", "retired_objects"))
+        ),
+        Some(1.0),
+        "retired retry remains debt even before its next attempt"
+    );
+    assert!(
+        value(
+            &exporter,
+            "deepref.backlog.oldest.age",
+            Some(("family", "object_cleanup"))
+        )
+        .unwrap()
+            >= 600.0
+    );
+    let success = value(&exporter, "deepref.worker.metrics.last_success", None);
+    exporter.reset();
+    let mut blocker = pool.begin().await?;
+    sqlx::query("LOCK TABLE object_lifecycle IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await?;
+    assert!(
+        deepref_worker::metrics::sample_once(&pool, &metrics)
+            .await
+            .is_err()
+    );
+    blocker.rollback().await?;
+    provider.force_flush()?;
+    assert_eq!(
+        value(&exporter, "deepref.worker.metrics.sample.up", None),
+        Some(0.0)
+    );
+    assert_eq!(
+        value(&exporter, "deepref.worker.metrics.last_success", None),
+        success
+    );
+    assert_eq!(
+        value(
+            &exporter,
+            "deepref.backlog.depth",
+            Some(("family", "retired_objects"))
+        ),
+        Some(1.0)
+    );
+    assert_eq!(before_slots,sqlx::query_scalar::<_,serde_json::Value>("SELECT to_jsonb(s) FROM ai_concurrency_slots s ORDER BY scope_kind,scope_key,slot_index").fetch_all(&pool).await?);
+    assert_eq!(
+        before_objects,
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT to_jsonb(o) FROM object_lifecycle o ORDER BY storage_key"
+        )
+        .fetch_all(&pool)
+        .await?
+    );
+    admission.release(held).await?;
+    provider.shutdown()?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn current_schema_sample_includes_capability_wait_and_failed_reads_never_report_empty_queue()
 -> anyhow::Result<()> {
     let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
