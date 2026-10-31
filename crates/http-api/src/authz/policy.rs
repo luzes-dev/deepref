@@ -191,6 +191,38 @@ pub fn machine_safe(row: &RouteRule) -> bool {
 pub static ROUTES: &[RouteRule] = &[
     tested(
         handler(
+            Verb::Post,
+            "/workspaces/{workspace_id}/billing/customer",
+            Permission::WorkspaceBilling,
+            "human billing provisioning; transaction PDP verifies workspace",
+        ),
+        "billing::human_management_is_tenant_scoped",
+    ),
+    tested(
+        handler(
+            Verb::Post,
+            "/workspaces/{workspace_id}/billing/checkout",
+            Permission::WorkspaceBilling,
+            "human hosted checkout; pre/post provider authority checks",
+        ),
+        "billing::human_management_is_tenant_scoped",
+    ),
+    tested(
+        handler(
+            Verb::Post,
+            "/workspaces/{workspace_id}/billing/portal",
+            Permission::WorkspaceBilling,
+            "human hosted portal; pre/post provider authority checks",
+        ),
+        "billing::human_management_is_tenant_scoped",
+    ),
+    open(
+        Verb::Post,
+        "/hooks/billing/dodo",
+        "raw StandardWebhook verification and business/mode-scoped durable PostgreSQL receipt",
+    ),
+    tested(
+        handler(
             Verb::Get,
             "/workspaces/{workspace_id}/api-keys",
             Permission::ApiKeyManage,

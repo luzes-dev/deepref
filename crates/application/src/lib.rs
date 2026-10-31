@@ -1,3 +1,4 @@
+pub mod billing;
 use deepref_domain::{
     Actor, CurrentScreeningState, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId,
     ScreenReportTransitionCommand, ScreeningDecision, ScreeningStage, ScreeningTransition,

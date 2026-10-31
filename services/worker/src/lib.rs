@@ -212,8 +212,25 @@ pub async fn run_with_shutdown(
         config.runtime.integrations.contact_email.clone(),
         reconciler_signal.clone(),
     ));
-    let provider_reconcilers =
-        Arc::new(deepref_application::inbox::ProviderReconcilerRegistry::new());
+    let mut provider_reconcilers = deepref_application::inbox::ProviderReconcilerRegistry::new();
+    let billing = if let Some(config) = config.runtime.dodo.clone() {
+        Some(deepref_app::billing::BillingService::new(
+            pool.clone(),
+            Arc::new(deepref_integrations::dodo::DodoBilling::new(config)?),
+        ))
+    } else {
+        None
+    };
+    let billing_inbox = if let Some(service) = billing {
+        let registry = deepref_app::billing::registry(service.clone())?;
+        provider_reconcilers.register(Arc::new(deepref_app::billing::BillingReconciler::new(
+            service,
+        )))?;
+        registry
+    } else {
+        deepref_application::inbox::InboxRegistry::new()
+    };
+    let provider_reconcilers = Arc::new(provider_reconcilers);
     let reconciler_task = tokio::spawn(reconciler::run_with_provider_reconcilers(
         pool.clone(),
         config.reconciler_interval,
@@ -263,7 +280,7 @@ pub async fn run_with_shutdown(
         reconciler_shutdown.clone(),
         inbox_processor::run(
             pool.clone(),
-            Arc::new(deepref_application::inbox::InboxRegistry::new()),
+            Arc::new(billing_inbox),
             owner.clone(),
             inbox_processor::InboxProcessorConfig {
                 batch: 16,

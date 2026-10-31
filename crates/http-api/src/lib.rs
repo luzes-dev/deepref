@@ -475,6 +475,14 @@ pub async fn serve_with_shutdown(
         .with_smtp(config.runtime.smtp.clone())
         .with_workflow_config(config.runtime.workflow.clone())
         .with_integrations(config.runtime.integrations.clone());
+    if let Some(billing) = config.runtime.dodo.clone() {
+        let provider = deepref_integrations::dodo::DodoBilling::new(billing)?;
+        state.billing = Some(deepref_app::billing::BillingService::new(
+            pool.clone(),
+            std::sync::Arc::new(provider),
+        ));
+    }
+
     if config.runtime.integrations.contact_email.is_empty() {
         tracing::warn!(
             "DEEPREF_CONTACT_EMAIL is not set; DOI imports, PubMed imports and open-access lookups will be refused"

@@ -15,12 +15,12 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 | Rule | Rows |
 | --- | --- |
 | Authenticated | 10 |
-| Handler | 7 |
-| Open | 10 |
+| Handler | 10 |
+| Open | 11 |
 | PlatformOperator | 1 |
 | Require | 143 |
 | RequireIfPresent | 1 |
-| **Total HTTP** | **172** |
+| **Total HTTP** | **176** |
 | **Non-HTTP paths** | **10** |
 
 ## HTTP routes
@@ -37,6 +37,7 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 | GET | `/health/dependencies` | Open | - | - | `n/a` | deployment-wide dependency status: no tenant data and no project filter |
 | GET | `/health/live` | Open | - | - | `n/a` | liveness probe, no data |
 | GET | `/health/ready` | Open | - | - | `n/a` | readiness probe, no tenant data |
+| POST | `/hooks/billing/dodo` | Open | - | - | `n/a` | raw StandardWebhook verification and business/mode-scoped durable PostgreSQL receipt |
 | POST | `/hooks/email/{token}` | Open | - | - | `n/a` | machine delivery authenticated by its private address token |
 | POST | `/hooks/workflows/{token}` | Open | - | - | `n/a` | machine delivery authenticated by its private address token and HMAC signature |
 | GET | `/me` | Authenticated | - | user-scoped | `n/a` | the caller reads their own profile |
@@ -199,6 +200,9 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 | POST | `/workspaces/{workspace_id}/api-keys` | Handler | `api_key:manage` | workspace (request body) | `api_keys::lifecycle_is_human_only_and_tenant_scoped` | human key creation; full secret returned once |
 | DELETE | `/workspaces/{workspace_id}/api-keys/{key_id}` | Handler | `api_key:manage` | workspace (request body) | `api_keys::lifecycle_is_human_only_and_tenant_scoped` | human revocation; handler authorizes the workspace and key pair |
 | POST | `/workspaces/{workspace_id}/api-keys/{key_id}/rotate` | Handler | `api_key:manage` | workspace (request body) | `api_keys::lifecycle_is_human_only_and_tenant_scoped` | human rotation; old key revoked atomically with replacement |
+| POST | `/workspaces/{workspace_id}/billing/checkout` | Handler | `workspace:billing` | workspace (request body) | `billing::human_management_is_tenant_scoped` | human hosted checkout; pre/post provider authority checks |
+| POST | `/workspaces/{workspace_id}/billing/customer` | Handler | `workspace:billing` | workspace (request body) | `billing::human_management_is_tenant_scoped` | human billing provisioning; transaction PDP verifies workspace |
+| POST | `/workspaces/{workspace_id}/billing/portal` | Handler | `workspace:billing` | workspace (request body) | `billing::human_management_is_tenant_scoped` | human hosted portal; pre/post provider authority checks |
 
 ## Non-HTTP access paths
 
