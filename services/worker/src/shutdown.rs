@@ -31,3 +31,12 @@ pub async fn on_signal(signal: tokio::sync::watch::Receiver<bool>) {
         }
     }
 }
+
+/// Close the reserved control pool after all owned processors stop.
+pub async fn close_control_pool(pool: &sqlx::PgPool, deadline: std::time::Duration) {
+    if tokio::time::timeout(deadline, pool.close()).await.is_err() {
+        // Pool::close marks the pool closed before waiting for holders. No new
+        // control work is admitted; a remaining holder must not hang exit.
+        tracing::warn!("worker control pool close deadline exceeded");
+    }
+}
