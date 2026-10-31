@@ -21,6 +21,7 @@
 - [SLO incident runbook](slo-incident-runbook.md)
 - [Metrics pipeline and alert preparation](metrics-and-alerts-runbook.md)
 - [Local operations catalog, dashboard and delivery tests](operations-observability-runbook.md)
+- [Local SDK metric capture](operations-metrics-capture-runbook.md)
 - [Bounded local fault injection](operations-fault-injection-runbook.md)
 
 ## Architecture Decision Records
