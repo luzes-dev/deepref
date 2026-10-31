@@ -31,6 +31,9 @@ pub struct ReadinessResponse {
 pub enum DependencyState {
     Available,
     Degraded,
+    /// The dependency answered, but its newest evidence is older than the
+    /// freshness threshold, so it proves nothing about current health.
+    Stale,
     Unavailable,
 }
 

@@ -25,6 +25,7 @@ mod automations;
 mod autonomy;
 mod deduplication;
 mod deletion_digest;
+pub mod delivery_recovery;
 mod documents;
 pub mod durable_runs;
 mod extraction;

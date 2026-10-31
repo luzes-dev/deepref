@@ -40,6 +40,7 @@ deepref-telemetry = { version = "0.1.0", path = "../telemetry" }
 
 [dev-dependencies]
 csv.workspace = true
+object_store.workspace = true
 deepref-app = { workspace = true, features = ["test-support"] }
 deepref-worker = { version = "0.1.0", path = "../../services/worker" }
 rig-core = { workspace = true, features = ["test-utils"] }

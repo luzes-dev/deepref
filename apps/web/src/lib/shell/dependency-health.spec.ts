@@ -69,6 +69,29 @@ describe('summarizeDependencyHealth', () => {
 		});
 	});
 
+	it('treats stale transport evidence as unconfirmed, not healthy', () => {
+		expect.hasAssertions();
+		const summary = summarizeDependencyHealth(
+			{
+				...allAvailable,
+				jetstream: {
+					state: 'stale',
+					expected_mode: 'jetstream',
+					live_workers: 1,
+					fresh_ready_workers: 0,
+					not_ready_workers: 0,
+					unknown_workers: 0,
+					stale_workers: 1,
+					future_workers: 0,
+					mismatched_workers: 0
+				}
+			},
+			null
+		);
+		expect(summary.level).toBe('degraded');
+		expect(summary.issues[0]).toMatchObject({ name: 'jetstream', state: 'degraded' });
+	});
+
 	it('reports a degraded worker with its backlog', () => {
 		expect.hasAssertions();
 		const summary = summarizeDependencyHealth(

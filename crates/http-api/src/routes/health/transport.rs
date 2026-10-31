@@ -23,6 +23,23 @@ pub struct TransportHealth {
 }
 
 impl TransportHealth {
+    /// Stale only when old evidence is the sole problem: an explicit
+    /// negative, unknown, future or mismatched sample stays degraded.
+    fn classify(&self) -> DependencyState {
+        if self.live_workers > 0 && self.fresh_ready_workers == self.live_workers {
+            DependencyState::Available
+        } else if self.stale_workers > 0
+            && self.not_ready_workers == 0
+            && self.unknown_workers == 0
+            && self.future_workers == 0
+            && self.mismatched_workers == 0
+        {
+            DependencyState::Stale
+        } else {
+            DependencyState::Degraded
+        }
+    }
+
     fn unavailable() -> Self {
         Self {
             state: DependencyState::Unavailable,
@@ -69,25 +86,61 @@ pub(super) async fn health(state: &AppState) -> Option<TransportHealth> {
     .fetch_one(&state.pool);
     match tokio::time::timeout(PROBE_DEADLINE, query).await {
         Ok(Ok(row)) => {
-            let live_workers: i64 = row.get("live");
-            let fresh_ready_workers: i64 = row.get("ready");
-            Some(TransportHealth {
-                state: if live_workers > 0 && fresh_ready_workers == live_workers {
-                    DependencyState::Available
-                } else {
-                    DependencyState::Degraded
-                },
+            let mut health = TransportHealth {
+                state: DependencyState::Degraded,
                 expected_mode: "jetstream",
-                live_workers,
-                fresh_ready_workers,
+                live_workers: row.get("live"),
+                fresh_ready_workers: row.get("ready"),
                 not_ready_workers: row.get("not_ready"),
                 unknown_workers: row.get("unknown"),
                 stale_workers: row.get("stale"),
                 future_workers: row.get("future"),
                 mismatched_workers: row.get("mismatch"),
                 last_observation_at: row.get("last_observation"),
-            })
+            };
+            health.state = health.classify();
+            Some(health)
         }
         _ => Some(TransportHealth::unavailable()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counts(live: i64, ready: i64, stale: i64, not_ready: i64) -> TransportHealth {
+        TransportHealth {
+            state: DependencyState::Degraded,
+            expected_mode: "jetstream",
+            live_workers: live,
+            fresh_ready_workers: ready,
+            not_ready_workers: not_ready,
+            unknown_workers: 0,
+            stale_workers: stale,
+            future_workers: 0,
+            mismatched_workers: 0,
+            last_observation_at: None,
+        }
+    }
+
+    #[test]
+    fn old_evidence_alone_is_stale_but_a_negative_sample_is_degraded() {
+        assert!(matches!(
+            counts(2, 2, 0, 0).classify(),
+            DependencyState::Available
+        ));
+        assert!(matches!(
+            counts(2, 1, 1, 0).classify(),
+            DependencyState::Stale
+        ));
+        assert!(matches!(
+            counts(2, 0, 1, 1).classify(),
+            DependencyState::Degraded
+        ));
+        assert!(matches!(
+            counts(0, 0, 0, 0).classify(),
+            DependencyState::Degraded
+        ));
     }
 }

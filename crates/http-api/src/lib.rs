@@ -14,6 +14,8 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::future::Future;
 use uuid::Uuid;
 
+pub use deepref_app::delivery_recovery::DeliveryAction;
+
 use crate::{config::ApiConfig, state::AppState};
 
 /// Facts one `ai-usage export-replay` invocation inspects without `--limit`.
@@ -721,10 +723,51 @@ pub async fn serve_with_shutdown(
     }
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");
-    axum::serve(listener, routes::router(state, &config))
-        .with_graceful_shutdown(shutdown)
-        .await?;
-    Ok(())
+    serve_until_drained(
+        listener,
+        routes::router(state, &config),
+        shutdown,
+        config.runtime.telemetry.shutdown_deadline,
+    )
+    .await
+}
+
+/// Serve until `shutdown`, then drain in-flight requests for at most
+/// `drain_deadline`. Graceful shutdown alone waits for every open connection,
+/// so one long SSE stream or hung handler would otherwise hold the process.
+/// Connections still open at the deadline are dropped.
+pub async fn serve_until_drained(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    drain_deadline: std::time::Duration,
+) -> anyhow::Result<()> {
+    let (signalled, mut draining) = tokio::sync::oneshot::channel();
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            let _ = signalled.send(());
+        })
+        .into_future();
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => return Ok(result?),
+        signal = &mut draining => {
+            if signal.is_err() {
+                return Ok((&mut server).await?);
+            }
+        }
+    }
+    match tokio::time::timeout(drain_deadline, server).await {
+        Ok(result) => Ok(result?),
+        Err(_) => {
+            tracing::warn!(
+                deadline_seconds = drain_deadline.as_secs(),
+                "API drain deadline exceeded; remaining connections were closed"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// The built-in price table plus the `DEEPREF_AI_MODEL_PRICES` overrides.
@@ -836,4 +879,48 @@ async fn shutdown_signal() {
     }
     #[cfg(not(unix))]
     let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Operator terminal-delivery recovery (`deepref-server deliveries ...`).
+/// Every action has an absolute deadline covering connect and queries.
+pub async fn deliveries_run(
+    config: &ApiConfig,
+    action: deepref_app::delivery_recovery::DeliveryAction,
+) -> anyhow::Result<String> {
+    use deepref_app::delivery_recovery as recovery;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let pool = database_pool(config).await?;
+        let output = match action {
+            recovery::DeliveryAction::List { kind, after, limit } => serde_json::to_string_pretty(
+                &recovery::list_terminal_deliveries(&pool, kind, after.as_deref(), limit).await?,
+            )?,
+            recovery::DeliveryAction::Inspect { reference } => {
+                match recovery::inspect_delivery(&pool, &reference).await? {
+                    Some(delivery) => serde_json::to_string_pretty(&delivery)?,
+                    None => anyhow::bail!("delivery not found"),
+                }
+            }
+            recovery::DeliveryAction::Replay {
+                reference,
+                request_id,
+                operator_user_id,
+                reason,
+            } => serde_json::to_string_pretty(
+                &recovery::replay_terminal_delivery(
+                    &pool,
+                    &reference,
+                    request_id,
+                    operator_user_id,
+                    &reason,
+                )
+                .await?,
+            )?,
+        };
+        pool.close().await;
+        Ok(output)
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("delivery recovery deadline exceeded; inspect the audit before retrying")
+    })?
 }

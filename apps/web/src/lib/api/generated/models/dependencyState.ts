@@ -10,5 +10,6 @@ export type DependencyState = (typeof DependencyState)[keyof typeof DependencySt
 export const DependencyState = {
 	available: 'available',
 	degraded: 'degraded',
+	stale: 'stale',
 	unavailable: 'unavailable'
 } as const;

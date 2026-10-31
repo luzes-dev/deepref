@@ -16,6 +16,9 @@ have a successful adapter observation no older than 90 seconds. A heartbeat is
 live for 60 seconds. Future heartbeat/observation times, unknown old writers,
 explicit negative observations, stale evidence and a PostgreSQL worker during a
 JetStream cutover prevent a green diagnostic. No live evidence is degraded.
+When old observations are the only problem, the state is `stale`: the broker
+may be fine, but nothing recent proves it. Any negative, unknown, future or
+mismatched sample keeps the state `degraded`.
 
 The adapter watch retains the time the actual readiness operation completed.
 Heartbeat writes and unrelated transport metrics cannot refresh that time.

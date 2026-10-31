@@ -1,0 +1,43 @@
+# Notification routing TEMPLATE (Alertmanager format; Grafana and Mimir use the
+# same routing tree). Not deployable as-is: every <...> placeholder is an owner
+# decision (handoff 12, BUSINESS_DECISIONS.md). No receiver, secret or on-call
+# destination is chosen here. Keep credentials in the deployment's secrets
+# manager and reference them through *_file settings, never inline.
+#
+# Routing contract the rules rely on:
+#   - every alert carries `owner` and `severity` (page|ticket) labels;
+#   - page goes to the owner's paging receiver, ticket to its queue receiver;
+#   - each receiver must have a delivered test alert on record before launch.
+route:
+  receiver: <default-ticket-receiver>
+  group_by: [alertname, owner, pool, family, route_class]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="page", owner="api-owner"]
+      receiver: <api-owner-page>
+    - matchers: [severity="page", owner="worker-owner"]
+      receiver: <worker-owner-page>
+    - matchers: [severity="page", owner="platform-owner"]
+      receiver: <platform-owner-page>
+    - matchers: [severity="page", owner="ai-owner"]
+      receiver: <ai-owner-page>
+    - matchers: [severity="ticket"]
+      receiver: <default-ticket-receiver>
+
+inhibit_rules:
+  # A stale sampler makes queue/backlog gauges meaningless; page once.
+  - source_matchers: [alertname="DeepRefMetricSamplerStale"]
+    target_matchers: [catalog_id=~"queue-age|dead-depth|durable-backlog-age|live-workers"]
+  # A page suppresses its own ticket twin.
+  - source_matchers: [severity="page"]
+    target_matchers: [severity="ticket"]
+    equal: [catalog_id, pool, family, route_class]
+
+receivers:
+  - name: <default-ticket-receiver>
+  - name: <api-owner-page>
+  - name: <worker-owner-page>
+  - name: <platform-owner-page>
+  - name: <ai-owner-page>

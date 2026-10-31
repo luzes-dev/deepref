@@ -1,3 +1,4 @@
+mod alerts;
 mod authz_matrix;
 mod boundaries;
 mod doctor;
@@ -26,6 +27,7 @@ fn main() -> Result<std::process::ExitCode> {
 fn dispatch(args: &[String]) -> Result<()> {
     match args {
         [command] if command == "boundaries" => boundaries::run(),
+        [command, subcommand] if command == "alerts" && subcommand == "check" => alerts::run(),
         [command] if command == "doctor" => doctor::run(),
         [command] if command == "authz-matrix" => {
             authz_matrix::run(authz_matrix::MatrixMode::Check)
@@ -55,6 +57,7 @@ fn dispatch(args: &[String]) -> Result<()> {
         _ => bail!(
             "unknown command; usage:\n  \
              cargo xtask boundaries\n  \
+             cargo xtask alerts check\n  \
              cargo xtask reconcile-storage --config <drill.json>\n  \
              cargo xtask doctor\n  \
              cargo xtask authz-matrix [--check|--write]\n  \

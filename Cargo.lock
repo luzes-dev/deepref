@@ -1109,6 +1109,7 @@ dependencies = [
  "deepref-worker",
  "futures",
  "garde",
+ "object_store",
  "opentelemetry",
  "opentelemetry_sdk",
  "rig-core",

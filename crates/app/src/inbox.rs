@@ -390,6 +390,16 @@ pub async fn fail_inbox_event(
 /// Replay a quarantined event after operational review: the state machine
 /// restarts with a fresh attempt budget and the same provider event identity.
 pub async fn requeue_inbox_event(pool: &PgPool, id: i64) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let requeued = requeue_inbox_event_in(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(requeued)
+}
+
+pub(crate) async fn requeue_inbox_event_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: i64,
+) -> anyhow::Result<bool> {
     Ok(sqlx::query!(
         r#"UPDATE integration_inbox_events
            SET processing_state = 'received', attempts = 0, next_attempt_at = now(),
@@ -398,7 +408,7 @@ pub async fn requeue_inbox_event(pool: &PgPool, id: i64) -> anyhow::Result<bool>
            WHERE id = $1 AND processing_state = 'quarantined'"#,
         id,
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await?
     .rows_affected()
         == 1)
