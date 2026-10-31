@@ -10,9 +10,9 @@
 //!
 //! It is the application port behind the PostgreSQL leased-slot table
 //! (`ai_concurrency_slots`) that exists before `T-VALKEY` and remains the
-//! conservative fallback whenever Valkey is unavailable (spec 06/09). A later
-//! Valkey adapter replaces the PostgreSQL adapter with the same semantics:
-//! both grant, renew and release through this port, and neither may ever change
+//! conservative fallback whenever Valkey is unavailable (spec 06/09). The optional
+//! Valkey mirror wraps PostgreSQL admission conservatively: every dispatch
+//! still requires database slots. Both adapters use this port; neither may change
 //! a reservation, a settlement or a ledger number.
 //!
 //! ## Lease contract

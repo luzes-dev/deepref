@@ -1,4 +1,5 @@
 pub mod billing;
+pub mod concurrency_mirror;
 pub mod rate_limits;
 use deepref_domain::{
     Actor, CurrentScreeningState, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId,
@@ -251,3 +252,5 @@ mod tests {
 }
 
 pub mod work_delivery;
+
+pub mod project_count_cache;

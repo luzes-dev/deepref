@@ -834,6 +834,20 @@
           "projects"
         ],
         "operationId": "listProjects",
+        "parameters": [
+          {
+            "name": "Cache-Control",
+            "in": "header",
+            "description": "no-cache, no-store or max-age=0 bypasses the five-second displayed count cache",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Projects ordered by most recently updated",
@@ -921,6 +935,18 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Cache-Control",
+            "in": "header",
+            "description": "no-cache, no-store or max-age=0 bypasses the five-second displayed count cache",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -19209,6 +19235,14 @@
                   "format": "int64",
                   "description": "Number of articles (project reports) in the project."
                 },
+                "article_count_as_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When this displayed count was observed. Cached snapshots are at most five\nseconds old; request Cache-Control: no-cache for a primary count."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
@@ -19608,6 +19642,14 @@
             "type": "integer",
             "format": "int64",
             "description": "Number of articles (project reports) in the project."
+          },
+          "article_count_as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this displayed count was observed. Cached snapshots are at most five\nseconds old; request Cache-Control: no-cache for a primary count."
           },
           "created_at": {
             "type": "string",
