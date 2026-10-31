@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ProjectionFreshness from './ProjectionFreshness.svelte';
 	import * as Tabs from '@deepref/ui/tabs';
 	import { Input } from '@deepref/ui/input';
 	import { Button } from '@deepref/ui/button';
@@ -26,7 +27,15 @@
 			foundational: [],
 			core_to_project: [],
 			underexplored: [],
-			projection: { revision: 0, lag: 0 }
+			projection: {
+				project_id: workspace.project.id,
+				state: 'pending',
+				requested_revision: 0,
+				applied_revision: 0,
+				revision: 0,
+				watermark: 0,
+				lag: 0
+			}
 		}
 	);
 	const groupEntries = $derived([
@@ -75,6 +84,9 @@
 			class="w-full sm:w-64"
 		/>
 	</header>
+	{#if recommendations.data && !recommendations.error}
+		<ProjectionFreshness projection={groups.projection} />
+	{/if}
 	{#if recommendations.error}
 		<GraphDegradedState
 			error={recommendations.error}

@@ -4,17 +4,20 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
+import type { ProjectionRebuildStateDto } from './projectionRebuildStateDto.ts';
+import type { ProjectionStateDto } from './projectionStateDto.ts';
 
 export interface ProjectionStatusDto {
+	applied_revision: number;
 	lag: number;
 	/** @nullable */
 	last_error?: string | null;
 	/** @nullable */
 	last_success_at?: string | null;
 	project_id: string;
-	/** @nullable */
-	rebuild_state?: string | null;
+	rebuild_state?: ProjectionRebuildStateDto | null;
+	requested_revision: number;
 	revision: number;
-	state: string;
+	state: ProjectionStateDto;
 	watermark: number;
 }

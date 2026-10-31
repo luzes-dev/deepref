@@ -7,6 +7,9 @@ use thiserror::Error;
 pub enum ProjectionState {
     Pending,
     Ready,
+    Lagging,
+    Rebuilding,
+    Failed,
 }
 
 impl ProjectionState {
@@ -14,7 +17,14 @@ impl ProjectionState {
         match self {
             Self::Pending => "pending",
             Self::Ready => "ready",
+            Self::Lagging => "lagging",
+            Self::Rebuilding => "rebuilding",
+            Self::Failed => "failed",
         }
+    }
+
+    pub const fn is_fresh(self) -> bool {
+        matches!(self, Self::Ready)
     }
 }
 
@@ -28,7 +38,10 @@ impl std::str::FromStr for ProjectionState {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "pending" => Ok(Self::Pending),
-            "ready" => Ok(Self::Ready),
+            "ready" | "fresh" => Ok(Self::Ready),
+            "lagging" => Ok(Self::Lagging),
+            "rebuilding" => Ok(Self::Rebuilding),
+            "failed" => Ok(Self::Failed),
             _ => Err(InvalidProjectionState(value.to_owned())),
         }
     }
@@ -40,11 +53,47 @@ mod tests {
 
     #[test]
     fn projection_states_round_trip_and_reject_unknown_values() {
-        for state in [ProjectionState::Pending, ProjectionState::Ready] {
+        for state in [
+            ProjectionState::Pending,
+            ProjectionState::Ready,
+            ProjectionState::Lagging,
+            ProjectionState::Rebuilding,
+            ProjectionState::Failed,
+        ] {
             assert_eq!(state.as_str().parse::<ProjectionState>().unwrap(), state);
         }
-        for invalid in ["", "READY", "failed", " ready"] {
+        assert_eq!(
+            "fresh".parse::<ProjectionState>().unwrap(),
+            ProjectionState::Ready
+        );
+        for invalid in ["", "READY", "unknown", " ready"] {
             assert!(invalid.parse::<ProjectionState>().is_err());
+        }
+    }
+}
+
+/// A rebuild marker is distinct from the projection's current lifecycle:
+/// a failed attempt can retain this marker until a repair succeeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionRebuildState {
+    Rebuilding,
+}
+
+impl ProjectionRebuildState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rebuilding => "rebuilding",
+        }
+    }
+}
+
+impl std::str::FromStr for ProjectionRebuildState {
+    type Err = InvalidProjectionState;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "rebuilding" => Ok(Self::Rebuilding),
+            _ => Err(InvalidProjectionState(format!("rebuild: {value}"))),
         }
     }
 }

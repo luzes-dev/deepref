@@ -2,6 +2,7 @@ import { captureDarkViewport, expect, isMobileViewport, settleVisualPage, test }
 import type { Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import type { PrismaDto } from '../../src/lib/api/generated/models';
+import { VISUAL_PROJECTION } from './api-fixture';
 
 const projectId = 'visual-project';
 const reportId = '00000000-0000-4000-8000-000000000001';
@@ -109,7 +110,7 @@ async function installGraphFixture(page: Page) {
 					}
 				],
 				edges: [{ source: reportId, target: '00000000-0000-4000-8000-000000000002' }],
-				projection: { revision: 42, lag: 0, last_success_at: '2026-01-15T12:00:00Z' },
+				projection: VISUAL_PROJECTION,
 				truncated: false
 			}
 		})
@@ -131,7 +132,7 @@ async function installRecommendationsFixture(page: Page) {
 				],
 				core_to_project: [],
 				underexplored: [],
-				projection: { revision: 42, lag: 0, last_success_at: '2026-01-15T12:00:00Z' }
+				projection: VISUAL_PROJECTION
 			}
 		})
 	);

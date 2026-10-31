@@ -10,4 +10,8 @@ export type GetProjectGraphParams = {
 	 * @nullable
 	 */
 	fields?: string | null;
+	/**
+	 * @nullable
+	 */
+	strict?: boolean | null;
 };

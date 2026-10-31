@@ -21,7 +21,7 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 | Require | 143 |
 | RequireIfPresent | 1 |
 | **Total HTTP** | **176** |
-| **Non-HTTP paths** | **10** |
+| **Non-HTTP paths** | **12** |
 
 ## HTTP routes
 
@@ -208,6 +208,8 @@ API keys are accepted only on these explicit machine-safe reads; all other route
 
 | Kind | Path | Control | Test |
 | --- | --- | --- | --- |
+| Operator CLI | projection status <project_uuid> | Trusted deployment operator with database credentials; no tenant HTTP principal is inferred. Scoped UUID reads projection metadata only; no mutations or tenant authority inferred. Restrict shell/database access to operators. | deepref-server command::tests::parses_projection_commands |
+| Operator CLI | projection rebuild <project_uuid> | Trusted deployment operator with database credentials; scoped UUID starts a fenced repair generation through the durable outbox. Restrict shell/database access to operators; ordinary user HTTP requests use central PDP/PEP. | deepref-server command::tests::parses_projection_commands |
 | SSE stream | Assistant run events (`GET /projects/{project_id}/assistant/runs/{run_id}/events`) | PEP requires `project:view` on connect. A resume is a new request (`after_seq`), so it is authorized again. An open stream re-checks `project:view` every `stream_recheck` (20 s by default) and ends when denied. The run is loaded with its `project_id` and a run of another project is a 404. | authz_sse::revoked_member_stream_closes_and_resume_is_refused |
 | SSE stream | Assistant chat reply (`POST /projects/{project_id}/assistant/chat`, `text/event-stream`) | PEP requires `ai:use` before the body is read. The stream is one bounded turn started by that request and cannot be resumed; a reconnect is a new authorized request. No other route produces `text/event-stream`. | authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one |
 | Download | Article full-text content (`GET .../documents/{document_id}/content`) | PEP requires `project:view`. The document is loaded by project, report and document id together, so a document id of another project is a 404. Bytes stream through the API; no object key leaves the server. | authz_foreign_workspace::foreign_project_is_indistinguishable_from_a_missing_one |

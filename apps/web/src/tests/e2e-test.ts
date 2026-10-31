@@ -1,4 +1,5 @@
 import { expect, test as base } from '@playwright/test';
+import type { ProjectionStatusDto } from '../lib/api/generated/models/index.js';
 
 /**
  * Playwright `test` for the mocked workspace specs. The shell asks `/api/me` who is signed in
@@ -15,3 +16,23 @@ export const test = base.extend({
 });
 
 export { expect };
+
+/** Match the projection contract shared by graph, recommendations and status responses. */
+export function readyProjection({
+	projectId,
+	revision
+}: {
+	projectId: string;
+	revision: number;
+}): ProjectionStatusDto {
+	return {
+		project_id: projectId,
+		state: 'ready',
+		requested_revision: revision,
+		applied_revision: revision,
+		revision,
+		watermark: revision,
+		lag: 0,
+		last_success_at: '2026-01-01T00:00:00Z'
+	};
+}

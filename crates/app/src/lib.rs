@@ -27,6 +27,7 @@ mod documents;
 pub mod durable_runs;
 mod extraction;
 mod graph;
+mod graph_outbox;
 pub mod identity;
 pub mod inbox;
 mod jobs;
@@ -180,8 +181,11 @@ pub use extraction::{
     list_field_definitions, list_values, record_manual_value, update_field_definition,
 };
 pub use graph::{
-    MAX_GRAPH_NODES, enqueue_metrics_recompute, load_project_graph, recompute_project_metrics,
+    MAX_GRAPH_NODES, ProjectGraphNotFound, ProjectionStatus, enqueue_metrics_recompute,
+    get_projection_status, load_project_graph, load_project_graph_strict,
+    rebuild_project_projection, recompute_project_metrics,
 };
+pub use graph_outbox::register_metrics_projection;
 pub use jobs::{
     PostgresClaimTransport, PostgresDurableExecutionStore, claim_job, claim_jobs, complete_job,
     enqueue_job, enqueue_job_pool, fail_job, job, park_queued_jobs, recover_expired_jobs,

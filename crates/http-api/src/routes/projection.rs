@@ -3,9 +3,7 @@ use axum::{
     extract::{Path, State},
 };
 use chrono::{DateTime, Utc};
-use deepref_domain::graph::ProjectionState;
 use serde::Serialize;
-use sqlx::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -14,16 +12,77 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, serde::Deserialize, ToSchema)]
 pub struct ProjectionStatusDto {
     pub project_id: Uuid,
-    pub state: String,
+    pub state: ProjectionStateDto,
+    pub requested_revision: i64,
+    pub applied_revision: i64,
     pub revision: i64,
     pub watermark: i64,
     pub lag: i64,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
-    pub rebuild_state: Option<String>,
+    pub rebuild_state: Option<ProjectionRebuildStateDto>,
+}
+
+#[derive(Debug, Serialize, serde::Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionStateDto {
+    Pending,
+    Ready,
+    Lagging,
+    Rebuilding,
+    Failed,
+}
+impl ProjectionStateDto {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Lagging => "lagging",
+            Self::Rebuilding => "rebuilding",
+            Self::Failed => "failed",
+        }
+    }
+}
+impl From<deepref_domain::graph::ProjectionState> for ProjectionStateDto {
+    fn from(state: deepref_domain::graph::ProjectionState) -> Self {
+        use deepref_domain::graph::ProjectionState as State;
+        match state {
+            State::Pending => Self::Pending,
+            State::Ready => Self::Ready,
+            State::Lagging => Self::Lagging,
+            State::Rebuilding => Self::Rebuilding,
+            State::Failed => Self::Failed,
+        }
+    }
+}
+#[derive(Debug, Serialize, serde::Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionRebuildStateDto {
+    Rebuilding,
+}
+
+impl From<deepref_app::ProjectionStatus> for ProjectionStatusDto {
+    fn from(status: deepref_app::ProjectionStatus) -> Self {
+        Self {
+            project_id: status.project_id,
+            state: status.state.into(),
+            requested_revision: status.requested_revision,
+            applied_revision: status.applied_revision,
+            revision: status.revision,
+            watermark: status.watermark,
+            lag: status.lag,
+            last_success_at: status.last_success_at,
+            last_error: status.last_error,
+            rebuild_state: status.rebuild_state.map(|state| match state {
+                deepref_domain::graph::ProjectionRebuildState::Rebuilding => {
+                    ProjectionRebuildStateDto::Rebuilding
+                }
+            }),
+        }
+    }
 }
 
 #[utoipa::path(get, path="/projects/{project_id}/projection", operation_id="getProjectProjection", tag="projection",
@@ -33,29 +92,10 @@ pub async fn get_projection(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<ProjectionStatusDto>, ApiError> {
-    let row = sqlx::query(
-        "SELECT state,revision,watermark,lag,last_success_at,last_error,rebuild_state \
-         FROM projection_state WHERE projection_name='postgres_graph' AND (project_id=$1 OR project_id IS NULL) \
-         ORDER BY project_id NULLS LAST LIMIT 1",
-    ).bind(project_id).fetch_one(&state.pool).await?;
-    let projection_state = row
-        .try_get::<String, _>("state")?
-        .parse::<ProjectionState>()
-        .map_err(|error| ApiError::Internal(error.into()))?;
-    let rebuild_state: Option<String> = row.try_get("rebuild_state")?;
-    if let Some(value) = rebuild_state {
-        return Err(ApiError::Internal(anyhow::anyhow!(
-            "unsupported persisted graph rebuild state: {value}"
-        )));
-    }
-    Ok(Json(ProjectionStatusDto {
-        project_id,
-        state: projection_state.as_str().to_owned(),
-        revision: row.get("revision"),
-        watermark: row.get("watermark"),
-        lag: row.get("lag"),
-        last_success_at: row.get("last_success_at"),
-        last_error: row.get("last_error"),
-        rebuild_state: None,
-    }))
+    let status = deepref_app::get_projection_status(&state.pool, project_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
+
+    Ok(Json(status.into()))
 }

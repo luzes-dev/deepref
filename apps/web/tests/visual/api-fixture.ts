@@ -166,9 +166,11 @@ const acquisitions: AcquisitionDto[] = [
 	}
 ];
 
-const projection: ProjectionStatusDto = {
+export const VISUAL_PROJECTION: ProjectionStatusDto = {
 	project_id: VISUAL_PROJECT_ID,
 	state: 'ready',
+	requested_revision: 42,
+	applied_revision: 42,
 	watermark: 42,
 	revision: 42,
 	lag: 0,
@@ -551,7 +553,7 @@ export const VISUAL_GET_ENDPOINTS: readonly VisualEndpoint[] = [
 	{ path: `${projectPath}/protocol`, query: '', body: reviewProtocol },
 	{ path: `${projectPath}/review/protocol`, query: '', body: reviewProtocol },
 	{ path: `${projectPath}/review/protocol/versions`, query: '', body: protocolVersions },
-	{ path: `${projectPath}/projection`, query: '', body: projection },
+	{ path: `${projectPath}/projection`, query: '', body: VISUAL_PROJECTION },
 	{ path: `${projectPath}/prisma`, query: '', body: prisma },
 
 	// Collect: the corpus, its acquisitions and deduplication.
