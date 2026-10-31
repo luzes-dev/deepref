@@ -61,5 +61,5 @@ pub use security::{
 pub use templates::{WorkflowTemplate, template, templates};
 pub use validate::{
     GraphIssue, SECRET_PLACEHOLDER, SecretWrite, ValidationContext, ValidationReport, display_name,
-    duration_seconds, extract_secrets, validate_graph,
+    duration_seconds, extract_secrets, project_field_references, validate_graph,
 };

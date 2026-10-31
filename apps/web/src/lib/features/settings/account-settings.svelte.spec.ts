@@ -362,3 +362,31 @@ describe('account settings', () => {
 		expect(screen.queryByTestId('issued-api-key')).not.toBeInTheDocument();
 	});
 });
+
+describe('deployment settings', () => {
+	it('shows deployment-wide limits read-only and never sends a settings change', async () => {
+		const methods: string[] = [];
+		setup('settings', (request) => {
+			methods.push(`${request.method} ${new URL(request.url).pathname}`);
+			return json({
+				default_max_depth: 2,
+				max_concurrency: 8,
+				rate_limit_per_second: 3,
+				retry_attempts: 5
+			});
+		});
+		expect(await screen.findByLabelText('Default max depth')).toHaveTextContent('2');
+		expect(screen.getByLabelText('Max concurrency')).toHaveTextContent('8');
+		expect(screen.getByLabelText('Rate limit per second')).toHaveTextContent('3');
+		expect(screen.getByLabelText('Retry attempts')).toHaveTextContent('5');
+		expect(screen.getByTestId('settings-read-only-note')).toHaveTextContent(
+			'Only the operator running DeepRef can change them'
+		);
+		expect(screen.queryByRole('spinbutton')).toBeNull();
+		expect(screen.queryByRole('textbox', { name: 'Default max depth' })).toBeNull();
+		expect(screen.queryByRole('button', { name: /increase|decrease/i })).toBeNull();
+		expect(screen.queryByTestId('settings-save-status')).toBeNull();
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		expect(methods.filter((entry) => !entry.startsWith('GET '))).toEqual([]);
+	});
+});
