@@ -118,6 +118,11 @@ pub enum ApiError {
     Database(#[from] sqlx::Error),
     #[error("internal operation failed")]
     Internal(#[from] anyhow::Error),
+    /// Receipt persistence is infrastructure, not the business command's
+    /// validation/conflict result. Preserve its cause without classifying a
+    /// database constraint as a client-correctable business conflict.
+    #[error("human activity evidence is unavailable")]
+    ActivityEvidenceUnavailable(#[source] sqlx::Error),
     #[error("{0}")]
     BadRequest(String),
     #[error(transparent)]
@@ -165,6 +170,16 @@ impl IntoResponse for ApiError {
             Self::Database(error) => {
                 tracing::error!(%error, "database operation failed");
                 persistence_response(deepref_app::classify(&error))
+            }
+            Self::ActivityEvidenceUnavailable(error) => {
+                tracing::error!(%error, "human product activity could not be recorded");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR".to_owned(),
+                    "internal server error".to_owned(),
+                    None,
+                    None,
+                )
             }
             Self::Internal(error) => {
                 tracing::error!(%error, "internal operation failed");

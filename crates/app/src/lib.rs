@@ -1,3 +1,4 @@
+pub mod account_activity;
 pub mod account_deletion;
 pub mod account_export;
 mod acquisition;
