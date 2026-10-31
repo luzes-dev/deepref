@@ -484,6 +484,12 @@ pub async fn serve_with_shutdown(
         ));
     }
 
+    let rate_observer =
+        std::sync::Arc::new(deepref_telemetry::operational::OperationalMetrics::default());
+    state = state.with_rate_limiter(std::sync::Arc::new(
+        deepref_app::rate_limits::PostgresRateLimiter::new(pool.clone())
+            .with_observer(rate_observer.clone()),
+    ));
     if let Some(valkey) = &config.runtime.valkey {
         state.project_count_cache =
             deepref_integrations::valkey_project_counts::ValkeyProjectCountCache::from_config(
@@ -491,7 +497,12 @@ pub async fn serve_with_shutdown(
             )
             .ok()
             .map(|cache| {
-                std::sync::Arc::new(cache)
+                std::sync::Arc::new(
+                    deepref_telemetry::project_count_cache::ObservedProjectCountCache::new(
+                        std::sync::Arc::new(cache),
+                        deepref_telemetry::project_count_cache::ProjectCountMetrics::default(),
+                    ),
+                )
                     as std::sync::Arc<
                         dyn deepref_application::project_count_cache::ProjectCountCache,
                     >
@@ -500,7 +511,8 @@ pub async fn serve_with_shutdown(
             Ok(accelerator) => {
                 state = state.with_rate_limiter(std::sync::Arc::new(
                     deepref_app::rate_limits::PostgresRateLimiter::new(pool.clone())
-                        .with_accelerator(std::sync::Arc::new(accelerator)),
+                        .with_accelerator(std::sync::Arc::new(accelerator))
+                        .with_observer(rate_observer),
                 ));
             }
             Err(_) => tracing::warn!(
@@ -536,7 +548,10 @@ pub async fn serve_with_shutdown(
                     deepref_app::mirrored_concurrency::MirroredAiConcurrencyAdmission::new(
                         canonical,
                         std::sync::Arc::new(mirror),
-                    ),
+                    )
+                    .with_observer(std::sync::Arc::new(
+                        deepref_telemetry::operational::OperationalMetrics::default(),
+                    )),
                 )
                     as std::sync::Arc<dyn deepref_ai::AiConcurrencyAdmission>,
                 None => canonical,

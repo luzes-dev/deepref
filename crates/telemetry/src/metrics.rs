@@ -152,6 +152,8 @@ pub enum Backlog {
     UsageSettlement,
     UsageExport,
     UsageUnemitted,
+    ObjectCleanup,
+    RetiredObjects,
 }
 
 impl Backlog {
@@ -163,6 +165,8 @@ impl Backlog {
             Self::UsageSettlement => "usage_settlement",
             Self::UsageExport => "usage_export",
             Self::UsageUnemitted => "usage_unemitted",
+            Self::ObjectCleanup => "object_cleanup",
+            Self::RetiredObjects => "retired_objects",
         }
     }
 }
@@ -181,6 +185,7 @@ pub struct WorkerMetrics {
     export_conflicts: Gauge<u64>,
     export_unattributed: Gauge<u64>,
     last_success: Gauge<f64>,
+    concurrency_slots: Gauge<u64>,
 }
 
 impl Default for WorkerMetrics {
@@ -225,6 +230,9 @@ impl WorkerMetrics {
                 .with_unit("s")
                 .with_description("Unix timestamp of the last complete database metric sample")
                 .build(),
+            concurrency_slots: meter.u64_gauge("deepref.ai.concurrency.live")
+                .with_description("Global live PostgreSQL leases by closed scope; aggregate fresh replicas with max")
+                .build(),
         }
     }
 
@@ -247,6 +255,19 @@ impl WorkerMetrics {
 
     pub fn live_workers(&self, count: u64) {
         self.live_workers.record(count, &[]);
+    }
+
+    pub fn concurrency(
+        &self,
+        scope: deepref_application::concurrency_mirror::MirrorScopeKind,
+        count: u64,
+    ) {
+        let scope = match scope {
+            deepref_application::concurrency_mirror::MirrorScopeKind::Workspace => "workspace",
+            deepref_application::concurrency_mirror::MirrorScopeKind::Route => "route",
+        };
+        self.concurrency_slots
+            .record(count, &[KeyValue::new("scope", scope)]);
     }
 
     pub fn backlog(&self, family: Backlog, depth: u64, age: f64) {

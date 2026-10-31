@@ -39,6 +39,7 @@ pub mod reconciler;
 pub mod second_review;
 pub mod shutdown;
 pub mod store;
+mod transport_metrics;
 pub mod workflows;
 
 /// Metered provider gateway for the configured AI provider (OpenCode Go by
@@ -108,7 +109,10 @@ fn ai_concurrency_admission(
                     deepref_app::mirrored_concurrency::MirroredAiConcurrencyAdmission::new(
                         canonical,
                         Arc::new(mirror),
-                    ),
+                    )
+                    .with_observer(Arc::new(
+                        deepref_telemetry::operational::OperationalMetrics::default(),
+                    )),
                 );
             }
             Err(_) => {
@@ -223,7 +227,14 @@ pub async fn run_with_shutdown(
     let broker = match &config.runtime.work_transport {
         deepref_config::WorkTransportConfig::Postgres => None,
         deepref_config::WorkTransportConfig::JetStream(settings) => {
-            Some(deepref_integrations::jetstream::JetStream::connect(settings.clone()).await?)
+            let observer = Arc::new(transport_metrics::RuntimeTransportObserver::default());
+            let broker = deepref_integrations::jetstream::JetStream::connect(settings.clone())
+                .await?
+                .with_observer(observer);
+            broker.observe(
+                deepref_integrations::jetstream::TransportObservation::Readiness { ready: true },
+            );
+            Some(broker)
         }
     };
     let transport = match &broker {

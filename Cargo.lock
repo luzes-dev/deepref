@@ -1185,6 +1185,7 @@ dependencies = [
 name = "deepref-telemetry"
 version = "0.1.0"
 dependencies = [
+ "deepref-application",
  "deepref-config",
  "deepref-domain",
  "opentelemetry",

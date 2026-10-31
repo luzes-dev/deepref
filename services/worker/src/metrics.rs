@@ -2,6 +2,7 @@
 //! fresh samples and aggregate replicas with max, never sum global counts.
 use std::time::Duration;
 
+use deepref_application::concurrency_mirror::MirrorScopeKind;
 use deepref_domain::WorkloadClass;
 use deepref_telemetry::metrics::{Backlog, WorkerMetrics};
 use sqlx::{PgPool, Row};
@@ -26,6 +27,7 @@ struct Snapshot {
     timestamp: f64,
     export_conflicts: u64,
     export_unattributed: u64,
+    concurrency: Vec<(MirrorScopeKind, u64)>,
 }
 
 async fn snapshot(pool: &PgPool) -> anyhow::Result<Snapshot> {
@@ -75,7 +77,9 @@ async fn snapshot(pool: &PgPool) -> anyhow::Result<Snapshot> {
         "SELECT 'outbox' AS family,count(*)::bigint AS depth,COALESCE(EXTRACT(EPOCH FROM now()-min(created_at)),0)::double precision AS age FROM outbox_events WHERE delivery_state<>'delivered'
          UNION ALL SELECT 'autonomy_outbox',count(*)::bigint,COALESCE(EXTRACT(EPOCH FROM now()-min(created_at)),0)::double precision FROM ai_autonomy_outbox
          UNION ALL SELECT 'inbox',count(*)::bigint,COALESCE(EXTRACT(EPOCH FROM now()-min(received_at)),0)::double precision FROM integration_inbox_events WHERE processing_state<>'processed'
-         UNION ALL SELECT 'usage_settlement',count(*)::bigint,COALESCE(EXTRACT(EPOCH FROM now()-min(opened_at)),0)::double precision FROM ai_usage_reservations WHERE state IN ('open','observed','unresolved') AND opened_at<=now()-interval '5 minutes'"
+         UNION ALL SELECT 'usage_settlement',count(*)::bigint,COALESCE(EXTRACT(EPOCH FROM now()-min(opened_at)),0)::double precision FROM ai_usage_reservations WHERE state IN ('open','observed','unresolved') AND opened_at<=now()-interval '5 minutes'
+         UNION ALL SELECT 'object_cleanup',count(*)::bigint,COALESCE(EXTRACT(EPOCH FROM now()-min(cleanup_after)),0)::double precision FROM object_lifecycle WHERE deleted_at IS NULL AND cleanup_after<=now()
+         UNION ALL SELECT 'retired_objects',count(*)::bigint,COALESCE(EXTRACT(EPOCH FROM now()-min(retired_at)),0)::double precision FROM object_lifecycle WHERE retired_at IS NOT NULL AND deleted_at IS NULL"
     ).fetch_all(&mut *tx).await?;
     let mut backlogs = rows
         .into_iter()
@@ -85,6 +89,8 @@ async fn snapshot(pool: &PgPool) -> anyhow::Result<Snapshot> {
                 "autonomy_outbox" => Backlog::AutonomyOutbox,
                 "inbox" => Backlog::Inbox,
                 "usage_settlement" => Backlog::UsageSettlement,
+                "object_cleanup" => Backlog::ObjectCleanup,
+                "retired_objects" => Backlog::RetiredObjects,
                 _ => anyhow::bail!("unknown operational metric family"),
             };
             Ok((
@@ -112,6 +118,19 @@ async fn snapshot(pool: &PgPool) -> anyhow::Result<Snapshot> {
     ));
     let export_conflicts = u64::try_from(export.conflicting_facts)?;
     let export_unattributed = u64::try_from(export.unattributed_facts)?;
+    let rows = sqlx::query("WITH scopes(kind) AS (VALUES('workspace'::text),('route')) SELECT scopes.kind,count(s.scope_key)::bigint AS count FROM scopes LEFT JOIN ai_concurrency_slots s ON s.scope_kind=scopes.kind AND s.lease_expires_at>now() GROUP BY scopes.kind")
+        .fetch_all(&mut *tx).await?;
+    let concurrency = rows
+        .into_iter()
+        .map(|row| {
+            let scope = match row.try_get::<&str, _>("kind")? {
+                "workspace" => MirrorScopeKind::Workspace,
+                "route" => MirrorScopeKind::Route,
+                _ => anyhow::bail!("unknown concurrency metric scope"),
+            };
+            Ok((scope, u64::try_from(row.try_get::<i64, _>("count")?)?))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     // No state change, and no metrics are emitted until the complete snapshot
     // (including export identity diagnostics) has succeeded.
     tx.rollback().await?;
@@ -122,6 +141,7 @@ async fn snapshot(pool: &PgPool) -> anyhow::Result<Snapshot> {
         timestamp,
         export_conflicts,
         export_unattributed,
+        concurrency,
     })
 }
 
@@ -152,6 +172,9 @@ pub async fn sample_once(pool: &PgPool, metrics: &WorkerMetrics) -> anyhow::Resu
     }
     metrics.live_workers(snapshot.live_workers);
     metrics.export_attention(snapshot.export_conflicts, snapshot.export_unattributed);
+    for (scope, count) in snapshot.concurrency {
+        metrics.concurrency(scope, count);
+    }
     metrics.sample_succeeded(snapshot.timestamp);
     Ok(())
 }
