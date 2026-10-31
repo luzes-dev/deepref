@@ -60,6 +60,20 @@ def owned_closed(port):
         return True
 
 
+def phase_group_exists(group):
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def phase_group_inventory(phases):
+    return [{"process_group": phase["process_group"],
+             "closed": not phase_group_exists(phase["process_group"])}
+            for phase in phases if "process_group" in phase]
+
+
 def run_phase(name, command, *, output, environment, deadline, receipt):
     receipt.update(name=name, command=command, exit=None, process_exited=False)
     remaining = deadline - time.monotonic() - 5  # reserve cleanup/independent closure
@@ -72,6 +86,8 @@ def run_phase(name, command, *, output, environment, deadline, receipt):
         receipt["process_group"] = process.pid
         try:
             code = process.wait(timeout=remaining)
+            if phase_group_exists(process.pid):
+                raise RuntimeError("phase descendants outlived their leader")
         except BaseException as error:
             receipt.update(failure_type=type(error).__name__, incomplete=True,
                            timed_out=isinstance(error, subprocess.TimeoutExpired))
@@ -83,12 +99,26 @@ def run_phase(name, command, *, output, environment, deadline, receipt):
             try:
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=1)
+                pass
+            # A leader may already have exited on TERM while its descendants
+            # ignored it. Escalation belongs to the group, not leader state.
+            if phase_group_exists(process.pid):
+                receipt["forced_group_kill"] = True
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.wait(timeout=1)
+            closed_deadline = time.monotonic() + 1
+            while phase_group_exists(process.pid) and time.monotonic() < closed_deadline:
+                time.sleep(0.01)
+            if phase_group_exists(process.pid):
+                raise RuntimeError("owned phase process group did not close") from error
             raise
         finally:
             receipt.update(seconds=time.monotonic() - started,
-                           actual_child_exit=process.poll(), process_exited=process.poll() is not None)
+                           actual_child_exit=process.poll(), process_exited=process.poll() is not None,
+                           process_group_closed=not phase_group_exists(process.pid))
     receipt["exit"] = code
     return receipt
 
@@ -203,6 +233,9 @@ def execute(args):
                 result["source_after"] = identity()
                 if result["source_after"] != expected:
                     raise ValueError("source drift during batch")
+                result["phase_groups"] = phase_group_inventory(result["phases"])
+                if not all(row["closed"] for row in result["phase_groups"]):
+                    raise RuntimeError("owned phase process group remains")
                 if output is not None:
                     result["owned_inventory"] = inventories(output)
                     if result["exit"] == 0:
