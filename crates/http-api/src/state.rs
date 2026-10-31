@@ -22,6 +22,7 @@ pub struct AiRuntimeInfo {
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    pub billing: Option<deepref_app::billing::BillingService>,
     pub started_at: Instant,
     pub document_store: Option<DocumentStore>,
     pub ai_gateway: Arc<dyn AiGateway>,
@@ -54,6 +55,7 @@ impl AppState {
             auth_rejections: Arc::new(RejectionAuditor::new(pool.clone())),
             stream_recheck: DEFAULT_STREAM_RECHECK,
             pool,
+            billing: None,
             started_at: Instant::now(),
             document_store: None,
             ai_gateway: Arc::new(RoutedGateway::default()),

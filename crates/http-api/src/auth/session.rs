@@ -73,6 +73,7 @@ enum Access {
 
 fn access_for(path: &str) -> Access {
     match path {
+        "/hooks/billing/dodo" => Access::Open,
         "/health" | "/openapi.json" | "/auth/login" | "/auth/callback" | "/auth/logout" => {
             Access::Open
         }

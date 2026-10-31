@@ -56,8 +56,12 @@ const OPEN: &[&str] = &[
     "/auth/callback",
 ];
 
-/// Authenticated by their own address token and signature, not a browser session.
-const MACHINE_HOOKS: &[&str] = &["/hooks/workflows/{token}", "/hooks/email/{token}"];
+/// Authenticated by their own address token or signature, not a browser session.
+const MACHINE_HOOKS: &[&str] = &[
+    "/hooks/workflows/{token}",
+    "/hooks/email/{token}",
+    "/hooks/billing/dodo",
+];
 
 #[tokio::test]
 async fn every_route_requires_a_session_unless_it_is_listed_open() {
@@ -94,6 +98,20 @@ async fn every_route_requires_a_session_unless_it_is_listed_open() {
         }
     }
     assert!(checked > 100, "the sweep covered {checked} operations");
+}
+
+#[tokio::test]
+async fn billing_webhook_requires_its_signature_headers_even_with_actor_headers() {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/hooks/billing/dodo")
+        .header("x-actor-kind", "user")
+        .header("x-actor-id", "someone-elses-id")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (status, _) = send(&app(), request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

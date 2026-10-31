@@ -951,6 +951,7 @@ dependencies = [
  "dotenvy",
  "secrecy",
  "serde",
+ "serde_json",
  "thiserror",
  "url",
 ]
@@ -1038,23 +1039,29 @@ dependencies = [
 name = "deepref-integrations"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.23.1",
  "biblatex",
  "chrono",
  "csv",
  "deepref-application",
  "deepref-config",
  "deepref-domain",
+ "hmac 0.13.0",
  "jsonwebtoken 11.1.0",
  "quick-xml 0.42.0",
  "reqwest 0.13.5",
  "roxmltree",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror",
  "tokio",
  "tracing",
  "unicode-normalization",
+ "url",
  "urlencoding",
+ "uuid",
  "workos",
 ]
 
