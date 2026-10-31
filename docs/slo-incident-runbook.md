@@ -43,8 +43,8 @@ owner is paged.
 Check overall availability over 5-minute and 30-minute windows:
 
 ```text
-sum(rate(http_requests_total{status!~"5.."}[5m]))
-/ sum(rate(http_requests_total[5m]))
+sum(rate(deepref_http_requests_total{status_class!="5xx"}[5m]))
+/ sum(rate(deepref_http_requests_total[5m]))
 ```
 
 Inspect API error logs for 500 Internal Server Errors:
@@ -78,10 +78,13 @@ routes. The API owner receives an alert.
 
 ### Query
 
-Query 95th percentile latency grouped by route class (excluding SSE streams):
+Query 95th percentile response-header latency grouped by route class. The
+instrument `deepref.http.response_header.duration` already excludes responses
+with the SSE content type, so no label filter is needed. Prometheus names
+assume the standard OTLP translation; verify the ingested spelling first:
 
 ```text
-histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route_class!="sse"}[5m])) by (le, route_class))
+histogram_quantile(0.95, sum(rate(deepref_http_response_header_duration_seconds_bucket[5m])) by (le, route_class))
 ```
 
 ### Action
@@ -155,12 +158,14 @@ curl -fsS http://<api-endpoint>:8080/health/dependencies | jq '.worker.oldest_ag
 Query the database directly:
 
 ```sql
-SELECT max(EXTRACT(EPOCH FROM (now() - created_at))) AS oldest_queued_seconds
+SELECT workload_class,
+       count(*) AS due,
+       max(EXTRACT(EPOCH FROM (now() - available_at))) AS oldest_due_seconds
 FROM jobs
-WHERE state = 'queued';
+WHERE state IN ('queued', 'capability_wait') AND available_at <= now()
+GROUP BY workload_class;
 ```
 
-_(Per workload pool after handoff 05a lands)._
 
 ### Action
 
@@ -191,14 +196,16 @@ curl -fsS http://<api-endpoint>:8080/health/dependencies | jq '.worker.recent_fa
 ```
 
 ```sql
-SELECT id, kind, attempts, error, updated_at
+SELECT id, kind, workload_class, attempts, left(last_error, 300) AS last_error, available_at
 FROM jobs
-WHERE state = 'dead' AND updated_at > now() - INTERVAL '30 minutes';
+WHERE state = 'dead' AND available_at > now() - INTERVAL '30 minutes'
+ORDER BY available_at DESC
+LIMIT 50;
 ```
 
 ### Action
 
-1. Inspect the stored `error` messages on the dead job records.
+1. Inspect the stored `last_error` messages on the dead job records.
 2. Categorize failure cause: upstream third-party failure, database transient
    lock, or deterministic code defect.
 3. If failures were caused by a resolved transient outage, requeue the jobs for
@@ -231,9 +238,9 @@ curl -fsS http://<api-endpoint>:8080/health/dependencies | jq '.worker.live_work
 Query the underlying worker heartbeat table (heartbeat interval 15s, 60s window):
 
 ```sql
-SELECT count(DISTINCT worker_id) AS active_workers
+SELECT count(*) AS live_workers, max(seen_at) AS last_heartbeat
 FROM worker_heartbeats
-WHERE last_seen > now() - INTERVAL '60 seconds';
+WHERE seen_at > now() - INTERVAL '60 seconds' AND seen_at <= now();
 ```
 
 ### Action
@@ -250,23 +257,33 @@ WHERE last_seen > now() - INTERVAL '60 seconds';
 
 ---
 
-## 7. Outbox backlog age elevation (after handoff 04a lands)
+## 7. Outbox backlog age elevation
 
 ### Symptom
 
-Events queued in the transactional outbox (`ai_autonomy_outbox`, and general
-outbox after handoff 04a lands) exceed age thresholds without relay. Owner:
+Events in the transactional outbox (`outbox_events`, plus the separate
+`ai_autonomy_outbox`) exceed age thresholds without delivery. Owner:
 Platform owner.
 
 ### Query
 
-Check pending outbox rows:
+Check undelivered outbox rows by state (quarantined rows need operator review):
+
+```sql
+SELECT delivery_state, count(*),
+       max(EXTRACT(EPOCH FROM (now() - created_at))) AS max_lag_seconds
+FROM outbox_events
+WHERE delivery_state IN ('pending', 'quarantined')
+GROUP BY delivery_state;
+```
 
 ```sql
 SELECT count(*), max(EXTRACT(EPOCH FROM (now() - created_at))) AS max_lag_seconds
-FROM ai_autonomy_outbox
-WHERE status = 'pending';
+FROM ai_autonomy_outbox;
 ```
+
+List and replay quarantined events with `deepref-server deliveries list outbox`
+and `deliveries replay` (see the [metrics runbook](metrics-and-alerts-runbook.md#terminal-delivery-recovery)).
 
 ### Action
 
@@ -281,23 +298,27 @@ Max outbox age drops below 30 seconds; pending row count drains to 0.
 
 ---
 
-## 8. Inbox backlog age and webhook processing lag (after handoff 04a lands)
+## 8. Inbox backlog age and webhook processing lag
 
 ### Symptom
 
-Webhook events from WorkOS or Polar sit in the incoming inbox without processing.
+Webhook events from WorkOS or Dodo Payments sit in the incoming inbox without processing.
 Owner: Billing owner.
 
 ### Query
 
-Query unprocessed webhook inbox rows (after handoff 04a lands):
+Query unprocessed inbox rows by provider and state:
 
 ```sql
-SELECT source, count(*), max(EXTRACT(EPOCH FROM (now() - received_at))) AS max_lag
-FROM webhook_inbox
-WHERE status = 'unprocessed'
-GROUP BY source;
+SELECT provider, processing_state, count(*),
+       max(EXTRACT(EPOCH FROM (now() - received_at))) AS max_lag_seconds
+FROM integration_inbox_events
+WHERE processing_state <> 'processed'
+GROUP BY provider, processing_state;
 ```
+
+Quarantined (dead-lettered) rows are replayed with `deepref-server deliveries
+replay inbox <id>` after the cause is fixed.
 
 ### Action
 
@@ -313,34 +334,42 @@ Webhook inbox processing lag returns below 60 seconds; unprocessed backlog clear
 
 ---
 
-## 9. Usage settlement backlog elevation (after handoff 09 lands)
+## 9. Usage settlement backlog elevation
 
 ### Symptom
 
-Expired unsettled reservations or unexported Polar meter records accumulate.
+Nonterminal AI usage reservations age, or usage facts are not exported to Dodo
+Payments.
 Owner: AI owner.
 
 ### Query
 
-Check settlement backlog in the database (after handoff 09 lands):
+Check the settlement backlog (the same rows as the `usage_settlement` backlog
+family). Reservations have no expiry; age is diagnostic only:
 
 ```sql
-SELECT count(*)
-FROM usage_reservations
-WHERE status = 'pending' AND expires_at < now();
+SELECT state, count(*),
+       max(EXTRACT(EPOCH FROM (now() - opened_at))) AS oldest_seconds
+FROM ai_usage_reservations
+WHERE state IN ('open', 'observed', 'unresolved')
+  AND opened_at <= now() - INTERVAL '5 minutes'
+GROUP BY state;
 ```
 
 ### Action
 
-1. Verify if Polar usage synchronization jobs are running.
-2. Check Polar API rate limits and availability.
+1. Never void or release a reservation because of its age. Check its job fence,
+   provider observation and recognized liability first, then resolve it with the
+   audited `deepref-server ai-usage resolve` command.
+2. Verify the usage export jobs are running, and check Dodo Payments availability
+   and rate limits.
 3. Ensure usage export records retain immutable event identities so replaying
    them does not double-charge.
 
 ### Evidence
 
-Pending expired reservations return to 0; all completed usage records are
-acknowledged.
+The settlement backlog drains through settled or audited resolutions; export
+receipts are acknowledged once with their original identities.
 
 ---
 
@@ -385,14 +414,17 @@ anomalous orphan count growth. Owner: Platform owner.
 
 ### Query
 
-Check object storage request error rates from telemetry:
+The application emits no object-store request metric yet; the catalog rows
+`object-errors` and `object-reconciliation` are `external_required` with no
+source instrument. Until a source exists, use the bounded read probe and the
+reconciliation command:
 
-```text
-sum(rate(object_store_requests_total{status=~"5.."}[5m]))
-/ sum(rate(object_store_requests_total[5m]))
+```bash
+curl -fsS http://<api-endpoint>:8080/health/dependencies | jq '.object_storage'
 ```
 
-Inspect latest reconciliation scan output.
+Inspect the latest `cargo xtask reconcile-storage` output
+([reconciliation runbook](object-store-reconciliation-runbook.md)).
 
 ### Action
 
@@ -403,5 +435,5 @@ Inspect latest reconciliation scan output.
 
 ### Evidence
 
-Object-store error rate drops below 0.1%. Reconciliation orphan counts stabilize
+The read probe is `available` again. Reconciliation orphan counts stabilize
 within nominal operational boundaries.
